@@ -154,8 +154,7 @@ function WindowCaptionControls() {
     let active = true;
     let unlisten: (() => void) | undefined;
     const refresh = () => {
-      void appWindow
-        .isMaximized()
+      void (maximizeIsFullScreen ? appWindow.isFullscreen() : appWindow.isMaximized())
         .then((nextMaximized) => {
           if (active) setMaximized(nextMaximized);
         })
@@ -182,11 +181,7 @@ function WindowCaptionControls() {
   const toggleMaximize = () => {
     const appWindow = currentTauriWindow();
     if (!appWindow) return;
-    void appWindow
-      .toggleMaximize()
-      .then(() => appWindow.isMaximized())
-      .then(setMaximized)
-      .catch(() => undefined);
+    void toggleWindowMaximize(appWindow).then(setMaximized).catch(() => undefined);
   };
   const close = () => {
     void currentTauriWindow()?.close();
@@ -258,10 +253,25 @@ function handleCaptionMouseDown(event: MouseEvent<HTMLElement>) {
   if (!appWindow) return;
   if (event.detail >= 2) {
     event.preventDefault();
-    void appWindow.toggleMaximize();
+    void toggleWindowMaximize(appWindow).catch(() => undefined);
     return;
   }
   void appWindow.startDragging();
+}
+
+// On macOS a maximized ("zoomed") window still sits under the menu bar; only full screen
+// takes the whole display, so there the maximize button means full screen.
+const maximizeIsFullScreen = typeof navigator !== "undefined" && /Macintosh|Mac OS X/i.test(navigator.userAgent);
+
+/** Maximizes or restores the window (full screen on macOS); resolves to the new state. */
+async function toggleWindowMaximize(appWindow: ReturnType<typeof getCurrentWindow>): Promise<boolean> {
+  if (maximizeIsFullScreen) {
+    const next = !(await appWindow.isFullscreen());
+    await appWindow.setFullscreen(next);
+    return next;
+  }
+  await appWindow.toggleMaximize();
+  return appWindow.isMaximized();
 }
 
 function currentTauriWindow(): ReturnType<typeof getCurrentWindow> | null {
