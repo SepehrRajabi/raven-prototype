@@ -833,7 +833,9 @@ mod platform {
                 .map_err(|error| error.to_string())?;
         }
         if current.map(|rendered| rendered.icon) != Some(next.icon) {
-            tray.set_icon(Some(image(next.icon)?))
+            // Plain `set_icon` drops the template flag on macOS, which would draw the
+            // black template as is instead of in the menu bar's colour.
+            tray.set_icon_with_as_template(Some(image(next.icon)?), cfg!(target_os = "macos"))
                 .map_err(|error| error.to_string())?;
         }
         Ok(())
