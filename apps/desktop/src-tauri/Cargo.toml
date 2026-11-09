@@ -25,7 +25,8 @@ studio-noise-suppression = ["dep:deep_filter", "dep:ndarray"]
 tauri-build = { version = "2.2.0", features = [] }
 
 [dependencies]
-tauri = { version = "2.5.0", features = ["tray-icon"] }
+# macos-private-api: transparent windows (the voice overlay) on macOS. No effect elsewhere.
+tauri = { version = "2.5.0", features = ["tray-icon", "macos-private-api"] }
 tauri-plugin-opener = "2.2.7"
 tauri-plugin-updater = "=2.10.1"
 # The save picker for chat images.

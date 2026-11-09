@@ -10,6 +10,7 @@
     "frontendDist": "../dist"
   },
   "app": {
+    "macOSPrivateApi": true,
     "windows": [
       {
         "title": "Raven",
@@ -31,6 +32,9 @@
     "targets": "all",
     "externalBin": [],
     "resources": ["THIRD-PARTY-NOTICES.md"],
+    "macOS": {
+      "minimumSystemVersion": "13.0"
+    },
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",

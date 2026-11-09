@@ -10,7 +10,7 @@
     "build": "tsc && vite build",
     "test": "bun test",
     "preview": "vite preview",
-    "tauri": "powershell -ExecutionPolicy Bypass -File ./scripts/tauri.ps1"
+    "tauri": "bun ./scripts/tauri.ts"
   },
   "dependencies": {
     "@dnd-kit/core": "^6.3.1",

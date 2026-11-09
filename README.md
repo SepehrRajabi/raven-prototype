@@ -14,13 +14,37 @@ docs           architecture and development notes
 
 ## Requirements
 
-- Windows
+- Windows, or macOS 13+ (see [Running on macOS](#running-on-macos))
 - Go `1.26.3`
 - Bun
 - Rust toolchain
 - LiveKit server for RTC
 
 Do not use npm, pnpm, or yarn in this repository.
+
+## Running on macOS
+
+The commands below are written for PowerShell; on macOS the same steps work from a normal shell. You need the Xcode Command Line Tools (`xcode-select --install`) or Xcode, plus:
+
+```sh
+brew install go bun livekit
+curl https://sh.rustup.rs -sSf | sh
+```
+
+Then, from the repository root:
+
+```sh
+cp .env.example .env
+# For a local setup: comment out DATABASE_URL to use SQLite, and set
+# RAVEN_MEDIA_DIR=data/media to keep media on disk instead of S3.
+# LIVEKIT_API_SECRET must be "secret" to match `livekit-server --dev`.
+
+livekit-server --dev                                   # terminal 1
+cd services/api && go run ./cmd/raven-api              # terminal 2
+cd apps/desktop && bun install && bun run tauri dev    # terminal 3
+```
+
+`bun run tauri build` produces `apps/desktop/src-tauri/target/release/bundle/macos/Raven.app` and a `.dmg` next to it. Without the release signing key it skips the signed updater artifacts. The app is not code-signed, so the first time, right-click it and choose **Open**. Screen sharing asks for the Screen & System Audio Recording permission.
 
 ## Start LiveKit for RTC
 

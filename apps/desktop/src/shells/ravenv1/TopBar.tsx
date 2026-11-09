@@ -5,7 +5,7 @@ import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover
 import { Tooltip } from "@/components/ui/tooltip";
 import { api } from "@/lib/api";
 import { cn } from "@/lib/utils";
-import { ArrowDownToLine, Bell, Check, ChevronLeft, ChevronRight, Search, UserMinus, UserPlus, X } from "lucide-react";
+import { ArrowDownToLine, Bell, Check, ChevronLeft, ChevronRight, Copy, Minus, Search, Square, UserMinus, UserPlus, X } from "lucide-react";
 import type { RavenShellData, RavenView } from "./state";
 import { displayNameFor } from "./state";
 import { PendingList } from "./Inbox";
@@ -194,21 +194,32 @@ function WindowCaptionControls() {
 
   return (
     <div className="raven-no-drag flex h-10 shrink-0 items-stretch" aria-label="Window controls">
-      <CaptionButton label="Minimize" glyph={0xe921} onClick={minimize} />
-      <CaptionButton label={maximized ? "Restore" : "Maximize"} glyph={maximized ? 0xe923 : 0xe922} onClick={toggleMaximize} />
-      <CaptionButton label="Close" glyph={0xe8bb} danger onClick={close} />
+      <CaptionButton label="Minimize" glyph={0xe921} icon={Minus} onClick={minimize} />
+      <CaptionButton
+        label={maximized ? "Restore" : "Maximize"}
+        glyph={maximized ? 0xe923 : 0xe922}
+        icon={maximized ? Copy : Square}
+        onClick={toggleMaximize}
+      />
+      <CaptionButton label="Close" glyph={0xe8bb} icon={X} danger onClick={close} />
     </div>
   );
 }
 
+// Windows draws the caption glyphs from its own icon font, like native windows do. Other
+// platforms have no such font, so they get the same shapes as drawn icons.
+const hasSegoeCaptionFont = typeof navigator !== "undefined" && /Windows/i.test(navigator.userAgent);
+
 function CaptionButton({
   label,
   glyph,
+  icon: Icon,
   danger,
   onClick,
 }: {
   label: string;
   glyph: number;
+  icon: typeof X;
   danger?: boolean;
   onClick: () => void;
 }) {
@@ -224,13 +235,17 @@ function CaptionButton({
         danger ? "hover:bg-[#c42b1c] hover:text-white" : "hover:bg-secondary hover:text-foreground",
       )}
     >
-      <span
-        aria-hidden
-        className="leading-none"
-        style={{ fontFamily: "\"Segoe Fluent Icons\", \"Segoe MDL2 Assets\", \"Segoe UI Symbol\", sans-serif" }}
-      >
-        {String.fromCharCode(glyph)}
-      </span>
+      {hasSegoeCaptionFont ? (
+        <span
+          aria-hidden
+          className="leading-none"
+          style={{ fontFamily: "\"Segoe Fluent Icons\", \"Segoe MDL2 Assets\", \"Segoe UI Symbol\", sans-serif" }}
+        >
+          {String.fromCharCode(glyph)}
+        </span>
+      ) : (
+        <Icon aria-hidden className="size-3.5" strokeWidth={1.25} />
+      )}
     </button>
   );
 }
