@@ -1,0 +1,32 @@
+{
+  "build": {
+    "beforeBuildCommand": ""
+  },
+  "bundle": {
+    "createUpdaterArtifacts": false,
+    "linux": {
+      "deb": {
+        "section": "net",
+        "depends": ["libasound2"],
+        "recommends": [
+          "gstreamer1.0-pipewire",
+          "gstreamer1.0-plugins-base",
+          "gstreamer1.0-tools",
+          "pipewire-bin",
+          "xdg-desktop-portal"
+        ]
+      },
+      "rpm": {
+        "depends": ["libasound.so.2()(64bit)"],
+        "recommends": [
+          "/usr/bin/gst-launch-1.0",
+          "/usr/bin/pw-dump",
+          "/usr/bin/pw-record",
+          "gstreamer-plugin-pipewire",
+          "pipewire-gstreamer",
+          "xdg-desktop-portal"
+        ]
+      }
+    }
+  }
+}
