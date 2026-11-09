@@ -24,6 +24,11 @@ studio-noise-suppression = ["dep:deep_filter", "dep:ndarray"]
 [build-dependencies]
 tauri-build = { version = "2.2.0", features = [] }
 
+# build.rs asks it where LiveKit put libwebrtc.a, to load all of it on macOS. Keep it at
+# the version webrtc-sys itself builds with, so both name the same download.
+[target.'cfg(target_os = "macos")'.build-dependencies]
+webrtc-sys-build = "=0.3.18"
+
 [dependencies]
 # macos-private-api: transparent windows (the voice overlay) on macOS. No effect elsewhere.
 tauri = { version = "2.5.0", features = ["tray-icon", "macos-private-api"] }
