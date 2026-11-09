@@ -432,6 +432,9 @@ func (s *Server) adminUpdateUser(c *fiber.Ctx) error {
 		s.audit(auditActorFor(actor), "user.updated", "user", target.ID, target.Username, changed)
 		s.capabilitiesChangedFor(target.ID)
 	}
+	if _, renamed := changed["displayName"]; renamed {
+		s.publishNameChange(target.ID)
+	}
 	detail, err := s.adminUserDetail(target.ID)
 	if err != nil {
 		return err

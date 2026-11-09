@@ -208,6 +208,33 @@ func TestRenamingDuringACallRenamesTheLiveParticipant(t *testing.T) {
 	}
 }
 
+func TestChangingTheGlobalNameDuringACallRenamesTheLiveParticipant(t *testing.T) {
+	server, ownerToken := newTestServer(t)
+	stubLiveKit(server)
+	names := recordNames(server)
+	treeID := createTestTree(t, server, ownerToken, "Crew")
+	mem, memToken := createTestUser(t, server, "mem")
+	addTestTreeMember(t, server, ownerToken, treeID, "mem")
+	nestID := createTestNest(t, server, ownerToken, "/v1/trees/"+treeID+"/nests", "Standup")
+	postJSON(t, server, memToken, "/v1/nests/"+nestID+"/join", nil, http.StatusOK)
+	postJSON(t, server, memToken, "/v1/nests/"+nestID+"/session/join", nil, http.StatusOK)
+
+	postJSON(t, server, memToken, "/v1/preferences", map[string]string{"displayName": "Memo Global"}, http.StatusOK)
+	room := liveKitSessionName(nestID)
+	for _, identity := range []string{mem.ID, mem.ID + "#audio", mem.ID + "#video"} {
+		if got := names.nameFor(room, identity); got != "Memo Global" {
+			t.Fatalf("%s renamed to %q", identity, got)
+		}
+	}
+
+	// A nickname in the space still wins over the global name in its calls.
+	postJSON(t, server, memToken, spacePath(treeID, mem.ID), map[string]string{"displayName": "Memo"}, http.StatusOK)
+	postJSON(t, server, memToken, "/v1/preferences", map[string]string{"displayName": "Memo Again"}, http.StatusOK)
+	if got := names.nameFor(room, mem.ID); got != "Memo" {
+		t.Fatalf("nickname overridden in call: %q", got)
+	}
+}
+
 func TestAdminSetsASpaceNameAndItIsAudited(t *testing.T) {
 	server, ownerToken := newTestServer(t)
 	stubLiveKit(server)

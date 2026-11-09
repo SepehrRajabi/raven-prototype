@@ -135,6 +135,55 @@ func (s *Server) renameInCalls(treeID string, member TreeMember) {
 	}
 }
 
+// publishNameChange follows a change of someone's global display name. Each call they are
+// in shows the new name, unless a nickname in that call's space covers it, and everyone
+// who can see them refetches so lists and call rosters catch up.
+func (s *Server) publishNameChange(userID string) {
+	user, err := s.findUserByID(userID)
+	if err != nil {
+		log.Printf("display names: find %s: %v", userID, err)
+		return
+	}
+	type call struct{ nestID, treeID string }
+	rows, err := s.db.Query(
+		`SELECT DISTINCT sp.nest_id, CASE WHEN n.type = 'persistent' THEN COALESCE(n.tree_id, '') ELSE '' END
+		 FROM session_participants sp
+		 JOIN nests n ON n.id = sp.nest_id
+		 WHERE sp.user_id = ? AND sp.left_at IS NULL`,
+		userID,
+	)
+	if err != nil {
+		log.Printf("display names: find calls for %s: %v", userID, err)
+		return
+	}
+	var calls []call
+	for rows.Next() {
+		var c call
+		if err := rows.Scan(&c.nestID, &c.treeID); err != nil {
+			rows.Close()
+			log.Printf("display names: find calls for %s: %v", userID, err)
+			return
+		}
+		calls = append(calls, c)
+	}
+	rows.Close()
+	for _, c := range calls {
+		// The same name the call's LiveKit token carries.
+		name := spaceNameIn(s.db, c.treeID, user)
+		room := liveKitSessionName(c.nestID)
+		for _, identity := range []string{user.ID, audioParticipantIdentity(user.ID), videoParticipantIdentity(user.ID)} {
+			s.setParticipantName(room, identity, name)
+		}
+	}
+
+	audience, err := s.avatarAudience(userID)
+	if err != nil {
+		log.Printf("event stream: audience for profile.name: %v", err)
+		return
+	}
+	s.events.publishTo(LiveUpdate{Type: "profile.name", ActorID: userID, At: database.Now()}, audience)
+}
+
 func (s *Server) liveKitSetParticipantName(room, identity, name string) {
 	go func() {
 		ctx, cancel := context.WithTimeout(context.Background(), liveKitCallTimeout)

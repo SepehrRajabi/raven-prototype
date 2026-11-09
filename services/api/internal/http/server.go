@@ -713,6 +713,9 @@ func (s *Server) updatePreferences(c *fiber.Ctx) error {
 	if err != nil {
 		return err
 	}
+	if updated.DisplayName != user.DisplayName {
+		s.publishNameChange(user.ID)
+	}
 	return c.JSON(fiber.Map{"preferences": updated.Preferences, "user": updated})
 }
 
