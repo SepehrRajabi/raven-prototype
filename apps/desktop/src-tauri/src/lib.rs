@@ -288,6 +288,12 @@ pub fn run() {
                 fullscreen_window::install(app_handle);
                 thumbnail_toolbar::install(app_handle);
             }
+            // The Dock icon of a Raven whose window was closed to the menu bar.
+            #[cfg(target_os = "macos")]
+            RunEvent::Reopen {
+                has_visible_windows: false,
+                ..
+            } => tray::show_main_window(app_handle),
             RunEvent::ExitRequested { .. } => stop_api_sidecar(app_handle),
             RunEvent::Exit => {
                 leave_rooms_before_exit(app_handle);

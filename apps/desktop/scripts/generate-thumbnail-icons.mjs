@@ -58,3 +58,29 @@ for (const [name, lucideName, color] of icons) {
   await writeIfChanged(path.join(target, `${name}.svg`), svg);
   await writeIfChanged(path.join(target, `${name}.ico`), ico(png));
 }
+
+// The macOS menu bar badges. Menu bar icons are templates (macOS reads only their alpha),
+// so a badge is a solid disc with the glyph cut out of it. The glyph is drawn heavier than
+// the taskbar's, since it has to read at a few points across. tray.rs sets the disc into
+// the menu bar mark.
+const MENU_BAR_BADGE_PX = 22;
+const menuBarBadges = [
+  ["mic-off", "mic-off"],
+  ["headphones-off", "headphone-off"],
+];
+const trayTarget = path.join(root, "src-tauri", "icons", "tray");
+await mkdir(trayTarget, { recursive: true });
+for (const [name, lucideName] of menuBarBadges) {
+  const file = path.join(root, "node_modules", "lucide-react", "dist", "esm", "icons", `${lucideName}.js`);
+  const { __iconNode: iconNode } = await import(pathToFileURL(file).href);
+  if (!iconNode) throw new Error(`Cannot read Lucide glyph ${lucideName}`);
+  const paths = iconNode.map(svgElement).join("");
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${MENU_BAR_BADGE_PX}" height="${MENU_BAR_BADGE_PX}" viewBox="0 0 24 24">
+  <mask id="cut" maskUnits="userSpaceOnUse" x="0" y="0" width="24" height="24">
+    <rect width="24" height="24" fill="#fff"/>
+    <g transform="translate(4.8 4.8) scale(0.6)" fill="none" stroke="#000" stroke-width="3.4" stroke-linecap="round" stroke-linejoin="round">${paths}</g>
+  </mask>
+  <circle cx="12" cy="12" r="12" fill="#000" mask="url(#cut)"/>
+</svg>\n`;
+  await writeIfChanged(path.join(trayTarget, `macos-badge-${name}.png`), new Resvg(svg).render().asPng());
+}

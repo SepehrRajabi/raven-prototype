@@ -159,11 +159,12 @@ pub fn new_tray_state() -> TrayState {
     }
 }
 
-/// Load the saved settings and put the icon in the notification area.
+/// Load the saved settings and put the icon in the notification area (the menu bar on
+/// macOS).
 pub fn initialize(app: &AppHandle) -> Result<(), TrayError> {
     let state = app.state::<TrayState>();
     *state.settings.lock().map_err(state_poisoned)? = load_settings_from_path(&settings_path(app)?);
-    #[cfg(windows)]
+    #[cfg(any(windows, target_os = "macos"))]
     if let Err(error) = platform::install(app) {
         eprintln!("[raven] tray icon could not be created: {error}");
     }
@@ -221,12 +222,13 @@ pub fn tray_update_settings(
     Ok(settings_view(&next))
 }
 
-/// The main window's close button. On Windows it hides the window and leaves Raven in
-/// the tray unless the user turned that off; elsewhere closing behaves as it always did.
+/// The main window's close button. On Windows and macOS it hides the window and leaves
+/// Raven in the tray unless the user turned that off; elsewhere closing behaves as it
+/// always did.
 pub fn handle_main_close_requested(window: &tauri::Window, api: &tauri::CloseRequestApi) {
-    #[cfg(windows)]
+    #[cfg(any(windows, target_os = "macos"))]
     platform::handle_main_close_requested(window, api);
-    #[cfg(not(windows))]
+    #[cfg(not(any(windows, target_os = "macos")))]
     let _ = (window, api);
 }
 
@@ -246,7 +248,7 @@ fn is_stale(current: &ThumbnailToolbarSnapshot, next: &ThumbnailToolbarSnapshot)
 
 fn settings_view(settings: &TraySettings) -> TraySettingsView {
     TraySettingsView {
-        supported: cfg!(windows),
+        supported: cfg!(any(windows, target_os = "macos")),
         close_to_tray: settings.close_to_tray,
     }
 }
@@ -261,12 +263,12 @@ fn refresh(app: &AppHandle, state: &TrayState) -> Result<(), TrayError> {
     if view.rendered.as_ref() == Some(&next) {
         return Ok(());
     }
-    #[cfg(windows)]
+    #[cfg(any(windows, target_os = "macos"))]
     if let Err(error) = platform::render(app, view.rendered.as_ref(), &next) {
         eprintln!("[raven] tray icon update failed: {error}");
         return Ok(());
     }
-    #[cfg(not(windows))]
+    #[cfg(not(any(windows, target_os = "macos")))]
     let _ = app;
     view.rendered = Some(next);
     Ok(())
@@ -483,16 +485,23 @@ fn io_error(error: std::io::Error) -> TrayError {
 mod icon {
     use super::{IconBadge, IconVariant};
 
+    #[cfg(any(windows, test))]
     pub(super) const SIZE: usize = 32;
+    #[cfg(any(windows, test))]
     const DOT_SIZE: usize = 16;
+    #[cfg(any(windows, test))]
     const BADGE_SIZE: usize = 20;
+    #[cfg(any(windows, test))]
     const GLYPH_SIZE: usize = 16;
+    #[cfg(any(windows, test))]
     const EDGE: [u8; 3] = [20, 19, 18];
+    #[cfg(any(windows, test))]
     /// The interface's `destructive-fill`: a channel that is cut.
     const CUT: [u8; 3] = [183, 60, 52];
 
+    #[cfg(any(windows, test))]
     pub(super) fn compose(variant: IconVariant) -> Result<Vec<u8>, String> {
-        let mut pixels = decode(include_bytes!("../icons/32x32.png"))?;
+        let mut pixels = decode(include_bytes!("../icons/32x32.png"), SIZE)?;
         if variant.unread {
             // Top right, clear of the call badge.
             draw_dot(&mut pixels, SIZE - DOT_SIZE, 0);
@@ -505,11 +514,12 @@ mod icon {
             ))?),
         };
         if let Some(glyph) = glyph {
-            draw_badge(&mut pixels, &decode(glyph)?);
+            draw_badge(&mut pixels, &decode(glyph, SIZE)?);
         }
         Ok(pixels)
     }
 
+    #[cfg(any(windows, test))]
     /// The taskbar icons are single-image ICO files that wrap a PNG.
     fn ico_png(ico: &[u8]) -> Result<&[u8], String> {
         const HEADER: usize = 22;
@@ -519,7 +529,7 @@ mod icon {
         ico.get(HEADER..HEADER + size).ok_or_else(truncated)
     }
 
-    fn decode(bytes: &[u8]) -> Result<Vec<u8>, String> {
+    fn decode(bytes: &[u8], size: usize) -> Result<Vec<u8>, String> {
         let mut decoder = png::Decoder::new(bytes);
         decoder.set_transformations(png::Transformations::normalize_to_color8());
         let mut reader = decoder.read_info().map_err(|error| error.to_string())?;
@@ -527,9 +537,9 @@ mod icon {
         let info = reader
             .next_frame(&mut buffer)
             .map_err(|error| error.to_string())?;
-        if info.width as usize != SIZE || info.height as usize != SIZE {
+        if info.width as usize != size || info.height as usize != size {
             return Err(format!(
-                "tray icons must be {SIZE}×{SIZE}, found {}×{}",
+                "tray icons must be {size}×{size}, found {}×{}",
                 info.width, info.height
             ));
         }
@@ -538,14 +548,15 @@ mod icon {
             png::ColorType::Rgb => 3,
             other => return Err(format!("unsupported tray icon colour type {other:?}")),
         };
-        let mut pixels = Vec::with_capacity(SIZE * SIZE * 4);
-        for pixel in buffer[..SIZE * SIZE * channels].chunks_exact(channels) {
+        let mut pixels = Vec::with_capacity(size * size * 4);
+        for pixel in buffer[..size * size * channels].chunks_exact(channels) {
             pixels.extend_from_slice(&pixel[..3]);
             pixels.push(if channels == 4 { pixel[3] } else { 255 });
         }
         Ok(pixels)
     }
 
+    #[cfg(any(windows, test))]
     /// Source-over blend of one straight-alpha colour onto a pixel.
     fn blend(pixels: &mut [u8], x: usize, y: usize, colour: [u8; 3], alpha: f32) {
         if alpha <= 0.0 {
@@ -562,6 +573,7 @@ mod icon {
         pixels[offset + 3] = (out * 255.0).round() as u8;
     }
 
+    #[cfg(any(windows, test))]
     /// A filled circle with a softened edge. `inset` shrinks it from its box.
     fn draw_disc(
         pixels: &mut [u8],
@@ -587,6 +599,7 @@ mod icon {
         }
     }
 
+    #[cfg(any(windows, test))]
     /// The taskbar's unread dot: light with a dark edge. The edge is heavier here because
     /// the tray draws the icon at half this size, on the icon's own white ground.
     fn draw_dot(pixels: &mut [u8], left: usize, top: usize) {
@@ -594,6 +607,7 @@ mod icon {
         draw_disc(pixels, left, top, DOT_SIZE, 3.0, [241, 239, 234]);
     }
 
+    #[cfg(any(windows, test))]
     /// A red disc in the bottom right corner carrying the glyph's shape in white. The
     /// taskbar glyphs are red line drawings; at tray size only a solid disc with a bold
     /// white shape stays readable, so their outline is used as a mask.
@@ -623,9 +637,121 @@ mod icon {
         }
     }
 
+    /// The macOS menu bar icon. Menu bar icons are templates: macOS reads only their alpha
+    /// and colours them for the menu bar, light or dark, so nothing here can be red. The
+    /// same signals as the Windows icon are cut into the mark instead: a solid dot for
+    /// something unread, and a solid disc with the slashed glyph cut out of it for a muted
+    /// or silenced call, each set apart from the mark by a clear ring. The discs are drawn
+    /// from the Lucide glyphs by scripts/generate-thumbnail-icons.mjs.
+    #[cfg(any(target_os = "macos", test))]
+    pub(super) mod template {
+        use super::{decode, IconBadge, IconVariant};
+
+        /// The menu bar draws icons 18 pt tall; 36 px is that at 2x.
+        pub(in super::super) const SIZE: usize = 36;
+        const BADGE_SIZE: usize = 22;
+        const DOT_RADIUS: f32 = 5.0;
+        const GAP: f32 = 2.5;
+
+        pub(in super::super) fn compose(variant: IconVariant) -> Result<Vec<u8>, String> {
+            let mut alpha = alpha_of(&decode(
+                include_bytes!("../icons/tray/macos-template.png"),
+                SIZE,
+            )?);
+            let far = SIZE as f32;
+            if variant.unread {
+                // Top right, above the beak and clear of the call badge.
+                let centre = (far - DOT_RADIUS, DOT_RADIUS);
+                disc(&mut alpha, centre, DOT_RADIUS + GAP, Paint::Clear);
+                disc(&mut alpha, centre, DOT_RADIUS, Paint::Fill);
+            }
+            let badge = match variant.badge {
+                IconBadge::None => None,
+                IconBadge::Muted => {
+                    Some(&include_bytes!("../icons/tray/macos-badge-mic-off.png")[..])
+                }
+                IconBadge::NotHearing => {
+                    Some(&include_bytes!("../icons/tray/macos-badge-headphones-off.png")[..])
+                }
+            };
+            if let Some(badge) = badge {
+                // Bottom right, over the body of the mark.
+                let origin = SIZE - BADGE_SIZE;
+                let half = BADGE_SIZE as f32 / 2.0;
+                disc(
+                    &mut alpha,
+                    (far - half, far - half),
+                    half + GAP,
+                    Paint::Clear,
+                );
+                let badge = alpha_of(&decode(badge, BADGE_SIZE)?);
+                for y in 0..BADGE_SIZE {
+                    for x in 0..BADGE_SIZE {
+                        let over = badge[y * BADGE_SIZE + x];
+                        let a = &mut alpha[(origin + y) * SIZE + origin + x];
+                        *a = over + *a * (1.0 - over);
+                    }
+                }
+            }
+            Ok(alpha
+                .into_iter()
+                .flat_map(|a| [0, 0, 0, (a.clamp(0.0, 1.0) * 255.0).round() as u8])
+                .collect())
+        }
+
+        fn alpha_of(pixels: &[u8]) -> Vec<f32> {
+            pixels
+                .chunks_exact(4)
+                .map(|pixel| pixel[3] as f32 / 255.0)
+                .collect()
+        }
+
+        #[derive(Clone, Copy)]
+        enum Paint {
+            Fill,
+            Clear,
+        }
+
+        /// A circle with a softened edge, filled in or cleared out of the mask.
+        fn disc(alpha: &mut [f32], centre: (f32, f32), radius: f32, paint: Paint) {
+            for y in 0..SIZE {
+                for x in 0..SIZE {
+                    let distance = (x as f32 + 0.5 - centre.0).hypot(y as f32 + 0.5 - centre.1);
+                    let coverage = (radius - distance + 0.5).clamp(0.0, 1.0);
+                    let a = &mut alpha[y * SIZE + x];
+                    *a = match paint {
+                        Paint::Fill => coverage + *a * (1.0 - coverage),
+                        Paint::Clear => *a * (1.0 - coverage),
+                    };
+                }
+            }
+        }
+    }
+
     #[cfg(test)]
     mod tests {
         use super::*;
+
+        #[test]
+        fn every_template_variant_composes_and_differs() {
+            let plain =
+                template::compose(IconVariant::default()).expect("the template should decode");
+            assert_eq!(plain.len(), template::SIZE * template::SIZE * 4);
+            assert!(
+                plain.chunks_exact(4).all(|pixel| pixel[..3] == [0, 0, 0]),
+                "a template image is black; macOS reads only its alpha"
+            );
+            let mut seen = Vec::new();
+            for badge in [IconBadge::None, IconBadge::Muted, IconBadge::NotHearing] {
+                for unread in [false, true] {
+                    let pixels = template::compose(IconVariant { unread, badge })
+                        .expect("every template variant should compose");
+                    assert_eq!(pixels.len(), plain.len());
+                    assert!(!seen.contains(&pixels), "each variant must look different");
+                    seen.push(pixels);
+                }
+            }
+        }
 
         #[test]
         fn every_variant_composes_to_a_full_icon() {
@@ -643,11 +769,13 @@ mod icon {
     }
 }
 
-#[cfg(windows)]
+#[cfg(any(windows, target_os = "macos"))]
 mod platform {
+    #[cfg(windows)]
+    use super::state_poisoned;
     use super::{
-        action_for, icon, show_main_window, state_poisoned, IconVariant, MenuEntry, Rendered,
-        TrayAction, TrayState, ID_OPEN, ID_QUIT,
+        action_for, icon, show_main_window, IconVariant, MenuEntry, Rendered, TrayAction,
+        TrayState, ID_OPEN, ID_QUIT,
     };
     use tauri::{
         image::Image,
@@ -655,18 +783,25 @@ mod platform {
         tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
         AppHandle, Emitter, Manager, Wry,
     };
+    #[cfg(windows)]
     use tauri_plugin_notification::NotificationExt;
 
     const TRAY_ID: &str = "raven";
     const EVENT_NAME: &str = "tray-action";
 
+    /// Windows opens the window on a left click and the menu on a right click. A macOS
+    /// menu bar icon opens its menu on any click; "Open Raven" is the first item.
     pub(super) fn install(app: &AppHandle) -> Result<(), String> {
         TrayIconBuilder::with_id(TRAY_ID)
             .icon(image(IconVariant::default())?)
+            .icon_as_template(cfg!(target_os = "macos"))
             .tooltip("Raven")
-            .show_menu_on_left_click(false)
+            .show_menu_on_left_click(cfg!(target_os = "macos"))
             .on_menu_event(handle_menu_event)
             .on_tray_icon_event(|tray, event| {
+                if cfg!(target_os = "macos") {
+                    return;
+                }
                 if let TrayIconEvent::Click {
                     button: MouseButton::Left,
                     button_state: MouseButtonState::Up,
@@ -704,6 +839,7 @@ mod platform {
         Ok(())
     }
 
+    #[cfg(windows)]
     fn image(variant: IconVariant) -> Result<Image<'static>, String> {
         Ok(Image::new_owned(
             icon::compose(variant)?,
@@ -712,7 +848,17 @@ mod platform {
         ))
     }
 
-    /// Windows reads `&` in a menu label as "underline the next letter".
+    #[cfg(target_os = "macos")]
+    fn image(variant: IconVariant) -> Result<Image<'static>, String> {
+        Ok(Image::new_owned(
+            icon::template::compose(variant)?,
+            icon::template::SIZE as u32,
+            icon::template::SIZE as u32,
+        ))
+    }
+
+    /// Windows reads `&` in a menu label as "underline the next letter", and macOS strips
+    /// it the same way, so a literal one is doubled on both.
     fn menu_label(label: &str) -> String {
         label.replace('&', "&&")
     }
@@ -765,7 +911,7 @@ mod platform {
                     let Ok(mut view) = state.view.lock() else {
                         return;
                     };
-                    // Windows ticks a clicked choice by itself. The tick has to follow the
+                    // Windows and macOS tick a clicked choice by themselves. The tick has to follow the
                     // presence the app reports instead, so the menu is drawn again.
                     let action = action_for(&view.snapshot, id);
                     let presence = matches!(action, Some(TrayAction::Presence { .. }));
@@ -806,12 +952,16 @@ mod platform {
         }
         api.prevent_close();
         let _ = window.hide();
+        // A Mac app that stays in the menu bar after its window closes is the norm there,
+        // and the Dock icon still brings the window back, so no notice is needed.
+        #[cfg(windows)]
         if let Err(error) = show_hint_once(app, &state) {
             eprintln!("[raven] tray hint could not be shown: {error}");
         }
     }
 
     /// Say once that closing the window did not quit Raven, and where it went.
+    #[cfg(windows)]
     fn show_hint_once(app: &AppHandle, state: &TrayState) -> Result<(), String> {
         let settings = {
             let mut settings = state

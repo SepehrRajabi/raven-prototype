@@ -46,6 +46,8 @@ import type {
   RavenMediaAdapterState,
 } from "./useRavenMediaAdapter";
 
+const onMacSettings = typeof navigator !== "undefined" && /Macintosh|Mac OS X/i.test(navigator.userAgent);
+
 export type UserSettingsSection = "profile" | "messages" | "sessions" | "data" | "invitations" | "appearance" | "audio-video" | "hotkeys" | "voice-overlay" | "tray" | "notifications" | "server" | "workshop" | "updates" | "about";
 
 const GROUPS: SettingsCategoryGroup[] = [
@@ -180,7 +182,7 @@ export function UserSettingsView({
       );
     case "tray":
       return (
-        <SettingsPage title="Tray" description="Raven’s icon next to the clock, and what closing the window does.">
+        <SettingsPage title="Tray" description={`Raven’s icon ${onMacSettings ? "in the menu bar" : "next to the clock"}, and what closing the window does.`}>
           <TraySettingsPanel />
         </SettingsPage>
       );

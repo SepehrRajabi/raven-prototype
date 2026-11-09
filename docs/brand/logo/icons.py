@@ -23,7 +23,7 @@ SMALL_UP_TO = 48  # the small cut keeps the eye open up to here
 ICO_SIZES = [16, 20, 24, 30, 32, 36, 40, 48, 60, 64, 72, 80, 96, 128, 256]
 
 
-def render(size, geometry):
+def render(size, geometry, colour=AQUA):
     cx, cy, r, tip, eye, eye_r = geometry
     dx, dy = tip[0] - cx, tip[1] - cy
     a, b = math.atan2(dy, dx), math.acos(r / math.hypot(dx, dy))
@@ -46,13 +46,20 @@ def render(size, geometry):
     draw.polygon([at(t1), at(tip), at(t2), at((cx, cy))], fill=255)
     draw.ellipse(disc(eye, eye_r), fill=0)
 
-    icon = Image.new("RGBA", (size, size), AQUA)
+    icon = Image.new("RGBA", (size, size), colour)
     icon.putalpha(mask.resize((size, size), Image.LANCZOS))
     return icon
 
 
 def icon(size):
     return render(size, GEOMETRY_SMALL if size <= SMALL_UP_TO else GEOMETRY)
+
+
+def menu_bar_template(size):
+    """The macOS menu bar icon. A template image: macOS reads only its alpha and colours it
+    for the menu bar, so the mark is plain black. The menu bar draws it 18 pt tall, so 36 px
+    is sharp at 2x. Always the small cut: it is never shown larger than 18 pt."""
+    return render(size, GEOMETRY_SMALL, colour="#000000")
 
 
 def main():
@@ -64,6 +71,8 @@ def main():
     frames = [icon(n) for n in ICO_SIZES]
     frames[-1].save(ICONS / "icon.ico", sizes=[f.size for f in frames], append_images=frames[:-1])
     icon(32).save(PUBLIC / "favicon.png")
+    (ICONS / "tray").mkdir(exist_ok=True)
+    menu_bar_template(36).save(ICONS / "tray/macos-template.png")
     print("wrote app icons to", ICONS)
 
 
