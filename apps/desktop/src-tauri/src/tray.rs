@@ -11,6 +11,9 @@ use thiserror::Error;
 use crate::thumbnail_toolbar::{CallAction, ThumbnailToolbarSnapshot};
 
 const SETTINGS_FILE_NAME: &str = "tray.json";
+/// "Back in a bit" is offered in the menu bar menu only. The Windows tray keeps the
+/// same items as its taskbar buttons.
+const OFFERS_AWAY: bool = cfg!(target_os = "macos");
 /// Windows cuts a notification-area tooltip at 127 characters; names are trimmed well
 /// before that so the state after the name is never the part that is lost.
 const MAX_NAME_CHARS: usize = 48;
@@ -19,6 +22,7 @@ const ID_STATUS: &str = "tray:status";
 const ID_MIC: &str = "tray:mic";
 const ID_DEAFEN: &str = "tray:deafen";
 const ID_LEAVE: &str = "tray:leave";
+const ID_AWAY: &str = "tray:away";
 const ID_SETTINGS: &str = "tray:settings";
 const ID_CHECK_UPDATES: &str = "tray:check-updates";
 const ID_OPEN: &str = "tray:open";
@@ -84,6 +88,10 @@ pub struct TraySnapshot {
     pub call_status: TrayCallStatus,
     pub presence: String,
     pub presences: Vec<TrayPresenceOption>,
+    /// "Back in a bit" is set for everyone in the call.
+    pub away: bool,
+    /// The call is connected and its server shares "Back in a bit".
+    pub away_supported: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -100,6 +108,12 @@ pub(crate) enum MenuEntry {
         id: &'static str,
         label: String,
         enabled: bool,
+    },
+    /// An item with a tick that follows the app's state.
+    Toggle {
+        id: &'static str,
+        label: &'static str,
+        checked: bool,
     },
     Choices {
         label: &'static str,
@@ -302,6 +316,10 @@ fn call_status_line(snapshot: &TraySnapshot) -> Option<String> {
 }
 
 pub(crate) fn menu_model(snapshot: &TraySnapshot) -> Vec<MenuEntry> {
+    menu_model_for(snapshot, OFFERS_AWAY)
+}
+
+fn menu_model_for(snapshot: &TraySnapshot, offers_away: bool) -> Vec<MenuEntry> {
     let item = |id: &'static str, label: &str, enabled: bool| MenuEntry::Item {
         id,
         label: label.to_string(),
@@ -344,6 +362,13 @@ pub(crate) fn menu_model(snapshot: &TraySnapshot) -> Vec<MenuEntry> {
             None => "Leave call".into(),
         };
         entries.push(item(ID_LEAVE, &label, call.allows(CallAction::Leave)));
+        if offers_away && snapshot.away_supported {
+            entries.push(MenuEntry::Toggle {
+                id: ID_AWAY,
+                label: "Back in a bit",
+                checked: snapshot.away,
+            });
+        }
     }
     if !snapshot.presences.is_empty() {
         entries.push(MenuEntry::Separator);
@@ -406,6 +431,7 @@ pub(crate) enum TrayAction {
     Mic,
     Deafen,
     Leave,
+    Away { away: bool },
     Settings,
     CheckUpdates,
     Presence { presence: String },
@@ -419,6 +445,10 @@ impl TrayAction {
 }
 
 pub(crate) fn action_for(snapshot: &TraySnapshot, id: &str) -> Option<TrayAction> {
+    action_for_with(snapshot, id, OFFERS_AWAY)
+}
+
+fn action_for_with(snapshot: &TraySnapshot, id: &str, offers_away: bool) -> Option<TrayAction> {
     let call = &snapshot.call;
     if !call.signed_in {
         return None;
@@ -429,6 +459,11 @@ pub(crate) fn action_for(snapshot: &TraySnapshot, id: &str) -> Option<TrayAction
             .allows(CallAction::Deafen)
             .then_some(TrayAction::Deafen),
         ID_LEAVE => call.allows(CallAction::Leave).then_some(TrayAction::Leave),
+        ID_AWAY => (offers_away && call.has_media_session && snapshot.away_supported).then_some(
+            TrayAction::Away {
+                away: !snapshot.away,
+            },
+        ),
         ID_SETTINGS => Some(TrayAction::Settings),
         ID_CHECK_UPDATES => Some(TrayAction::CheckUpdates),
         _ => {
@@ -876,6 +911,17 @@ mod platform {
                     &MenuItem::with_id(app, *id, menu_label(label), *enabled, None::<&str>)
                         .map_err(|error| error.to_string())?,
                 ),
+                MenuEntry::Toggle { id, label, checked } => menu.append(
+                    &CheckMenuItem::with_id(
+                        app,
+                        *id,
+                        menu_label(label),
+                        true,
+                        *checked,
+                        None::<&str>,
+                    )
+                    .map_err(|error| error.to_string())?,
+                ),
                 MenuEntry::Choices { label, choices } => {
                     let submenu = Submenu::new(app, menu_label(label), true)
                         .map_err(|error| error.to_string())?;
@@ -909,20 +955,23 @@ mod platform {
             ID_QUIT => app.exit(0),
             _ => {
                 let state = app.state::<TrayState>();
-                let (action, presence) = {
+                let (action, ticked) = {
                     let Ok(mut view) = state.view.lock() else {
                         return;
                     };
                     // Windows and macOS tick a clicked choice by themselves. The tick has to follow the
-                    // presence the app reports instead, so the menu is drawn again.
+                    // state the app reports instead, so the menu is drawn again.
                     let action = action_for(&view.snapshot, id);
-                    let presence = matches!(action, Some(TrayAction::Presence { .. }));
-                    if presence {
+                    let ticked = matches!(
+                        action,
+                        Some(TrayAction::Presence { .. } | TrayAction::Away { .. })
+                    );
+                    if ticked {
                         view.rendered = None;
                     }
-                    (action, presence)
+                    (action, ticked)
                 };
-                if presence {
+                if ticked {
                     let _ = super::refresh(app, &state);
                 }
                 let Some(action) = action else {
@@ -1046,6 +1095,9 @@ mod tests {
             .map(|entry| match entry {
                 MenuEntry::Separator => "-".into(),
                 MenuEntry::Item { label, .. } => label.clone(),
+                MenuEntry::Toggle { label, checked, .. } => {
+                    format!("{}{label}", if *checked { "✓ " } else { "" })
+                }
                 MenuEntry::Choices { label, .. } => format!("{label} >"),
             })
             .collect()
@@ -1199,6 +1251,51 @@ mod tests {
             })
             .unwrap(),
             r#"{"action":"presence","presence":"dnd"}"#
+        );
+    }
+
+    #[test]
+    fn back_in_a_bit_is_offered_in_a_connected_call_on_the_menu_bar_only() {
+        let mut snapshot = in_call();
+        snapshot.away_supported = true;
+        let menu = labels(&menu_model_for(&snapshot, true));
+        assert_eq!(menu[4..6], ["Leave Lounge", "Back in a bit"]);
+        assert_eq!(
+            action_for_with(&snapshot, ID_AWAY, true),
+            Some(TrayAction::Away { away: true })
+        );
+
+        snapshot.away = true;
+        assert_eq!(
+            labels(&menu_model_for(&snapshot, true))[5],
+            "✓ Back in a bit"
+        );
+        assert_eq!(
+            action_for_with(&snapshot, ID_AWAY, true),
+            Some(TrayAction::Away { away: false })
+        );
+
+        let offered = |snapshot: &TraySnapshot, offers_away: bool| {
+            menu_model_for(snapshot, offers_away)
+                .iter()
+                .any(|entry| matches!(entry, MenuEntry::Toggle { id, .. } if *id == ID_AWAY))
+        };
+        // Windows keeps its menu as it was.
+        assert!(!offered(&snapshot, false));
+        assert_eq!(action_for_with(&snapshot, ID_AWAY, false), None);
+
+        // Not offered when the server cannot share it, or outside a call.
+        snapshot.away_supported = false;
+        assert!(!offered(&snapshot, true));
+        assert_eq!(action_for_with(&snapshot, ID_AWAY, true), None);
+        let mut idle = idle();
+        idle.away_supported = true;
+        assert!(!offered(&idle, true));
+        assert_eq!(action_for_with(&idle, ID_AWAY, true), None);
+
+        assert_eq!(
+            serde_json::to_string(&TrayAction::Away { away: true }).unwrap(),
+            r#"{"action":"away","away":true}"#
         );
     }
 

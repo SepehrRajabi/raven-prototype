@@ -378,6 +378,9 @@ export function DeviceDock({
         } else if (event.action === "presence") {
           const presence = SELECTABLE_PRESENCES.find((value) => value === event.presence);
           if (presence) void setPresenceRef.current(presence).catch(() => undefined);
+        } else if (event.action === "away") {
+          // A failure is shown by the adapter; the next snapshot carries the real state.
+          void mediaRef.current.setAway(event.away).catch(() => undefined);
         }
       }),
       () => setTrayReady(true),
@@ -405,7 +408,9 @@ export function DeviceDock({
     reconnecting: media.reconnecting,
     presence,
     presences: TRAY_PRESENCES,
-  }), [activeNestName, media.phase, media.reconnecting, presence, signedIn, thumbnailSnapshot, trayReady]);
+    away: media.localAway,
+    awaySupported: connected && media.awaySupported,
+  }), [activeNestName, connected, media.awaySupported, media.localAway, media.phase, media.reconnecting, presence, signedIn, thumbnailSnapshot, trayReady]);
 
   useEffect(() => {
     void trayCommands.update(traySnapshot).catch(() => undefined);

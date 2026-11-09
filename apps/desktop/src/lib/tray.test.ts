@@ -34,7 +34,7 @@ describe("tray snapshot", () => {
       presence: "open",
       presences,
     });
-    expect(snapshot).toEqual({ ...call, callName: "Lounge", callStatus: "connected", presence: "open", presences });
+    expect(snapshot).toEqual({ ...call, callName: "Lounge", callStatus: "connected", presence: "open", presences, away: false, awaySupported: false });
   });
 
   it("names no call once the call is over", () => {
@@ -47,5 +47,11 @@ describe("tray snapshot", () => {
       presences,
     });
     expect(snapshot.callName).toBeNull();
+  });
+
+  it("carries Back in a bit only during a call", () => {
+    const input = { call, callName: "Lounge", phase: "connected", reconnecting: false, presence: "open", presences, away: true, awaySupported: true };
+    expect(buildTraySnapshot(input)).toMatchObject({ away: true, awaySupported: true });
+    expect(buildTraySnapshot({ ...input, call: { ...call, hasMediaSession: false } })).toMatchObject({ away: false, awaySupported: false });
   });
 });

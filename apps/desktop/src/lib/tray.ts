@@ -7,7 +7,8 @@ export const TRAY_ACTION_EVENT = "tray-action";
 /** What a click in the tray menu asks this window to do. */
 export type TrayAction =
   | { action: "mic" | "deafen" | "leave" | "settings" | "checkUpdates" }
-  | { action: "presence"; presence: string };
+  | { action: "presence"; presence: string }
+  | { action: "away"; away: boolean };
 
 export type TrayCallStatus = "connected" | "connecting" | "reconnecting" | "leaving";
 
@@ -22,6 +23,10 @@ export interface TraySnapshot extends ThumbnailToolbarSnapshot {
   callStatus: TrayCallStatus;
   presence: string;
   presences: TrayPresenceOption[];
+  /** "Back in a bit" is set for everyone in the call. */
+  away: boolean;
+  /** The call is connected and its server shares "Back in a bit". Only the macOS menu offers it. */
+  awaySupported: boolean;
 }
 
 export interface TraySettings {
@@ -45,6 +50,8 @@ export function buildTraySnapshot(input: {
   reconnecting: boolean;
   presence: string;
   presences: TrayPresenceOption[];
+  away?: boolean;
+  awaySupported?: boolean;
 }): TraySnapshot {
   return {
     ...input.call,
@@ -52,6 +59,8 @@ export function buildTraySnapshot(input: {
     callStatus: trayCallStatus(input.phase, input.reconnecting),
     presence: input.presence,
     presences: input.presences,
+    away: input.call.hasMediaSession && Boolean(input.away),
+    awaySupported: input.call.hasMediaSession && Boolean(input.awaySupported),
   };
 }
 
