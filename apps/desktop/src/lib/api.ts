@@ -8,6 +8,7 @@ import {
 } from "@/lib/accounts";
 import { avatarVersion, noteAvatarRoute } from "@/lib/avatarVersions";
 import { parseCallVote, type CallVote } from "@/lib/callVote";
+import { normalizeApiServerUrl } from "@/lib/apiServerUrl";
 import type { WorkshopConfig, WorkshopPlaceKind, WorkshopProtocol, WorkshopShare } from "@/lib/workshopState";
 
 const DEFAULT_API_BASE_URL = normalizeApiServerUrl(import.meta.env.VITE_RAVEN_API_URL ?? "http://127.0.0.1:6977");
@@ -1407,23 +1408,7 @@ function desktopOS() {
 
 export const api = new ApiClient();
 
-export function normalizeApiServerUrl(value: string) {
-  const trimmed = value.trim().replace(/\/+$/, "");
-  if (!trimmed) throw new Error("API server URL is required");
-  const candidate = /^https?:\/\//i.test(trimmed) ? trimmed : `http://${trimmed}`;
-  let parsed: URL;
-  try {
-    parsed = new URL(candidate);
-  } catch {
-    throw new Error("Enter a valid Raven API server URL");
-  }
-  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
-    throw new Error("Raven API server URL must start with http:// or https://");
-  }
-  parsed.hash = "";
-  parsed.search = "";
-  return parsed.toString().replace(/\/+$/, "");
-}
+export { normalizeApiServerUrl };
 
 function readStoredApiServerUrl() {
   const stored = localStorage.getItem(API_SERVER_URL_KEY);
