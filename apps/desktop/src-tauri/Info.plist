@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- Merged into the macOS bundle's Info.plist. macOS shows these in its permission
+     prompts, and stops an app that uses the microphone or camera without them. -->
+<plist version="1.0">
+<dict>
+  <key>NSMicrophoneUsageDescription</key>
+  <string>Raven uses your microphone so people in your calls can hear you.</string>
+  <key>NSCameraUsageDescription</key>
+  <string>Raven uses your camera when you turn on video in a call.</string>
+</dict>
+</plist>

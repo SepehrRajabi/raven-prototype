@@ -44,7 +44,9 @@ cd services/api && go run ./cmd/raven-api              # terminal 2
 cd apps/desktop && bun install && bun run tauri dev    # terminal 3
 ```
 
-`bun run tauri build` produces `apps/desktop/src-tauri/target/release/bundle/macos/Raven.app` and a `.dmg` next to it. Without the release signing key it skips the signed updater artifacts. The app is not code-signed, so the first time, right-click it and choose **Open**. Screen sharing asks for the Screen & System Audio Recording permission.
+`bun run tauri build` produces `apps/desktop/src-tauri/target/release/bundle/macos/Raven.app` and a `.dmg` next to it. Without the release signing key it skips the signed updater artifacts. Screen sharing asks for the Screen & System Audio Recording permission.
+
+macOS remembers permissions for an app's code signature, and an unsigned build's signature changes with every rebuild, so each new build asks for the microphone, camera and screen recording again. Run `apps/desktop/scripts/macos-signing-identity.sh` once: it adds a self-signed "Raven Local Code Signing" identity to your login keychain, and `bun run tauri build` then signs with it, so rebuilds keep their permissions. The certificate is only trusted on your Mac, so on another Mac right-click the app and choose **Open** the first time.
 
 ## Start LiveKit for RTC
 

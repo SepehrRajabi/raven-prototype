@@ -82,6 +82,7 @@ export type {
 const NEST_HEARTBEAT_INTERVAL_MS = 5000;
 const NEST_HEARTBEAT_TIMEOUT_MS = 8000;
 const DEAFEN_SHARE_DEBOUNCE_MS = 300;
+const screenSourcesNeedPermission = typeof navigator !== "undefined" && /Macintosh|Mac OS X/i.test(navigator.userAgent);
 /** Backoff between attempts to rejoin after the realtime connection was lost. */
 export const MEDIA_RECONNECT_DELAYS_MS = [1000, 2000, 5000, 10_000, 20_000, 30_000];
 
@@ -360,13 +361,18 @@ export function useRavenMediaAdapter(
   }, []);
 
   const refreshMediaDevices = useCallback(async () => {
+    // On macOS, listing screens, windows or apps goes through ScreenCaptureKit, which
+    // asks for Screen Recording access. Leave that to the share picker and the Mixer,
+    // which list them when opened, so Raven does not ask on every start.
+    const skipScreenSources = screenSourcesNeedPermission;
+    const none = Promise.resolve([] as never[]);
     const [inputs, outputs, apps, cameraList, displayList, windowList] = await Promise.allSettled([
       audioCommands.listInputDevices(),
       audioCommands.listOutputDevices(),
-      audioCommands.listAppAudioSources(),
+      skipScreenSources ? none : audioCommands.listAppAudioSources(),
       videoCommands.listCameras(),
-      videoCommands.listDisplays(),
-      videoCommands.listWindows(),
+      skipScreenSources ? none : videoCommands.listDisplays(),
+      skipScreenSources ? none : videoCommands.listWindows(),
     ]);
     if (inputs.status === "fulfilled") setInputDevices(inputs.value);
     if (outputs.status === "fulfilled") setOutputDevices(outputs.value);

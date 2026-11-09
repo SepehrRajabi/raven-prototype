@@ -66,6 +66,22 @@ if (subcommand === "build" && !process.env.TAURI_SIGNING_PRIVATE_KEY && !process
   extraArgs.push("--config", JSON.stringify({ bundle: { createUpdaterArtifacts: false } }));
 }
 
+// macOS keeps a permission for an app's code signature. Unsigned, every build is a new
+// app and asks for the microphone, camera and screen recording again; signed with one
+// identity, rebuilds keep them. See scripts/macos-signing-identity.sh.
+const localSigningIdentity = "Raven Local Code Signing";
+if (process.platform === "darwin" && subcommand === "build" && !process.env.APPLE_SIGNING_IDENTITY) {
+  const found = spawnSync("security", ["find-certificate", "-c", localSigningIdentity], { stdio: "ignore" });
+  if (found.status === 0) {
+    process.env.APPLE_SIGNING_IDENTITY = localSigningIdentity;
+  } else {
+    console.warn(
+      `No "${localSigningIdentity}" in the keychain: this build is unsigned, so macOS will ask for its ` +
+        "permissions again after every rebuild. Run scripts/macos-signing-identity.sh once to fix that.",
+    );
+  }
+}
+
 const tauri = path.join(desktopDir, "node_modules", ".bin", "tauri");
 if (!existsSync(tauri)) {
   console.error(`Tauri CLI was not found in ${path.dirname(tauri)}. Run bun install in ${desktopDir} first.`);
