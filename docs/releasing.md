@@ -119,7 +119,7 @@ checked:
 | --- | --- | --- |
 | `Raven_X.Y.Z_amd64.deb` | Ubuntu 22.04 | Debian 12, 13; Ubuntu 22.04, 24.04 |
 | `Raven_X.Y.Z_x86_64_fedora.rpm` | Fedora 44 | Fedora 44 |
-| `Raven_X.Y.Z_x86_64_el10.rpm` | AlmaLinux 10 | AlmaLinux 10, Rocky Linux 10 (EPEL enabled) |
+| `Raven_X.Y.Z_x86_64_el10.rpm` | AlmaLinux 10 | AlmaLinux 10, Rocky Linux 10 (EPEL and CRB enabled) |
 | `Raven_X.Y.Z_x86_64_opensuse.rpm` | openSUSE Leap 16.0 | Leap 16.0, Tumbleweed |
 | `raven-desktop-X.Y.Z-1-x86_64.pkg.tar.zst` | Arch Linux | Arch Linux |
 

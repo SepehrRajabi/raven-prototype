@@ -3,7 +3,7 @@
 #
 #   .deb                Ubuntu 22.04 base: Debian 12+, Ubuntu 22.04+, Mint, Pop!_OS, ...
 #   .rpm (fedora)       Fedora 44+
-#   .rpm (el10)         RHEL 10, AlmaLinux 10, Rocky Linux 10 (needs EPEL for the tray)
+#   .rpm (el10)         RHEL 10, AlmaLinux 10, Rocky Linux 10 (needs EPEL and CRB for the tray)
 #   .rpm (opensuse)     openSUSE Leap 16 and Tumbleweed
 #   .pkg.tar.zst        Arch Linux and derivatives
 #
@@ -170,7 +170,12 @@ jobs:
             DEBIAN_FRONTEND=noninteractive apt-get install -y ./pkg/*.deb
           elif command -v dnf >/dev/null; then
             . /etc/os-release
-            if [ "$ID" != fedora ]; then dnf install -y epel-release; fi
+            if [ "$ID" != fedora ]; then
+              # The tray library is in EPEL and needs libdbusmenu from CRB, which
+              # AlmaLinux's image enables and Rocky's does not.
+              dnf install -y dnf-plugins-core epel-release
+              dnf config-manager --set-enabled crb
+            fi
             dnf install -y ./pkg/*.rpm
           elif command -v zypper >/dev/null; then
             zypper --non-interactive install --allow-unsigned-rpm ./pkg/*.rpm
