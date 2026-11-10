@@ -5,7 +5,7 @@ import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover
 import { Tooltip } from "@/components/ui/tooltip";
 import { api } from "@/lib/api";
 import { cn } from "@/lib/utils";
-import { ArrowDownToLine, Bell, Check, ChevronLeft, ChevronRight, Copy, Minus, Search, Square, UserMinus, UserPlus, X } from "lucide-react";
+import { ArrowDownToLine, Bell, Check, ChevronLeft, ChevronRight, Command, Copy, Minus, Search, Square, UserMinus, UserPlus, X } from "lucide-react";
 import type { RavenShellData, RavenView } from "./state";
 import { displayNameFor } from "./state";
 import { PendingList } from "./Inbox";
@@ -259,9 +259,11 @@ function handleCaptionMouseDown(event: MouseEvent<HTMLElement>) {
   void appWindow.startDragging();
 }
 
+const isMac = typeof navigator !== "undefined" && /Macintosh|Mac OS X/i.test(navigator.userAgent);
+
 // On macOS a maximized ("zoomed") window still sits under the menu bar; only full screen
 // takes the whole display, so there the maximize button means full screen.
-const maximizeIsFullScreen = typeof navigator !== "undefined" && /Macintosh|Mac OS X/i.test(navigator.userAgent);
+const maximizeIsFullScreen = isMac;
 
 /** Maximizes or restores the window (full screen on macOS); resolves to the new state. */
 async function toggleWindowMaximize(appWindow: ReturnType<typeof getCurrentWindow>): Promise<boolean> {
@@ -272,6 +274,23 @@ async function toggleWindowMaximize(appWindow: ReturnType<typeof getCurrentWindo
   }
   await appWindow.toggleMaximize();
   return appWindow.isMaximized();
+}
+
+/** The search shortcut's hint: the ⌘ symbol on macOS (spelled out for screen readers), Ctrl elsewhere. */
+function SearchShortcut() {
+  return (
+    <kbd className="rv-mono flex shrink-0 items-center gap-0.5 text-caption text-subtle">
+      {isMac ? (
+        <>
+          <Command aria-hidden className="h-3 w-3" />
+          <span className="sr-only">Command</span>
+        </>
+      ) : (
+        "Ctrl"
+      )}{" "}
+      K
+    </kbd>
+  );
 }
 
 function currentTauriWindow(): ReturnType<typeof getCurrentWindow> | null {
@@ -364,7 +383,9 @@ function GlobalSearch({ data, onNavigate }: { data: RavenShellData; onNavigate: 
       });
     };
     const onKeyDown = (event: KeyboardEvent) => {
-      const commandK = event.key.toLowerCase() === "k" && (event.ctrlKey || event.metaKey) && !event.altKey;
+      // Command K on macOS, where Control K is the text fields' "delete to end of line".
+      const modifier = isMac ? event.metaKey && !event.ctrlKey : event.ctrlKey && !event.metaKey;
+      const commandK = event.key.toLowerCase() === "k" && modifier && !event.altKey;
       const slash = event.key === "/" && !event.ctrlKey && !event.metaKey && !event.altKey;
       if (!commandK && !slash) return;
       if (document.querySelector('[role="dialog"]')) return;
@@ -474,7 +495,7 @@ function GlobalSearch({ data, onNavigate }: { data: RavenShellData; onNavigate: 
             <X className="h-3.5 w-3.5" />
           </button>
         ) : (
-          <kbd className="rv-mono shrink-0 text-caption text-subtle">Ctrl K</kbd>
+          <SearchShortcut />
         )}
       </div>
 
