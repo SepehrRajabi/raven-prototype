@@ -256,7 +256,10 @@ function noteInSummary(conversation: ConversationState, message: ChatMessage, se
     next.lastMessage = previewOf(message);
     next.lastActivityMs = Date.parse(message.createdAt) || summary.lastActivityMs;
     next.archived = false;
-    if (message.senderId === me) {
+    if (summary.kind === "raven") {
+      // Raven writes in the person's own name: every new line is unread.
+      next.unreadCount = Math.min(summary.unreadCount + 1, UNREAD_CAP);
+    } else if (message.senderId === me) {
       // Sending means having read what came before.
       next.readSeq = seq;
       next.unreadCount = 0;

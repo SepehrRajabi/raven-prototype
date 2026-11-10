@@ -207,7 +207,7 @@ func chatSeed(t *testing.T, server *Server, sender chatPerson, conversationID st
 	t.Helper()
 	out := []ChatMessage{}
 	for index := 1; index <= count; index++ {
-		stored, err := server.storeChatMessage(sender.user, conversationID, "seed-"+auth.NewID(), fmt.Sprintf("%s %d", prefix, index), "")
+		stored, err := server.storeChatMessage(sender.user, conversationID, "seed-"+auth.NewID(), fmt.Sprintf("%s %d", prefix, index), "", "")
 		if err != nil {
 			t.Fatal(err)
 		}

@@ -55,9 +55,37 @@ Defaults chosen during the build. Each is one constant or one check to change:
   is how people are tricked.
 
 Not in the desktop client yet: attachments (the server supports stored images).
-Not in this version: mentions, search, forwarding, pinning, link
-previews, end-to-end
+Not in this version: mentions, search, forwarding, pinning, end-to-end
 encryption, auto-delete timers, per-nest permissions, and "last seen".
+
+### Link previews
+
+A message with a web address can show a card for it: the page's title, description, site
+name and picture. Decided with Sepehr on 2026-11-10: **the server fetches**, not the
+people reading, so a link never tells a site who read it, and every reader sees the same
+card. It is off unless the operator sets `RAVEN_LINK_PREVIEWS=on`, because the server then
+opens addresses its users choose.
+
+- Only the first address written out in full (found as the client finds links: not in
+  code), and not on a message with attachments.
+- The send is answered first. Four workers fetch in the background (queue of 256; a full
+  queue means no card). The card arrives as a change to the message, like a reaction.
+- An edit that changes the first address replaces the card; one that keeps it keeps it.
+  The sender can remove the card for everyone, also before it arrives; it then stays
+  away, even after an edit that keeps the address.
+- Delete for everyone, and deleting a group or tree, remove the card and queue its
+  picture. Saved and forwarded copies share the original's picture.
+- The fetcher (`internal/linkpreview`) connects only to public addresses on ports 80 and
+  443. The check runs on the address actually dialled, so DNS answers and redirects (at
+  most 5) that point at the server's own network are refused. It never uses a proxy from
+  the environment. A page is read up to 1 MB, only its head; a picture up to 5 MB,
+  8,192 px a side and 16 megapixels. The picture is decoded and encoded again at most
+  800 px (JPEG, or PNG with transparency), so readers never decode the site's file.
+  Words lose control and direction characters and are cut to 200 (title), 300
+  (description) and 80 (site name) characters. The card names the real host beside the
+  site's own name.
+- Addresses are message content: they are never logged. `raven_chat_link_previews_total`
+  counts outcomes.
 
 ## Architecture
 
@@ -226,6 +254,7 @@ The SQL runs on PostgreSQL (production) and SQLite (local use and the default te
 | `chat_attachments` | Ordered attachment descriptions, uploader and retry id, conversation, optional message, open `kind`/`source`, dimensions, placeholder and metadata. `message_id` deliberately has no foreign key so bulk message deletes never depend on order. |
 | `chat_attachment_variants` | Named variants declared at create time; an immutable object key and upload time are filled by PUT. All declared variants must have keys before send; a future peer source with no variants is ready immediately. |
 | `chat_object_purges` | Durable object keys queued inside the deletion transaction, with retry attempts. |
+| `chat_link_previews` | One card per message: address, title, description, site name, picture key, type and size. Migration `2026111001_chat_link_previews`. `removed_at` marks a card its sender removed; such a row keeps only the address. |
 | `chat_reactions` | Emoji, message, conversation, person and creation time; unique on `(message_id, user_id, emoji)`. Migration `2026103102_chat_reactions` runs on SQLite and PostgreSQL. Delete for everyone and group/tree deletion remove the rows; hiding and clearing retain them. |
 | `chat_message_hides` | "Remove for me": person, message. |
 | `chat_user_settings` | `read_dm`, `read_group`, `read_private_space`, `read_public_space` (the four read-status switches; `share_read_status` is kept in step with `read_dm` for older clients). `chat_members.shared_read_at` is when `shared_read_seq` last moved. |
@@ -383,6 +412,44 @@ picker offers emoji through Unicode 15.0, matching the bundled font.
   of Raven. Update to see it." Lists and quotes say "Photo", "2 photos" or "Attachment"
   when there is no caption.
 
+### GIF and sticker libraries
+
+Migration `2026111006_library` adds `library_assets` (one per kind and SHA-256 of the
+original: status `uploading`/`processing`/`ready`/`failed`, failure text, size and
+duration), `library_asset_variants` (`original`, `play`, `poster`), `library_items` (a
+personal item or a space-set item pointing at an asset; unique per owner and asset),
+`library_item_terms` (lowercase NFKC words of the title plus keywords, matched with
+`term LIKE ? || '%'`), `library_collections`, `library_usage` and
+`trees.saved_stickers_publishable`. Space sets need `stickers.manage`. The design and
+limits are in `docs/plans/gifs-stickers/README.md`.
+
+| Method and path | Behavior |
+|---|---|
+| `POST /v1/library/assets` | `{clientUploadId, kind, contentType, size, sha256, target: {scope, treeId?}, title?, keywords?, collectionId?}`. A ready asset with the same hash gives the item at once; otherwise returns `{item, upload: true}` (`201`, or `200` on retry). A failed asset with the same hash answers `422` with its failure text. |
+| `PUT /v1/library/assets/:id/original` | Raw bytes, at most 20 MB. Anyone who added the asset may upload it; size, hash and sniffed type must match. TGS and already-fitting WebP stickers become `ready` here; everything else is `processing` and converted by ffmpeg in the background. |
+| `GET /v1/library/assets/:id/:variant` | `play` or `poster`, for an item of your own, a public item, a set of a space you belong to, or a message you can read. Immutable cache headers, ETag, `nosniff`. TGS `play` is the decompressed Lottie JSON (`application/json`). |
+| `GET /v1/library/items?scope=&treeId=&collectionId=&cursor=` | Browse a personal library or a space set. |
+| `PATCH /v1/library/items/:id`, `PATCH /v1/library/items` | Title, keywords, collection, favourite, public; bulk edit up to 200 ids. Only personal items with a title can be public; an item saved from a space set needs that space's `savedStickersPublishable`. |
+| `DELETE /v1/library/items/:id` | Removes the item; sent messages keep working. |
+| `POST /v1/library/save` | `{itemId}` or `{attachmentId}` into your personal library. |
+| `/v1/library/collections` | `GET`, `POST`, `PATCH /:id`, `DELETE /:id`. Deleting keeps the items, uncollected. |
+| `GET /v1/library/search?conversationId=&q=&kind=&scope=&cursor=` | What the caller may use in that conversation: personal, the conversation's space set, and (with a query) public. Order: scope, favourite, recent use, newest. 60 per page. Without `conversationId` (the library page) no space set is in scope. |
+| `GET /v1/library/suggest?conversationId=&messageId=` | Up to 12 usable items matching words of that message. |
+
+Send accepts `libraryItemId`, alone: no body and no `attachmentIds`. The message gets one
+attachment with `kind` `gif` or `sticker`, `source: "library"`, `assetId` and `format`
+(`webm`, `webp` or `tgs`); its variants are the asset's `play` and `poster`, fetched
+from the library asset route. These messages can't be edited. Forwarding one outside
+Saved needs the forwarder to be able to send it there.
+
+`properties.library` announces `{version, conversion, kinds, maxOriginalBytes,
+maxDurationMs, maxFps, tgs, maxTitleLength, maxKeywords, maxKeywordLength, pageSize}`.
+It is omitted when object storage is unavailable. With `conversion: false` (no ffmpeg on
+the server) only TGS and WebP stickers can be added.
+
+An asset is purged when no item and no message refers to it. Maintenance checks this
+every run, and removes assets that never became ready within 24 hours.
+
 ## Limits and safety
 
 - Up to 10 attachments per message. Images require `full` (up to 10 MiB) and `preview`
@@ -393,15 +460,18 @@ picker offers emoji through Unicode 15.0, matching the bundled font.
 - `properties.chat.attachments` announces version 1, supported kinds/variant byte
   limits, dimensions, sources and max-per-message from the server's rule map. It is
   omitted when object storage is unavailable; clients then hide attachment controls.
-- Create is limited to 60/minute and upload to 120/minute per account.
-- The global Fiber body limit is 10 MiB + 64 KiB. Other `/v1` requests over 1 MiB
-  are rejected with `413` before parsing (both Content-Length and buffered size are
+- Create is limited to 60/minute and upload to 120/minute per account. Library: add,
+  upload, save and edits 60/minute each; search and suggest 30 per 10 s.
+- The global Fiber body limit is 20 MB + 64 KiB, for library originals. Other `/v1`
+  requests over 1 MiB (all but attachment and library uploads, whose handlers cap
+  their own sizes) are rejected with `413` before parsing (both Content-Length and buffered size are
   checked). Known limit: fasthttp already buffers requests before this middleware,
   so rejection does not save that memory. A focused `StreamRequestBody` experiment
   confirmed that existing `c.Body()` handlers still buffer the whole stream and can
   read past BodyLimit; streaming was left disabled to retain the global bound.
 - The repo nginx API limit is 12 MiB in `nginx/mimir.conf` (desktop API) and
-  `nginx/raven.conf` (admin API). Saye's running nginx and the ArvanCloud CDN
+  `nginx/raven.conf` (admin API). Library originals get 21 MB on
+  `/v1/library/assets/*/original` in `nginx/mimir.conf` and `infra/raven/edge-nginx.conf`. Saye's running nginx and the ArvanCloud CDN
   must be checked/updated at deploy time; this change does not deploy either.
 
 - Per-account rate limits, with `Retry-After`: send 20 per 10 s, typing 20 per 10 s, edit

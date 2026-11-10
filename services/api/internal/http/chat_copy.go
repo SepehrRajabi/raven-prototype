@@ -11,6 +11,7 @@ import (
 
 	"raven/services/api/internal/auth"
 	"raven/services/api/internal/database"
+	"raven/services/api/internal/linkpreview"
 
 	"github.com/gofiber/fiber/v2"
 )
@@ -186,7 +187,7 @@ func (s *Server) chatOriginSourceFor(q chatQuerier, conversationID, viewerID str
 	access, err := s.chatAccessFor(q, conversationID, viewerID)
 	if err == nil {
 		// Saved messages is nobody's place to go: a note forwarded from it has no source.
-		if access.Kind == chatKindSaved {
+		if access.Kind == chatKindSaved || access.Kind == chatKindRaven {
 			return nil, nil
 		}
 		source := &ChatOriginSource{ConversationID: conversationID, Kind: access.Kind, Name: access.Name, TreeID: access.TreeID}
@@ -267,6 +268,9 @@ type chatCopyResult struct {
 	// Existing are copies the target already held, for SkipExisting.
 	Existing   []string
 	Recipients []chatRecipient
+	// LinkPreviews are fetches for copies whose original had no card yet, to queue once
+	// the copies are committed.
+	LinkPreviews []chatLinkPreviewJob
 }
 
 type chatCopySource struct {
@@ -421,8 +425,13 @@ func (s *Server) chatCopyMessagesTx(tx *database.Tx, caller User, sourceIDs []st
 		); err != nil {
 			return result, err
 		}
-		if err := chatCopyAttachmentsTx(tx, source.id, copyID, targetID, caller.ID, now); err != nil {
+		if err := chatCopyAttachmentsTx(tx, source.id, copyID, target, caller.ID, now); err != nil {
 			return result, err
+		}
+		if fetch, err := chatCopyLinkPreviewTx(tx, source.id, copyID, targetID, now); err != nil {
+			return result, err
+		} else if fetch {
+			result.LinkPreviews = append(result.LinkPreviews, chatLinkPreviewJob{caller.ID, targetID, copyID, linkpreview.FirstLink(body)})
 		}
 		result.Copied = append(result.Copied, copyID)
 	}
@@ -452,18 +461,41 @@ func (s *Server) chatCopyMessagesTx(tx *database.Tx, caller User, sourceIDs []st
 // chatCopyAttachmentsTx gives a copy its own attachment rows over the original's stored
 // objects. No bytes are copied; the purge worker keeps an object while any variant row
 // still names it.
-func chatCopyAttachmentsTx(tx *database.Tx, fromMessageID, toMessageID, conversationID, uploaderID, now string) error {
+//
+// A library GIF or sticker shares its asset the same way. It may go to Saved messages,
+// or anywhere the forwarder could send it themselves; a space's own stickers stay in
+// that space.
+func chatCopyAttachmentsTx(tx *database.Tx, fromMessageID, toMessageID string, target chatAccess, uploaderID, now string) error {
+	conversationID := target.ConversationID
 	ids, err := stringColumnTx(tx, `SELECT id FROM chat_attachments WHERE message_id = ? ORDER BY position, id`, fromMessageID)
 	if err != nil {
 		return err
 	}
 	for _, id := range ids {
+		var assetID sql.NullString
+		if err := tx.QueryRow(`SELECT asset_id FROM chat_attachments WHERE id = ?`, id).Scan(&assetID); err != nil {
+			return err
+		}
+		if assetID.Valid {
+			if err := libraryLockAsset(tx, assetID.String); err != nil {
+				return err
+			}
+			if target.Kind != chatKindSaved {
+				allowed, err := libraryForwardAllowed(tx, assetID.String, uploaderID, target.TreeID)
+				if err != nil {
+					return err
+				}
+				if !allowed {
+					return errLibraryNotUsable
+				}
+			}
+		}
 		copyID := auth.NewID()
 		if _, err := tx.Exec(
 			`INSERT INTO chat_attachments (id, conversation_id, message_id, uploader_id, client_upload_id, position, kind, source,
-			   content_type, size_bytes, name, width, height, duration_ms, placeholder, meta_json, created_at, attached_at)
+			   content_type, size_bytes, name, width, height, duration_ms, placeholder, meta_json, asset_id, created_at, attached_at)
 			 SELECT ?, ?, ?, ?, ?, position, kind, source, content_type, size_bytes, name, width, height, duration_ms,
-			   placeholder, meta_json, ?, ?
+			   placeholder, meta_json, asset_id, ?, ?
 			 FROM chat_attachments WHERE id = ?`,
 			copyID, conversationID, toMessageID, uploaderID, "copy-"+copyID, now, now, id,
 		); err != nil {
@@ -499,7 +531,10 @@ func (s *Server) chatEraseCopiesTx(tx *database.Tx, originID, actorID, now strin
 	if err != nil {
 		return nil, err
 	}
-	type found struct{ id, senderID string; access chatAccess }
+	type found struct {
+		id, senderID string
+		access       chatAccess
+	}
 	var copies []found
 	for rows.Next() {
 		var item found
@@ -643,6 +678,7 @@ func (s *Server) saveChatMessages(c *fiber.Ctx) error {
 		_ = tx.Rollback()
 	}
 	committedAt := time.Now()
+	s.queueChatLinkPreviews(result.LinkPreviews)
 
 	load := func(ids []string) ([]ChatMessage, error) {
 		messages := make([]ChatMessage, 0, len(ids))
@@ -818,6 +854,7 @@ func (s *Server) forwardChatMessages(c *fiber.Ctx) error {
 		return err
 	}
 	committedAt := time.Now()
+	s.queueChatLinkPreviews(result.LinkPreviews)
 
 	messages := make([]ChatMessage, 0, len(newIDs))
 	views := chatSourceViews{}

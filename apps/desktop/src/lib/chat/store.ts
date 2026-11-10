@@ -60,6 +60,7 @@ import type {
   ChatState,
   ChatUser,
   PendingAttachment,
+  PendingLibraryItem,
   PendingMessage,
   PreparedAttachment,
   Reduced,
@@ -544,6 +545,24 @@ export class ChatStore {
     return pending.clientMessageId;
   }
 
+  /** Sends a GIF or sticker from a library. It goes alone: no text, no other attachments. */
+  sendLibrary(conversationId: string, library: PendingLibraryItem, replyTo?: ChatReplyRef): string | null {
+    if (!this.state.conversations[conversationId]) return null;
+    const pending: PendingMessage = {
+      clientMessageId: newClientMessageId(),
+      conversationId,
+      body: "",
+      library,
+      replyTo,
+      createdAt: new Date(this.now()).toISOString(),
+      state: "queued",
+      attempts: 0,
+    };
+    this.set(addPending(this.state, pending));
+    this.pump(conversationId);
+    return pending.clientMessageId;
+  }
+
   /** Sends a failed message again. It keeps its id, so it cannot arrive twice. */
   retry(conversationId: string, clientMessageId: string) {
     this.firstAttemptAt.delete(clientMessageId);
@@ -639,7 +658,13 @@ export class ChatStore {
       attachmentIds.push(attachment.attachmentId!);
     }
     const { message } = await this.api
-      .send(conversationId, { clientMessageId, body: item.body, replyToMessageId: item.replyTo?.id, ...(attachmentIds.length ? { attachmentIds } : {}) })
+      .send(conversationId, {
+        clientMessageId,
+        body: item.body,
+        replyToMessageId: item.replyTo?.id,
+        ...(attachmentIds.length ? { attachmentIds } : {}),
+        ...(item.library ? { libraryItemId: item.library.itemId } : {}),
+      })
       .catch((error: unknown) => {
         throw new StepFailure("send", error);
       });
@@ -761,6 +786,11 @@ export class ChatStore {
 
   async edit(conversationId: string, messageId: string, body: string) {
     const { message } = await this.api.edit(conversationId, messageId, body.trim());
+    this.apply(applyOwnMessage(this.state, message, this.atBottom.get(conversationId) ?? true));
+  }
+
+  async removeLinkPreview(conversationId: string, messageId: string) {
+    const { message } = await this.api.removeLinkPreview(conversationId, messageId);
     this.apply(applyOwnMessage(this.state, message, this.atBottom.get(conversationId) ?? true));
   }
 

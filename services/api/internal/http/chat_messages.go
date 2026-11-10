@@ -9,6 +9,7 @@ import (
 
 	"raven/services/api/internal/auth"
 	"raven/services/api/internal/database"
+	"raven/services/api/internal/linkpreview"
 
 	"github.com/gofiber/fiber/v2"
 )
@@ -17,10 +18,10 @@ import (
 // that person, used to tell whether they removed, for themselves, the message a reply
 // points at.
 var chatMessageSelectSQL = `SELECT m.id, m.conversation_id, m.seq, m.changed_seq, m.sender_id,
-		`+spaceNameSQL("stm", "sp", "su")+`,
+		` + spaceNameSQL("stm", "sp", "su") + `,
 		m.client_message_id, m.kind, m.body, m.system_json, m.created_at, m.edited_at, m.deleted_at,
 		m.reply_to_message_id,
-		p.seq, p.sender_id, `+spaceNameSQL("ptm", "pp", "pu")+`, p.body, p.deleted_at,
+		p.seq, p.sender_id, ` + spaceNameSQL("ptm", "pp", "pu") + `, p.body, p.deleted_at,
 		CASE WHEN ph.user_id IS NULL THEN 0 ELSE 1 END,
 		m.origin_message_id, COALESCE(m.origin_conversation_id, ''), COALESCE(m.origin_sender_id, ''), m.origin_sender_name,
 		COALESCE(m.origin_created_at, ''), m.origin_hide_sender, m.origin_hide_source
@@ -110,6 +111,9 @@ func (s *Server) queryChatMessages(q chatQuerier, viewerID string, floor int64, 
 	if err := withChatReactions(q, messages); err != nil {
 		return nil, err
 	}
+	if err := withChatLinkPreviews(q, messages); err != nil {
+		return nil, err
+	}
 	if err := s.withChatOrigins(q, viewerID, messages); err != nil {
 		return nil, err
 	}
@@ -131,6 +135,9 @@ func (s *Server) loadChatMessage(q chatQuerier, conversationID, messageID, viewe
 		return ChatMessage{}, err
 	}
 	if err = withChatReactions(q, messages); err != nil {
+		return ChatMessage{}, err
+	}
+	if err = withChatLinkPreviews(q, messages); err != nil {
 		return ChatMessage{}, err
 	}
 	err = s.withChatOrigins(q, viewerID, messages)
@@ -233,6 +240,8 @@ const (
 	chatReadPublicSpace  = "public_space"
 	// chatReadSaved has no switch: nobody else is there to see it, so it is always off.
 	chatReadSaved = "saved"
+	// chatReadRaven has no switch either: there is nobody to show it to.
+	chatReadRaven = "raven"
 )
 
 // chatReadColumns maps a category to its switch's column and its default for people who
@@ -256,6 +265,8 @@ func chatReadCategory(q chatQuerier, access chatAccess) (string, error) {
 		return chatReadGroup, nil
 	case chatKindSaved:
 		return chatReadSaved, nil
+	case chatKindRaven:
+		return chatReadRaven, nil
 	}
 	var visibility string
 	if err := q.QueryRow(`SELECT visibility FROM trees WHERE id = ?`, access.TreeID).Scan(&visibility); err != nil {
@@ -313,6 +324,8 @@ func (s *Server) sendChatMessage(c *fiber.Ctx) error {
 		Body             string   `json:"body"`
 		ReplyToMessageID string   `json:"replyToMessageId"`
 		AttachmentIDs    []string `json:"attachmentIds"`
+		// LibraryItemID sends a GIF or sticker from a library. It goes on its own.
+		LibraryItemID string `json:"libraryItemId"`
 	}
 	if err := c.BodyParser(&input); err != nil {
 		s.metrics.chatSends.inc("invalid")
@@ -332,7 +345,11 @@ func (s *Server) sendChatMessage(c *fiber.Ctx) error {
 		s.metrics.chatSends.inc("invalid")
 		return errChatAttachmentNotReady
 	}
-	if body == "" && len(input.AttachmentIDs) == 0 {
+	if input.LibraryItemID != "" && (body != "" || len(input.AttachmentIDs) > 0) {
+		s.metrics.chatSends.inc("invalid")
+		return fiber.NewError(400, "A GIF or sticker is sent on its own.")
+	}
+	if body == "" && len(input.AttachmentIDs) == 0 && input.LibraryItemID == "" {
 		s.metrics.chatSends.inc("invalid")
 		return fiber.NewError(400, "Write a message first.")
 	}
@@ -342,7 +359,7 @@ func (s *Server) sendChatMessage(c *fiber.Ctx) error {
 	unlock := s.chatLocks.lock(conversationID)
 	defer unlock()
 
-	sent, err := s.storeChatMessage(user, conversationID, input.ClientMessageID, body, input.ReplyToMessageID, input.AttachmentIDs...)
+	sent, err := s.storeChatMessage(user, conversationID, input.ClientMessageID, body, input.ReplyToMessageID, input.LibraryItemID, input.AttachmentIDs...)
 	if err != nil {
 		s.metrics.chatSends.inc(chatSendOutcome(err))
 		return err
@@ -355,6 +372,7 @@ func (s *Server) sendChatMessage(c *fiber.Ctx) error {
 	event := sent.message
 	event.ReplyTo = nil
 	s.publishChatMessage("message.created", event, sent.message.Seq, sent.reply, sent.recipients, sent.committedAt)
+	s.queueChatLinkPreview(user.ID, conversationID, sent.message.ID, linkpreview.FirstLink(sent.message.Body))
 	s.metrics.chatSends.inc("ok")
 	s.metrics.sendDuration.observeSince(started)
 	return c.Status(fiber.StatusCreated).JSON(fiber.Map{"message": sent.message})
@@ -384,7 +402,7 @@ type chatStored struct {
 }
 
 // storeChatMessage commits one message, or finds the one an earlier attempt committed.
-func (s *Server) storeChatMessage(sender User, conversationID, clientMessageID, body, replyToID string, attachmentIDs ...string) (chatStored, error) {
+func (s *Server) storeChatMessage(sender User, conversationID, clientMessageID, body, replyToID, libraryItemID string, attachmentIDs ...string) (chatStored, error) {
 	tx, err := s.db.Begin()
 	if err != nil {
 		return chatStored{}, err
@@ -461,6 +479,11 @@ func (s *Server) storeChatMessage(sender User, conversationID, clientMessageID, 
 
 	if err := claimChatAttachments(tx, conversationID, sender.ID, messageID, now, attachmentIDs); err != nil {
 		return chatStored{}, err
+	}
+	if libraryItemID != "" {
+		if err := s.libraryAttachTx(tx, access, sender.ID, messageID, libraryItemID, now); err != nil {
+			return chatStored{}, err
+		}
 	}
 	attachments := []ChatMessage{{ID: messageID}}
 	if err := withChatAttachments(tx, attachments); err != nil {
@@ -610,6 +633,14 @@ func (s *Server) editChatMessage(c *fiber.Ctx) error {
 			return errChatEditTooLate
 		}
 	}
+	// A GIF or sticker goes on its own, so it can't gain a caption later.
+	var fromLibrary int
+	if err := tx.QueryRow(`SELECT COUNT(*) FROM chat_attachments WHERE message_id = ? AND asset_id IS NOT NULL`, messageID).Scan(&fromLibrary); err != nil {
+		return err
+	}
+	if fromLibrary > 0 {
+		return errChatCannotEdit
+	}
 	if body == "" {
 		var count int
 		if err := tx.QueryRow(`SELECT COUNT(*) FROM chat_attachments WHERE message_id = ?`, messageID).Scan(&count); err != nil {
@@ -635,6 +666,10 @@ func (s *Server) editChatMessage(c *fiber.Ctx) error {
 	); err != nil {
 		return err
 	}
+	fetchLink, err := chatLinkPreviewAfterEditTx(tx, messageID, body)
+	if err != nil {
+		return err
+	}
 	reply, err := chatReplyTargetFor(tx, conversationID, replyToID.String)
 	if err != nil {
 		return err
@@ -655,6 +690,7 @@ func (s *Server) editChatMessage(c *fiber.Ctx) error {
 	event := message
 	event.ReplyTo = nil
 	s.publishChatMessage("message.updated", event, seq, reply, recipients, committedAt)
+	s.queueChatLinkPreview(user.ID, conversationID, messageID, fetchLink)
 	return c.JSON(fiber.Map{"message": message})
 }
 
@@ -774,6 +810,9 @@ func (s *Server) chatEraseMessageTx(tx *database.Tx, access chatAccess, messageI
 		return nil, err
 	}
 	if err := chatQueuePurgesTx(tx, `message_id = ?`, messageID); err != nil {
+		return nil, err
+	}
+	if err := chatQueueLinkPreviewPurgesTx(tx, `message_id = ?`, messageID); err != nil {
 		return nil, err
 	}
 	if _, err := tx.Exec(
@@ -997,8 +1036,10 @@ func chatUnreadCount(q chatQuerier, conversationID, userID string, readSeq, floo
 	err := q.QueryRow(
 		`SELECT COUNT(*) FROM (
 			SELECT 1 FROM chat_messages m
-			WHERE m.conversation_id = ? AND m.seq > ? AND m.seq >= ? AND m.sender_id <> ?
-			  AND m.kind = 'text' AND m.deleted_at IS NULL
+			WHERE m.conversation_id = ? AND m.seq > ? AND m.seq >= ?
+			  AND ((m.sender_id <> ? AND m.kind = 'text')
+			       OR (m.kind = 'system' AND EXISTS (SELECT 1 FROM chat_conversations c WHERE c.id = m.conversation_id AND c.kind = 'raven')))
+			  AND m.deleted_at IS NULL
 			  AND NOT EXISTS (SELECT 1 FROM chat_message_hides h WHERE h.user_id = ? AND h.message_id = m.id)
 			LIMIT ?
 		 ) capped`,

@@ -32,9 +32,11 @@ export interface TraySnapshot extends ThumbnailToolbarSnapshot {
 export interface TraySettings {
   supported: boolean;
   closeToTray: boolean;
+  /** Raven starts in the tray when the user signs in to the computer. Off by default. */
+  launchAtStartup: boolean;
 }
 
-export type TraySettingsPatch = Pick<TraySettings, "closeToTray">;
+export type TraySettingsPatch = Partial<Pick<TraySettings, "closeToTray" | "launchAtStartup">>;
 
 /** How the tray words the connection: only "connected" is a settled call. */
 export function trayCallStatus(phase: string, reconnecting: boolean): TrayCallStatus {

@@ -438,7 +438,7 @@ func (s *Server) adminCreateRoom(c *fiber.Ctx) error {
 		if err != nil {
 			return err
 		}
-		nest, err := s.createNestForUser(creator, body.Name, "persistent", &space.ID)
+		nest, err := s.createNestForUser(creator, body.Name, "persistent", doorOpen, &space.ID)
 		if err != nil {
 			return fiber.NewError(fiber.StatusBadRequest, adminWording(err.Error())+".")
 		}

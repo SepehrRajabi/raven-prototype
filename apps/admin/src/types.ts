@@ -155,3 +155,18 @@ export interface AuditEvent {
   detail?: Record<string, unknown>;
   createdAt: string;
 }
+
+export interface AdminLibraryItem {
+  id: string;
+  assetId: string;
+  kind: "gif" | "sticker";
+  format: "webm" | "webp" | "tgs";
+  title: string;
+  keywords: string[];
+  width: number;
+  height: number;
+  durationMs: number;
+  ownerId: string;
+  ownerUsername: string;
+  publishedAt: string;
+}

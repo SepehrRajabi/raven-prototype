@@ -1,5 +1,6 @@
-import { useEffect, useState } from "react";
-import { Info, MoreHorizontal, Shield, Trash2, Users } from "lucide-react";
+import type { ChatStore } from "@/lib/chat/store";
+import { useEffect, useMemo, useState } from "react";
+import { ClipboardList, Info, MoreHorizontal, Shield, Sticker, Trash2, Users } from "lucide-react";
 import { Avatar } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
 import { ConfirmDialog, Dialog } from "@/components/ui/dialog";
@@ -18,21 +19,35 @@ import {
   SettingsPage,
   SettingsRows,
   SettingsSection,
+  SettingsToggleRow,
   type SettingsCategoryGroup,
 } from "../SettingsScaffold";
 import { displayNameFor, type RavenShellData, type RavenView } from "../state";
-import { TREE_ROLE_LABEL } from "./dialogs";
+import { BoardSettings } from "./BoardSettings";
+import { LibraryManager } from "@/components/library/LibraryManager";
+import { libraryCapabilities } from "@/lib/library/types";
+import { failureText } from "@/lib/chat/errors";
+import { toast } from "@/components/ui/toast";
+import { SpaceNameDialog, TREE_ROLE_LABEL } from "./dialogs";
 
-export type TreeSettingsSection = "general" | "access" | "members" | "delete";
+export type TreeSettingsSection = "general" | "access" | "members" | "board" | "library" | "delete";
 
 // Everyone in a tree can open its settings to see who is in it and to leave. What else
 // they find there is what their role allows.
 export function resolveTreeSettingsSection(section: string | undefined, details: TreeDetails, _data: RavenShellData): TreeSettingsSection {
   const canEdit = treeCan(details, "settings.edit");
   if (section === "members") return section;
+  if (section === "board" && treeCan(details, "board.manage")) return section;
+  if (section === "library" && showsLibrary(details, _data)) return section;
   if ((section === "access" || section === "general") && canEdit) return section;
   if (section === "delete" && treeCan(details, "space.delete")) return section;
   return canEdit ? "general" : "members";
+}
+
+/** GIFs and stickers: for whoever manages the set or the space's settings, on a server that has them. */
+function showsLibrary(details: TreeDetails, data: RavenShellData): boolean {
+  if (!libraryCapabilities(data.serverProperties.properties)) return false;
+  return treeCan(details, "stickers.manage") || (treeCan(details, "settings.edit") && Boolean(details.library));
 }
 
 export function TreeSettingsNav({
@@ -59,6 +74,8 @@ export function TreeSettingsNav({
             ]
           : []),
         { id: "members", label: "Members", icon: <Users /> },
+        ...(treeCan(details, "board.manage") ? [{ id: "board", label: "Board", icon: <ClipboardList /> }] : []),
+        ...(showsLibrary(details, data) ? [{ id: "library", label: "GIFs and stickers", icon: <Sticker /> }] : []),
       ],
     },
     ...(treeCan(details, "space.delete")
@@ -81,14 +98,18 @@ export function TreeSettingsView({
   details,
   section,
   data,
+  chat,
   onNavigate,
 }: {
   details: TreeDetails;
   section: TreeSettingsSection;
   data: RavenShellData;
+  chat?: ChatStore | null;
   onNavigate: (view: RavenView) => void;
 }) {
   if (section === "access") return <AccessSettings details={details} data={data} />;
+  if (section === "board") return <BoardSettings details={details} data={data} chat={chat} />;
+  if (section === "library") return <SpaceLibrarySettings details={details} data={data} />;
   if (section === "members") return <MemberSettings details={details} data={data} onNavigate={onNavigate} />;
   if (section === "delete") return <DeleteSettings details={details} data={data} onNavigate={onNavigate} />;
   return <GeneralSettings details={details} data={data} />;
@@ -223,64 +244,6 @@ function AccessSettings({ details, data }: { details: TreeDetails; data: RavenSh
         {error ? <p role="alert" className="text-small text-destructive">{error}</p> : null}
       </SettingsSection>
     </SettingsPage>
-  );
-}
-
-/** A name that applies inside one space only. Blank goes back to the usual name. */
-function SpaceNameDialog({
-  member,
-  isSelf,
-  treeName,
-  onClose,
-  onSave,
-}: {
-  member: TreeMember | null;
-  isSelf: boolean;
-  treeName: string;
-  onClose: () => void;
-  onSave: (name: string) => Promise<void>;
-}) {
-  const [name, setName] = useState("");
-  const [working, setWorking] = useState(false);
-  useEffect(() => {
-    if (member) setName(member.nickname ?? "");
-  }, [member]);
-  const save = (next: string) => {
-    if (working) return;
-    setWorking(true);
-    void onSave(next)
-      .catch(() => undefined)
-      .finally(() => setWorking(false));
-  };
-  const who = member ? (isSelf ? "your" : `${member.username}’s`) : "";
-  return (
-    <Dialog
-      open={member != null}
-      onOpenChange={(open) => { if (!open) onClose(); }}
-      title={isSelf ? `Your name in ${treeName}` : `${member ? displayNameFor(member) : ""}’s name in ${treeName}`}
-      description={`Everyone in ${treeName} sees this instead of ${who} usual name. Nowhere else changes.`}
-      widthClassName="max-w-sm"
-    >
-      <form
-        className="space-y-4"
-        onSubmit={(event) => {
-          event.preventDefault();
-          save(name.trim());
-        }}
-      >
-        <label className="block space-y-1.5 text-small text-muted-foreground">
-          Name
-          <Input value={name} onChange={(event) => setName(event.currentTarget.value)} placeholder={member?.nickname ? member.username : member ? displayNameFor(member) : ""} maxLength={80} autoFocus />
-        </label>
-        <div className="flex justify-between gap-2">
-          <Button variant="ghost" disabled={working || !member?.nickname} onClick={() => save("")}>Use usual name</Button>
-          <div className="flex gap-2">
-            <Button variant="ghost" onClick={onClose}>Cancel</Button>
-            <Button type="submit" disabled={working}>{working ? "Saving…" : "Save"}</Button>
-          </div>
-        </div>
-      </form>
-    </Dialog>
   );
 }
 
@@ -464,6 +427,43 @@ function DeleteSettings({ details, data, onNavigate }: { details: TreeDetails; d
           {deleting ? "Deleting…" : `Delete ${treeLabel}`}
         </Button>
       </SettingsSection>
+    </SettingsPage>
+  );
+}
+
+function SpaceLibrarySettings({ details, data }: { details: TreeDetails; data: RavenShellData }) {
+  const tree = details.tree;
+  const capabilities = useMemo(() => libraryCapabilities(data.serverProperties.properties), [data.serverProperties.properties]);
+  const owner = useMemo(() => ({ scope: "tree" as const, treeId: tree.id }), [tree.id]);
+  const stored = details.library?.savedStickersPublishable ?? false;
+  const [publishable, setPublishable] = useState(stored);
+  const [saving, setSaving] = useState(false);
+  useEffect(() => setPublishable(stored), [stored]);
+
+  const change = (next: boolean) => {
+    setPublishable(next);
+    setSaving(true);
+    data
+      .updateTreeSettings(tree.id, { name: tree.name, description: tree.description, joinPolicy: tree.joinPolicy, visibility: tree.visibility, savedStickersPublishable: next })
+      .catch((failure: unknown) => {
+        setPublishable(stored);
+        toast({ title: failureText(failure, "Couldn’t save that setting."), tone: "error" });
+      })
+      .finally(() => setSaving(false));
+  };
+
+  return (
+    <SettingsPage title="GIFs and stickers" description={`This ${data.labels.treeSingular.toLowerCase()}’s own set, which everyone in it can send.`}>
+      {treeCan(details, "settings.edit") && details.library ? (
+        <SettingsToggleRow
+          label="Saved copies can be made public"
+          description="When on, someone who saves one of these to their library may share it with the whole server."
+          checked={publishable}
+          disabled={saving}
+          onChange={change}
+        />
+      ) : null}
+      {treeCan(details, "stickers.manage") && capabilities ? <LibraryManager owner={owner} capabilities={capabilities} /> : null}
     </SettingsPage>
   );
 }

@@ -75,6 +75,12 @@ describe("nest event subscriptions", () => {
     expect(parseNestLiveUpdateEvent('event: nest-update\ndata: {"type":"nest.changed","nestId":"nest-1"}')?.treeId).toBeUndefined();
   });
 
+  test("keeps the event an invitation or reminder is about, which its notification needs", () => {
+    const event = { id: "e1", treeId: "t1", title: "Jam", space: "Night Shift", room: "Standup", host: "Ava", startsAt: "2026-11-10T01:23:00Z" };
+    expect(parseNestLiveUpdateEvent(`event: nest-update\ndata: ${JSON.stringify({ type: "event.reminder", event })}`)?.event).toEqual(event);
+    expect(parseNestLiveUpdateEvent('event: nest-update\ndata: {"type":"event.reminder","event":{"title":"No id"}}')?.event).toBeUndefined();
+  });
+
   test("carries who an entry notice is about and treats it as a moment, not a state change", () => {
     const update = parseNestLiveUpdateEvent(
       'event: nest-update\ndata: {"type":"nest.entering","nestId":"nest-1","actorId":"user-2","actorName":"Bob"}',

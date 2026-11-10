@@ -254,11 +254,14 @@ export function TreeTextNests({
   chat,
   treeId,
   view,
+  captions,
   onNavigate,
 }: {
   chat: ChatStore;
   treeId: string;
   view: RavenView;
+  /** What is on in each room now, by room id. */
+  captions?: ReadonlyMap<string, string>;
   onNavigate: (view: RavenView) => void;
 }) {
   const state = useChatState(chat);
@@ -283,6 +286,7 @@ export function TreeTextNests({
           conversation={conversation.summary}
           active={conversation.summary.id === activeId}
           nested
+          caption={captions?.get(conversation.summary.id)}
           onOpen={(id) => onNavigate({ kind: "chat", id })}
         />
       ))}

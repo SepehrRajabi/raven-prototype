@@ -7,6 +7,7 @@ use tauri::{Manager, RunEvent, WindowEvent};
 
 mod account_export;
 pub mod attachments;
+pub mod library;
 pub mod audio;
 mod diagnostics;
 pub mod media_hotkeys;
@@ -92,6 +93,11 @@ pub fn run() {
             attachments::attachment_discard,
             attachments::attachment_sweep,
             attachments::attachment_save,
+            library::library_stage,
+            library::library_read,
+            library::library_discard,
+            library::library_pick_pack,
+            library::read_ravenpack,
             account_export::save_export_file,
             audio_get_state,
             audio_get_capabilities,
@@ -220,6 +226,7 @@ pub fn run() {
         ])
         .setup(|app| {
             attachments::initialize(app.handle());
+            library::initialize(app.handle());
             if should_start_api_sidecar() {
                 start_api_sidecar(app.handle())?;
             }
@@ -241,9 +248,11 @@ pub fn run() {
             push_to_talk::initialize(app.handle());
             audio::devices::spawn_device_watcher(app.handle().clone());
             updater::initialize(app.handle());
-            if let Err(err) = tray::initialize(app.handle()) {
+            let tray_ready = tray::initialize(app.handle()).unwrap_or_else(|err| {
                 eprintln!("[raven] tray initialization failed: {err}");
-            }
+                false
+            });
+            tray::show_main_at_launch(app.handle(), tray_ready);
             diagnostics::watch_webview_processes(app.handle());
             Ok(())
         })
@@ -267,6 +276,13 @@ pub fn run() {
 
     #[cfg(windows)]
     let builder = builder.plugin(tauri_plugin_notification::init());
+
+    // "Launch at Startup" (off by default) starts it in the tray.
+    #[cfg(any(windows, target_os = "macos"))]
+    let builder = builder.plugin(tauri_plugin_autostart::init(
+        tauri_plugin_autostart::MacosLauncher::LaunchAgent,
+        Some(vec![tray::AUTOSTART_FLAG]),
+    ));
 
     // Raven stays in the tray after its window is closed, so starting it again should
     // bring that window back. Development builds are left alone: they share the installed

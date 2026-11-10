@@ -1,6 +1,6 @@
 import { describe, expect, it } from "bun:test";
 import type { Knock } from "./api";
-import { isProfileKnockFor, knockAge, loadNotificationSettings, newProfileKnocks, saveNotificationSettings } from "./notifications";
+import { eventNotificationText, isProfileKnockFor, knockAge, loadNotificationSettings, newProfileKnocks, saveNotificationSettings } from "./notifications";
 
 const ME = "me";
 
@@ -76,23 +76,33 @@ describe("notification settings", () => {
 
   it("are off by default and survive a save", () => {
     const storage = memory();
-    expect(loadNotificationSettings(storage)).toEqual({ knocks: false, messages: false, messageText: true });
-    saveNotificationSettings({ knocks: true, messages: true, messageText: false }, storage);
-    expect(loadNotificationSettings(storage)).toEqual({ knocks: true, messages: true, messageText: false });
+    expect(loadNotificationSettings(storage)).toEqual({ knocks: false, messages: false, messageText: true, events: true });
+    saveNotificationSettings({ knocks: true, messages: true, messageText: false, events: false }, storage);
+    expect(loadNotificationSettings(storage)).toEqual({ knocks: true, messages: true, messageText: false, events: false });
   });
 
   it("loads older settings and repairs each malformed flag independently", () => {
     const storage = memory();
     for (const value of [{ knocks: true }, { knocks: true, messages: "yes", messageText: null }]) {
       storage.setItem("raven.notificationSettings", JSON.stringify(value));
-      expect(loadNotificationSettings(storage)).toEqual({ knocks: true, messages: false, messageText: true });
+      expect(loadNotificationSettings(storage)).toEqual({ knocks: true, messages: false, messageText: true, events: true });
     }
   });
 
   it("fall back to off when the stored value is broken", () => {
     const storage = memory();
     storage.setItem("raven.notificationSettings", "{not json");
-    expect(loadNotificationSettings(storage)).toEqual({ knocks: false, messages: false, messageText: true });
+    expect(loadNotificationSettings(storage)).toEqual({ knocks: false, messages: false, messageText: true, events: true });
+  });
+});
+
+describe("eventNotificationText", () => {
+  const notice = { id: "e", treeId: "t", title: "Jam", space: "Core", room: "Standup", host: "Ava", startsAt: "" };
+  it("words invitations and reminders and ignores anything else", () => {
+    expect(eventNotificationText("event.invited", notice)).toEqual({ title: "Jam", body: "Ava invited you · Standup" });
+    expect(eventNotificationText("event.reminder", notice)).toEqual({ title: "Jam", body: "Starts in 10 minutes · Standup" });
+    expect(eventNotificationText("event.starting", notice)).toBeNull();
+    expect(eventNotificationText("event.invited", undefined)).toBeNull();
   });
 });
 

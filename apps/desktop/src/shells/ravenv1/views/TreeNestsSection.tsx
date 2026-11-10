@@ -1,8 +1,10 @@
 import { useEffect, useMemo, useState, type ReactNode } from "react";
+import { roomEventCaptions } from "@/lib/events";
+import { useNow } from "../useNow";
 import { closestCenter, DndContext, KeyboardSensor, PointerSensor, useSensor, useSensors, type DragEndEvent } from "@dnd-kit/core";
 import { SortableContext, sortableKeyboardCoordinates, useSortable, verticalListSortingStrategy } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
-import { ArrowDown, ArrowUp, GripVertical, MoreHorizontal, Pencil, Trash2 } from "lucide-react";
+import { ArrowDown, ArrowUp, GripVertical, MoreHorizontal, Pencil, Settings, Trash2 } from "lucide-react";
 import { RenameDialog } from "@/components/chat/ChatDialogs";
 import { MentionDot, UnreadCount } from "@/components/chat/ConversationRow";
 import { Button } from "@/components/ui/button";
@@ -20,6 +22,8 @@ import { AvatarStack, GroupedList, NestGlyph, SectionLabel } from "../atoms";
 import { lifecycleLabel, type RavenShellData, type RavenView } from "../state";
 import type { RavenMediaAdapterState } from "../useRavenMediaAdapter";
 import { useChatState } from "../useChat";
+import { liveTreeNests } from "../treeLobby";
+import { DoorMark, RoomDialog } from "./RoomDoor";
 import { namesSentence, nestPeople, nestView } from "./shared";
 
 /**
@@ -60,12 +64,13 @@ export function TreeNestsSection({
   const [renamingNest, setRenamingNest] = useState<NestRef | null>(null);
   const [deletingNest, setDeletingNest] = useState<NestRef | null>(null);
   const nestSingular = data.labels.nestSingular.toLowerCase();
+  const captions = roomEventCaptions(details.events, useNow());
 
   useEffect(() => {
     void chat.loadLayout(treeId).catch(() => undefined);
   }, [chat, treeId]);
 
-  const voiceNests = useMemo(() => [...details.activeNests, ...details.inactiveNests], [details.activeNests, details.inactiveNests]);
+  const voiceNests = useMemo(() => [...liveTreeNests(details, data.activeNests), ...details.inactiveNests], [details, data.activeNests]);
   const voiceById = useMemo(() => new Map(voiceNests.map((nest) => [nest.id, nest])), [voiceNests]);
   const textNests = useMemo(() => (state ? textNestsOfTree(state, treeId) : []), [state, treeId]);
   const textById = useMemo(() => new Map(textNests.map((nest) => [nest.summary.id, nest.summary])), [textNests]);
@@ -96,8 +101,6 @@ export function TreeNestsSection({
   }
 
   const hasCategories = sections.length > 1;
-  // The launcher list knows who is inside a live nest; the tree's own list is the fallback.
-  const withPeople = (nest: Nest): Nest | LauncherNest => data.activeNests.find((candidate) => candidate.id === nest.id) ?? nest;
   return (
     <>
       {sections.map((section) => {
@@ -140,18 +143,20 @@ export function TreeNestsSection({
                       name={nameOf(ref)}
                       unread={textById.get(ref.id)?.unreadCount ?? 0}
                       mentions={textById.get(ref.id)?.mentionCount ?? 0}
+                      caption={captions.get(ref.id)}
                       onOpen={() => onNavigate({ kind: "chat", id: ref.id })}
                       menu={canManage ? <NestRowMenu name={nameOf(ref)} onRename={() => setRenamingNest(ref)} onDelete={() => setDeletingNest(ref)} /> : undefined}
                     />
                   ) : (
                     <VoiceNestRow
                       key={`voice:${ref.id}`}
-                      nest={withPeople(voiceById.get(ref.id)!)}
+                      nest={voiceById.get(ref.id)!}
                       data={data}
                       here={media.activeNestId === ref.id}
+                      caption={captions.get(ref.id)}
                       canJoin={canJoin}
                       onOpen={(nest) => onNavigate(nestView(nest))}
-                      menu={canManage ? <NestRowMenu name={nameOf(ref)} onRename={() => setRenamingNest(ref)} onDelete={() => setDeletingNest(ref)} /> : undefined}
+                      menu={canManage ? <NestRowMenu name={nameOf(ref)} renameLabel="Settings" onRename={() => setRenamingNest(ref)} onDelete={() => setDeletingNest(ref)} /> : undefined}
                     />
                   ),
                 )}
@@ -198,17 +203,28 @@ export function TreeNestsSection({
         }}
       />
 
+      <RoomDialog
+        open={renamingNest?.kind === "voice"}
+        onOpenChange={(open) => {
+          if (!open) setRenamingNest(null);
+        }}
+        title={`${nestSingular} settings`}
+        initialName={renamingNest ? nameOf(renamingNest) : ""}
+        initialDoor={(renamingNest?.kind === "voice" ? voiceById.get(renamingNest.id)?.door : undefined) ?? "open"}
+        submitLabel="Save"
+        onSubmit={async (name, door) => {
+          if (renamingNest) await data.updateNestSettings(renamingNest.id, { name, door });
+        }}
+      />
       <RenameDialog
-        open={renamingNest !== null}
+        open={renamingNest?.kind === "text"}
         onOpenChange={(open) => {
           if (!open) setRenamingNest(null);
         }}
         title={`Rename ${nestSingular}`}
         current={renamingNest ? nameOf(renamingNest) : ""}
         onRename={async (name) => {
-          if (!renamingNest) return;
-          if (renamingNest.kind === "text") await chat.rename(renamingNest.id, { name });
-          else await data.renameNest(renamingNest.id, name);
+          if (renamingNest) await chat.rename(renamingNest.id, { name });
         }}
       />
       <ConfirmDialog
@@ -251,7 +267,7 @@ export function TreeNestsSection({
 }
 
 /** The "…" at the end of a nest's row, for people who run the tree. */
-function NestRowMenu({ name, onRename, onDelete }: { name: string; onRename: () => void; onDelete: () => void }) {
+function NestRowMenu({ name, renameLabel = "Rename", onRename, onDelete }: { name: string; renameLabel?: string; onRename: () => void; onDelete: () => void }) {
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
@@ -261,8 +277,8 @@ function NestRowMenu({ name, onRename, onDelete }: { name: string; onRename: () 
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end">
         <DropdownMenuItem onSelect={onRename}>
-          <Pencil className="text-muted-foreground" />
-          Rename
+          {renameLabel === "Rename" ? <Pencil className="text-muted-foreground" /> : <Settings className="text-muted-foreground" />}
+          {renameLabel}
         </DropdownMenuItem>
         <DropdownMenuItem destructive onSelect={onDelete}>
           <Trash2 />
@@ -276,12 +292,23 @@ function NestRowMenu({ name, onRename, onDelete }: { name: string; onRename: () 
 const rowClassName = "group flex h-11 w-full items-center transition-colors hover:bg-secondary";
 const rowButtonClassName = "flex h-11 min-w-0 flex-1 items-center gap-3 px-3.5 text-left";
 
-function TextNestRow({ name, unread, mentions, onOpen, menu }: { name: string; unread: number; mentions: number; onOpen: () => void; menu?: ReactNode }) {
+/** A room's name, with what is on in it now underneath when an event is. */
+function RowName({ name, caption, strong }: { name: string; caption?: string; strong?: boolean }) {
+  if (!caption) return <span className={cn("min-w-0 flex-1 truncate text-body", strong && "font-medium")}><bdi>{name}</bdi></span>;
   return (
-    <div className={rowClassName}>
-      <button type="button" onClick={onOpen} className={rowButtonClassName}>
+    <span className="min-w-0 flex-1">
+      <span className={cn("block truncate text-body", strong && "font-medium")}><bdi>{name}</bdi></span>
+      <span className="block truncate text-caption text-muted-foreground"><bdi>{caption}</bdi></span>
+    </span>
+  );
+}
+
+function TextNestRow({ name, unread, mentions, caption, onOpen, menu }: { name: string; unread: number; mentions: number; caption?: string; onOpen: () => void; menu?: ReactNode }) {
+  return (
+    <div className={cn(rowClassName, caption && "h-14")}>
+      <button type="button" onClick={onOpen} className={cn(rowButtonClassName, caption && "h-14")}>
         <NestGlyph kind="text" className="text-subtle" />
-        <span className={cn("min-w-0 flex-1 truncate text-body", unread > 0 && "font-medium")}><bdi>{name}</bdi></span>
+        <RowName name={name} caption={caption} strong={unread > 0} />
         <MentionDot count={mentions} />
         <UnreadCount count={unread} />
       </button>
@@ -296,6 +323,7 @@ function VoiceNestRow({
   data,
   here,
   canJoin,
+  caption,
   onOpen,
   menu,
 }: {
@@ -303,6 +331,7 @@ function VoiceNestRow({
   data: RavenShellData;
   here: boolean;
   canJoin: boolean;
+  caption?: string;
   onOpen: (nest: Nest | LauncherNest) => void;
   menu?: ReactNode;
 }) {
@@ -310,12 +339,13 @@ function VoiceNestRow({
   const state = lifecycleLabel(nest);
   if (!live) {
     return (
-      <div className={rowClassName}>
-        <button type="button" onClick={() => onOpen(nest)} className={rowButtonClassName}>
+      <div className={cn(rowClassName, caption && "h-14")}>
+        <button type="button" onClick={() => onOpen(nest)} className={cn(rowButtonClassName, caption && "h-14")}>
           <NestGlyph kind="voice" className="text-subtle" />
-          <span className="min-w-0 flex-1 truncate text-body"><bdi>{nest.name}</bdi></span>
+          <RowName name={nest.name} caption={caption} />
           {state !== "Empty" && state !== "Created" ? <span className="shrink-0 text-caption text-muted-foreground">{state}</span> : null}
         </button>
+        <DoorMark door={nest.door} />
         {menu}
       </div>
     );
@@ -331,13 +361,15 @@ function VoiceNestRow({
         <NestGlyph kind="voice" live className="text-live" />
         <span className="min-w-0 flex-1">
           <span className="block truncate text-body"><bdi>{nest.name}</bdi></span>
+          {caption ? <span className="block truncate text-caption text-muted-foreground"><bdi>{caption}</bdi></span> : null}
           <span className="mt-0.5 flex min-w-0 items-center gap-2">
             <AvatarStack people={people} max={4} size="sm" surface="card" />
             <span className="min-w-0 truncate text-caption text-muted-foreground">{sentence}</span>
           </span>
         </span>
       </button>
-      <Button size="xs" variant={here ? "secondary" : "default"} className="mr-2 shrink-0" disabled={!here && !canJoin} onClick={() => onOpen(nest)}>
+      <DoorMark door={nest.door} />
+      <Button size="xs" variant="secondary" className="mr-2 shrink-0" disabled={!here && !canJoin} onClick={() => onOpen(nest)}>
         {here ? "Return" : "Join…"}
       </Button>
       {menu}

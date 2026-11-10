@@ -131,6 +131,12 @@ type TreeDetails struct {
 	ActiveNests   []Nest            `json:"activeNests"`
 	InactiveNests []Nest            `json:"inactiveNests"`
 	JoinRequests  []TreeJoinRequest `json:"joinRequests"`
+	Rules         []TreeRule        `json:"rules"`
+	Notes         []TreeNote        `json:"notes"`
+	// Events are the space's scheduled events that are not over, pinned first.
+	Events []TreeEvent `json:"events"`
+	// Library is the space's GIF and sticker settings.
+	Library TreeLibrarySettings `json:"library"`
 	// Viewer is the role of whoever asked and what it lets them do here.
 	Viewer TreeViewer `json:"viewer"`
 }
@@ -267,6 +273,9 @@ func (s *Server) updateTreeSettings(c *fiber.Ctx) error {
 		Description string `json:"description"`
 		JoinPolicy  string `json:"joinPolicy"`
 		Visibility  string `json:"visibility"`
+		// SavedStickersPublishable is left as it is when absent, so older clients that
+		// send only the fields above never change it.
+		SavedStickersPublishable *bool `json:"savedStickersPublishable"`
 	}
 	if err := c.BodyParser(&body); err != nil {
 		return fiber.NewError(fiber.StatusBadRequest, "invalid Tree settings payload")
@@ -275,11 +284,20 @@ func (s *Server) updateTreeSettings(c *fiber.Ctx) error {
 	if err != nil {
 		return fiber.NewError(fiber.StatusBadRequest, err.Error())
 	}
+	if body.SavedStickersPublishable != nil {
+		if _, err := s.db.Exec(`UPDATE trees SET saved_stickers_publishable = ? WHERE id = ? AND status = 'active'`, *body.SavedStickersPublishable, treeID); err != nil {
+			return err
+		}
+	}
 	tree, err := s.updateTreeSettingsCore(treeID, settings)
 	if err != nil {
 		return err
 	}
-	return c.JSON(fiber.Map{"tree": tree})
+	library, err := treeLibrarySettings(s.db, treeID)
+	if err != nil {
+		return err
+	}
+	return c.JSON(fiber.Map{"tree": tree, "library": library})
 }
 
 func (s *Server) deleteTree(c *fiber.Ctx) error {
@@ -341,7 +359,23 @@ func (s *Server) getTree(c *fiber.Ctx) error {
 			return err
 		}
 	}
-	return c.JSON(TreeDetails{Tree: tree, Members: members, ActiveNests: active, InactiveNests: inactive, JoinRequests: requests, Viewer: treeViewerFor(role)})
+	rules, err := s.treeRules(s.db, treeID)
+	if err != nil {
+		return err
+	}
+	notes, err := s.treeNotes(s.db, treeID, time.Now().UTC())
+	if err != nil {
+		return err
+	}
+	events, err := s.treeEvents(s.db, treeID, time.Now().UTC(), treeRoleAllows(role, treeActionManageBoard))
+	if err != nil {
+		return err
+	}
+	library, err := treeLibrarySettings(s.db, treeID)
+	if err != nil {
+		return err
+	}
+	return c.JSON(TreeDetails{Tree: tree, Members: members, ActiveNests: active, InactiveNests: inactive, JoinRequests: requests, Rules: rules, Notes: notes, Events: events, Library: library, Viewer: treeViewerFor(role)})
 }
 
 func (s *Server) searchTrees(c *fiber.Ctx) error {
@@ -1131,11 +1165,27 @@ func (s *Server) createKnock(c *fiber.Ctx) error {
 	if toUserID != nil {
 		return s.createProfileKnock(c, actor.ID, *toUserID, strings.TrimSpace(body.Message))
 	}
+	if err := s.expireStaleKnocks(); err != nil {
+		return err
+	}
+	// Knocking again while the first is unanswered does not ring the room twice.
+	var waiting string
+	err := s.db.QueryRow(`SELECT id FROM knocks WHERE nest_id = ? AND from_user_id = ? AND status = 'pending'`, *nestID, actor.ID).Scan(&waiting)
+	if err == nil {
+		knock, err := s.findKnock(waiting)
+		if err != nil {
+			return err
+		}
+		return c.Status(fiber.StatusCreated).JSON(fiber.Map{"knock": knock})
+	}
+	if !errors.Is(err, sql.ErrNoRows) {
+		return err
+	}
 	knock, err := s.insertKnock(actor.ID, toUserID, nestID, strings.TrimSpace(body.Message))
 	if err != nil {
 		return err
 	}
-	s.events.publish(LiveUpdate{Type: "knock.created", At: database.Now()})
+	s.publishRoomKnock(knock, "knock.created")
 	return c.Status(fiber.StatusCreated).JSON(fiber.Map{"knock": knock})
 }
 
@@ -1250,7 +1300,9 @@ func (s *Server) resolveKnock(c *fiber.Ctx, status, reply string, replyUntil tim
 	if knock.Status != "pending" {
 		return fiber.NewError(fiber.StatusConflict, "knock is not pending")
 	}
-	if allowed, err := s.canResolveKnock(actor.ID, knock); err != nil || !allowed {
+	// Whoever knocked on a room can take the knock back, and nothing else.
+	withdrawing := status == "dismissed" && knock.NestID != nil && knock.FromUserID == actor.ID
+	if allowed, err := s.canResolveKnock(actor.ID, knock); err != nil || !(allowed || withdrawing) {
 		if err != nil {
 			return err
 		}
@@ -1301,14 +1353,18 @@ func (s *Server) resolveKnock(c *fiber.Ctx, status, reply string, replyUntil tim
 
 // publishKnockUpdate tells the people a knock concerns. A knock on a person reaches only
 // the two of them, and a quiet dismiss reaches only the person who dismissed it, so the
-// knocker's client gets no signal it could read as "ignored". Nest knocks go to everyone
-// as before, since moderators are not listed here.
+// knocker's client gets no signal it could read as "ignored". A knock on a room reaches
+// the people inside, the people who run it, and the knocker.
 func (s *Server) publishKnockUpdate(knock Knock, status string, replied bool) {
 	update := LiveUpdate{Type: "knock." + status, At: database.Now()}
 	if replied {
 		update.Type = "knock.replied"
 	}
-	if knock.NestID != nil || knock.ToUserID == nil {
+	if knock.NestID != nil {
+		s.publishRoomKnock(knock, update.Type, knock.FromUserID)
+		return
+	}
+	if knock.ToUserID == nil {
 		s.events.publish(update)
 		return
 	}
@@ -1768,7 +1824,7 @@ func (s *Server) knocksForUser(userID string, pendingOnly bool) ([]Knock, error)
 		// Home is an incoming inbox; the history endpoint also includes sent knocks.
 		statusClause = " AND k.status = 'pending' AND k.from_user_id <> ?"
 	}
-	args := []any{userID, userID, userID, userID}
+	args := []any{userID, userID, userID, userID, userID}
 	if pendingOnly {
 		args = append(args, userID)
 	}
@@ -1779,7 +1835,11 @@ func (s *Server) knocksForUser(userID string, pendingOnly bool) ([]Knock, error)
 		 	OR EXISTS (
 		 		SELECT 1 FROM nests n
 		 		WHERE n.id = k.nest_id AND `+nestModeratorSQL("n")+`
-		 	))`+statusClause+`
+		 	)
+		 	OR (k.status = 'pending' AND EXISTS (
+		 		SELECT 1 FROM session_participants inside
+		 		WHERE inside.nest_id = k.nest_id AND inside.user_id = ? AND inside.left_at IS NULL
+		 	)))`+statusClause+`
 		 ORDER BY k.created_at DESC`,
 		args...,
 	)
@@ -1858,10 +1918,19 @@ func (s *Server) canResolveKnock(userID string, knock Knock) (bool, error) {
 	if knock.ToUserID != nil && *knock.ToUserID == userID {
 		return true, nil
 	}
-	if knock.NestID != nil {
-		return s.canModerate(userID, *knock.NestID)
+	if knock.NestID == nil {
+		return false, nil
 	}
-	return false, nil
+	moderator, err := s.canModerate(userID, *knock.NestID)
+	if err != nil || moderator || knock.FromUserID == userID {
+		return moderator, err
+	}
+	var inside int
+	err = s.db.QueryRow(
+		`SELECT COUNT(*) FROM session_participants WHERE nest_id = ? AND user_id = ? AND left_at IS NULL`,
+		*knock.NestID, userID,
+	).Scan(&inside)
+	return inside > 0, err
 }
 
 func (s *Server) findKnockTargetUser(userID, username string) (User, error) {

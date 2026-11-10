@@ -1,7 +1,7 @@
 import { forwardRef, useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState, type ReactNode } from "react";
 import { ArrowDown } from "lucide-react";
 import { Virtuoso, type VirtuosoHandle } from "react-virtuoso";
-import type { ReactionLimits } from "@/lib/chat/attachments";
+import { isLibraryMessage, type ReactionLimits } from "@/lib/chat/attachments";
 import type { ChatStore } from "@/lib/chat/store";
 import { typingLine } from "@/lib/chat/text";
 import { unreadLabel } from "@/lib/chat/reducer";
@@ -106,6 +106,8 @@ export interface MessageListProps {
   onDeleteForEveryone: (message: ChatMessage) => void;
   onOpenImage: (message: ChatMessage, attachment: ChatAttachment) => void;
   onOpenPerson: (userId: string) => void;
+  /** Opens a space's lobby, from an event invitation. */
+  onOpenSpace?: (treeId: string) => void;
   /** Adds a message to Saved messages. Absent inside Saved messages. */
   onSave?: (message: ChatMessage) => void;
   /** Opens the chat a copied message came from, at the original. */
@@ -125,7 +127,7 @@ export interface MessageListProps {
  * length scrolls the same.
  */
 export const MessageList = forwardRef<MessageListHandle, MessageListProps>(function MessageList(
-  { store, conversation, me, windowActive, intro, reactionLimits, onReply, onEdit, onRemoveForMe, onDeleteForEveryone, onOpenImage, onOpenPerson, onSave, onOpenSource, onForward, onStartSelecting, selection, onToggleSelected, mentions },
+  { store, conversation, me, windowActive, intro, reactionLimits, onReply, onEdit, onRemoveForMe, onDeleteForEveryone, onOpenImage, onOpenPerson, onOpenSpace, onSave, onOpenSource, onForward, onStartSelecting, selection, onToggleSelected, mentions },
   ref,
 ) {
   const { summary, messages, pending } = conversation;
@@ -289,7 +291,7 @@ export const MessageList = forwardRef<MessageListHandle, MessageListProps>(funct
             ? message.seq <= (summary.kind === "dm" ? (summary.peerReadSeq ?? 0) : (conversation.seen?.readSeq ?? 0)) ? "read" : "sent"
             : undefined;
           // A copy stays as it was saved; your own notes in Saved messages have no time limit.
-          const editable = mine && summary.canSend && !message.origin && (inSaved || Date.now() - Date.parse(message.createdAt) < EDIT_WINDOW_MS);
+          const editable = mine && summary.canSend && !message.origin && !isLibraryMessage(message) && (inSaved || Date.now() - Date.parse(message.createdAt) < EDIT_WINDOW_MS);
           return (
             <div className="mx-auto w-full max-w-3xl px-6">
               <MessageRow
@@ -304,6 +306,7 @@ export const MessageList = forwardRef<MessageListHandle, MessageListProps>(funct
                 reactionLimits={reactionLimits}
                 nameOf={nameOf}
                 onReact={(emoji) => store.react(id, message.id, emoji)}
+                onRemoveLinkPreview={mine && summary.canSend ? () => store.removeLinkPreview(id, message.id) : undefined}
                 canReply={summary.canSend}
                 canEdit={editable}
                 canDeleteForEveryone={mine || summary.canManage}
@@ -317,6 +320,7 @@ export const MessageList = forwardRef<MessageListHandle, MessageListProps>(funct
                 onOpenReply={openReply}
                 onOpenImage={onOpenImage}
                 onOpenPerson={onOpenPerson}
+                onOpenSpace={onOpenSpace}
                 onSave={onSave}
                 onOpenSource={onOpenSource}
                 onForward={onForward}

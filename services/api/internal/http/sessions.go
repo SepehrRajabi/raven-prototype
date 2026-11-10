@@ -80,7 +80,7 @@ func (s *Server) listLauncherNests(c *fiber.Ctx) error {
 
 func (s *Server) launcherNestsForUser(userID string) ([]LauncherNest, error) {
 	rows, err := s.db.Query(
-		`SELECT n.id, n.name, n.join_code, n.creator_user_id, n.tree_id, n.type, n.status, n.lifecycle_state, n.created_at, n.updated_at, n.archived_at, n.ended_at, n.empty_since, n.expires_at, n.last_activity_at
+		`SELECT n.id, n.name, n.join_code, n.creator_user_id, n.tree_id, n.type, n.status, n.lifecycle_state, n.door, n.created_at, n.updated_at, n.archived_at, n.ended_at, n.empty_since, n.expires_at, n.last_activity_at
 		 FROM nests n
 		 WHERE n.status = 'active' AND `+nestVisibleSQL("n")+`
 		 ORDER BY n.last_activity_at DESC, n.created_at DESC`,
@@ -95,7 +95,7 @@ func (s *Server) launcherNestsForUser(userID string) ([]LauncherNest, error) {
 	for rows.Next() {
 		var nest Nest
 		var treeID, archivedAt, endedAt, emptySince, expiresAt sql.NullString
-		if err := rows.Scan(&nest.ID, &nest.Name, &nest.JoinCode, &nest.CreatorUserID, &treeID, &nest.Type, &nest.Status, &nest.LifecycleState, &nest.CreatedAt, &nest.UpdatedAt, &archivedAt, &endedAt, &emptySince, &expiresAt, &nest.LastActivityAt); err != nil {
+		if err := rows.Scan(&nest.ID, &nest.Name, &nest.JoinCode, &nest.CreatorUserID, &treeID, &nest.Type, &nest.Status, &nest.LifecycleState, &nest.Door, &nest.CreatedAt, &nest.UpdatedAt, &archivedAt, &endedAt, &emptySince, &expiresAt, &nest.LastActivityAt); err != nil {
 			return nil, err
 		}
 		nest.TreeID = nullStringPtr(treeID)
@@ -511,6 +511,9 @@ func (s *Server) joinActiveSession(nest Nest, user User) (SessionSummary, error)
 		return SessionSummary{}, err
 	}
 	if count, _ := res.RowsAffected(); count == 0 {
+		if err := s.enterThroughDoorTx(tx, user.ID, nest); err != nil {
+			return SessionSummary{}, err
+		}
 		if _, err := tx.Exec(
 			`INSERT INTO session_participants (id, session_id, nest_id, user_id, joined_at, last_seen_at, status, created_at, updated_at)
 			 VALUES (?, ?, ?, ?, ?, ?, 'active', ?, ?)`,

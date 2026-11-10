@@ -36,11 +36,17 @@ const (
 	treeActionModerateVoice treeAction = "voice.moderate"
 	// treeActionRenameMember sets another person's name in the space. Aimed at a person too.
 	treeActionRenameMember treeAction = "members.rename"
-	treeActionEditSettings     treeAction = "settings.edit"
-	treeActionAssignRoles      treeAction = "roles.assign"
-	treeActionTransfer         treeAction = "ownership.transfer"
-	treeActionDelete           treeAction = "space.delete"
-	treeActionLeave            treeAction = "leave"
+	// treeActionManageBoard covers the space board: house rules, and later pinned notes
+	// and events.
+	treeActionManageBoard treeAction = "board.manage"
+	// treeActionManageStickers covers the space's GIF and sticker set: adding, editing,
+	// organising and removing what the space's members can use in its conversations.
+	treeActionManageStickers treeAction = "stickers.manage"
+	treeActionEditSettings   treeAction = "settings.edit"
+	treeActionAssignRoles    treeAction = "roles.assign"
+	treeActionTransfer       treeAction = "ownership.transfer"
+	treeActionDelete         treeAction = "space.delete"
+	treeActionLeave          treeAction = "leave"
 )
 
 const (
@@ -81,6 +87,8 @@ var treeActionMinimumRole = map[treeAction]string{
 	treeActionModerateMessages: treeRoleModerator,
 	treeActionModerateVoice:    treeRoleModerator,
 	treeActionRenameMember:     treeRoleModerator,
+	treeActionManageBoard:      treeRoleModerator,
+	treeActionManageStickers:   treeRoleModerator,
 	treeActionEditSettings:     treeRoleOwner,
 	treeActionAssignRoles:      treeRoleOwner,
 	treeActionTransfer:         treeRoleOwner,
@@ -96,6 +104,8 @@ var treeViewerActions = []treeAction{
 	treeActionModerateMessages,
 	treeActionModerateVoice,
 	treeActionRenameMember,
+	treeActionManageBoard,
+	treeActionManageStickers,
 	treeActionEditSettings,
 	treeActionAssignRoles,
 	treeActionTransfer,
@@ -325,6 +335,9 @@ func (s *Server) requireNestEntry(user User, nest Nest) error {
 	}
 	if level < nestAccessMember || !joined {
 		return fiber.NewError(fiber.StatusForbidden, "admission is required before LiveKit access")
+	}
+	if err := s.requireDoor(user.ID, nest); err != nil {
+		return err
 	}
 	return s.requireNotVotedOut(nest.ID, user.ID)
 }

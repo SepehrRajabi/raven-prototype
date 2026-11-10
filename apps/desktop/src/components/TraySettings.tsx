@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { SettingsHint, SettingsToggleRow } from "@/shells/ravenv1/SettingsScaffold";
-import { type TraySettings, trayCommands } from "@/lib/tray";
+import { type TraySettings, type TraySettingsPatch, trayCommands } from "@/lib/tray";
 
 // Where the icon lives and how its menu opens differ: the notification area on Windows,
 // the menu bar on macOS.
@@ -30,16 +30,16 @@ export function TraySettingsPanel() {
   if (!settings.supported) return <SettingsHint>The tray icon works on Windows and macOS only for now.</SettingsHint>;
 
   // Applies at once. The stored value comes back; a failure puts the switch back.
-  const setCloseToTray = (closeToTray: boolean) => {
+  const update = (patch: TraySettingsPatch, failure: string) => {
     const previous = settings;
-    setSettings({ ...settings, closeToTray });
+    setSettings({ ...settings, ...patch });
     setError("");
     trayCommands
-      .updateSettings({ closeToTray })
+      .updateSettings(patch)
       .then(setSettings)
       .catch(() => {
         setSettings(previous);
-        setError("Couldn’t save this setting. Closing the window still does what it did before.");
+        setError(failure);
       });
   };
 
@@ -53,7 +53,17 @@ export function TraySettingsPanel() {
             : "Closing the window quits Raven and leaves any call you are in."
         }
         checked={settings.closeToTray}
-        onChange={setCloseToTray}
+        onChange={(closeToTray) =>
+          update({ closeToTray }, "Couldn’t save this setting. Closing the window still does what it did before.")
+        }
+      />
+      <SettingsToggleRow
+        label="Launch at Startup"
+        description="Raven opens in the tray, ready for knocks and messages, without opening its window."
+        checked={settings.launchAtStartup}
+        onChange={(launchAtStartup) =>
+          update({ launchAtStartup }, "Couldn’t change this. Raven still starts the way it did before.")
+        }
       />
       {error ? (
         <p role="alert" className="rounded-control bg-destructive/10 px-3 py-2 text-small text-destructive">{error}</p>

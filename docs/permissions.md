@@ -72,7 +72,9 @@ at a person is allowed only against someone below you.
 | Add members, answer join requests, invite into rooms | | yes | yes |
 | Remove someone, delete their messages | | members only | anyone else |
 | Server mute and server deafen someone | | members only | anyone else |
-| Name, description, picture, visibility, join policy | | | yes |
+| Keep the space board: house rules (later pinned notes and events) | | yes | yes |
+| Keep the space's GIF and sticker set: add, rename, organise, remove (`stickers.manage`) | | yes | yes |
+| Name, description, picture, visibility, join policy, whether saved stickers may be made public | | | yes |
 | Make someone a moderator or a member | | | yes |
 | Transfer ownership, delete the space | | | yes |
 
@@ -84,6 +86,11 @@ at a person is allowed only against someone below you.
   space can be invited in.
 - A room outside any space (a temporary one) is run by whoever started it.
 - Group chats keep their own two roles, owner and member.
+- A space's GIFs and stickers can be used only in that space's conversations. Any member
+  may save one to their own library. Whether that saved copy may then be made public on
+  the server is the space setting `savedStickersPublishable` (`settings.edit`, off by
+  default); it is checked when someone publishes, so turning it off later unpublishes
+  nothing.
 
 All of this is decided in one place, `internal/http/policy.go`. Handlers ask
 `authorizeTree`; they do not compare role names. The answer is also sent to the client
@@ -168,7 +175,8 @@ make an account without an administrator. Both start off.
 ## The admin dashboard
 
 `apps/admin` is a small web app for the administrator: users, their permissions, spaces
-with their members and rooms, default permissions, the server picture and the audit log.
+with their members and rooms, public GIFs and stickers (unpublish or delete), default
+permissions, the server picture and the audit log.
 It cannot read messages or enter calls, and the admin API has no route that could.
 
 It talks to `/v1/admin/*` on its own origin. Run it locally with the API on its default

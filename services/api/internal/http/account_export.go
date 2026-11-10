@@ -343,12 +343,17 @@ func exportTranscriptLine(m ChatMessage) string {
 func exportSystemText(m ChatMessage) string {
 	var payload struct {
 		Event string     `json:"event"`
+		Type  string     `json:"type"`
+		Text  string     `json:"text"`
 		Name  string     `json:"name"`
 		User  *ChatUser  `json:"user"`
 		Users []ChatUser `json:"users"`
 	}
 	if err := json.Unmarshal(m.System, &payload); err != nil {
 		return m.SenderName
+	}
+	if payload.Type == "admin" {
+		return "Raven, from the server admin: " + payload.Text
 	}
 	switch payload.Event {
 	case "group_created":
@@ -382,6 +387,9 @@ var exportUnsafe = regexp.MustCompile(`[^a-z0-9]+`)
 func exportTitle(summary ChatConversation) string {
 	if summary.Kind == chatKindSaved {
 		return "Saved messages"
+	}
+	if summary.Kind == chatKindRaven {
+		return "Raven"
 	}
 	if summary.Name != "" {
 		return summary.Name

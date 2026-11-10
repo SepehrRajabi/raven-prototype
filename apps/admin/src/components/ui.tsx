@@ -1,5 +1,5 @@
 import { useEffect, useId, useRef, useState } from "react";
-import type { ButtonHTMLAttributes, InputHTMLAttributes, ReactNode, SelectHTMLAttributes } from "react";
+import type { ButtonHTMLAttributes, InputHTMLAttributes, ReactNode, SelectHTMLAttributes, TextareaHTMLAttributes } from "react";
 import { clsx } from "clsx";
 import { twMerge } from "tailwind-merge";
 import { Check, Copy, X } from "lucide-react";
@@ -46,6 +46,18 @@ export function Input({ className, ...props }: InputHTMLAttributes<HTMLInputElem
     <input
       className={cn(
         "h-9 w-full rounded-control border border-input bg-background px-3 text-body text-foreground placeholder:text-subtle disabled:opacity-50",
+        className,
+      )}
+      {...props}
+    />
+  );
+}
+
+export function Textarea({ className, ...props }: TextareaHTMLAttributes<HTMLTextAreaElement>) {
+  return (
+    <textarea
+      className={cn(
+        "min-h-24 w-full rounded-control border border-input bg-background px-3 py-2 text-body text-foreground placeholder:text-subtle disabled:opacity-50",
         className,
       )}
       {...props}

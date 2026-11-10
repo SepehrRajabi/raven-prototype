@@ -103,6 +103,8 @@ services:
       LIVEKIT_API_SECRET: ${LIVEKIT_API_SECRET:?LIVEKIT_API_SECRET is required}
       # Profile pictures and chat images: files under this directory (host: /srv/raven/media).
       RAVEN_MEDIA_DIR: /var/lib/raven/media
+      # "on" lets the server read the pages people link to in chat, for link previews.
+      RAVEN_LINK_PREVIEWS: ${RAVEN_LINK_PREVIEWS:-off}
       RAVEN_TRUSTED_PROXIES: ${RAVEN_TRUSTED_PROXIES:-172.16.0.0/12,192.168.0.0/16,10.0.0.0/8}
     volumes:
       - /srv/raven/media:/var/lib/raven/media

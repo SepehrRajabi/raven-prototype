@@ -68,7 +68,7 @@ func (s *Server) CreateRoom(name, spaceReference string) (ProvisionedRoom, error
 	if err != nil {
 		return ProvisionedRoom{}, err
 	}
-	room, err := s.createNestForUser(creator, name, "persistent", &space.ID)
+	room, err := s.createNestForUser(creator, name, "persistent", doorOpen, &space.ID)
 	if err != nil {
 		return ProvisionedRoom{}, err
 	}
@@ -212,7 +212,7 @@ func (s *Server) resolveActiveSpace(reference string) (Tree, error) {
 	}
 }
 
-func (s *Server) createNestForUser(user User, name, nestType string, treeID *string) (Nest, error) {
+func (s *Server) createNestForUser(user User, name, nestType, door string, treeID *string) (Nest, error) {
 	name = strings.TrimSpace(name)
 	if name == "" {
 		return Nest{}, errors.New("Nest name is required")
@@ -231,6 +231,7 @@ func (s *Server) createNestForUser(user User, name, nestType string, treeID *str
 		Type:           nestType,
 		Status:         "active",
 		LifecycleState: normalizeLifecycleState(nestType),
+		Door:           door,
 		CreatedAt:      now,
 		UpdatedAt:      now,
 		LastActivityAt: now,
@@ -248,9 +249,9 @@ func (s *Server) createNestForUser(user User, name, nestType string, treeID *str
 		nest.TreeID = &defaultTreeID
 	}
 	if _, err := tx.Exec(
-		`INSERT INTO nests (id, name, join_code, creator_user_id, tree_id, type, status, lifecycle_state, created_at, updated_at, last_activity_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		nest.ID, nest.Name, nest.JoinCode, nest.CreatorUserID, nullableStringPtr(nest.TreeID), nest.Type, nest.Status, nest.LifecycleState, nest.CreatedAt, nest.UpdatedAt, nest.LastActivityAt,
+		`INSERT INTO nests (id, name, join_code, creator_user_id, tree_id, type, status, lifecycle_state, door, created_at, updated_at, last_activity_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		nest.ID, nest.Name, nest.JoinCode, nest.CreatorUserID, nullableStringPtr(nest.TreeID), nest.Type, nest.Status, nest.LifecycleState, nest.Door, nest.CreatedAt, nest.UpdatedAt, nest.LastActivityAt,
 	); err != nil {
 		return Nest{}, err
 	}

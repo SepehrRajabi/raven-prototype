@@ -101,6 +101,8 @@ const ACTION_TEXT: Record<string, string> = {
   "user.signed_up": "Signed up",
   "invite.created": "Made an invite",
   "invite.revoked": "Withdrew an invite",
+  "library.unpublished": "Unpublished a GIF or sticker",
+  "library.deleted": "Deleted a GIF or sticker",
 };
 
 export function describeAction(action: string): string {

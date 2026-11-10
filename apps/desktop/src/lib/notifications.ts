@@ -1,5 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
-import type { Knock } from "./api";
+import type { EventNotice, Knock } from "./api";
+import { boardTime } from "./notes";
 
 /**
  * Operating-system notifications, kept per device.
@@ -8,11 +9,13 @@ export interface NotificationSettings {
   knocks: boolean;
   messages: boolean;
   messageText: boolean;
+  /** Invitations to scheduled events and their reminders. */
+  events: boolean;
 }
 
 const SETTINGS_KEY = "raven.notificationSettings";
 
-export const DEFAULT_NOTIFICATION_SETTINGS: NotificationSettings = { knocks: false, messages: false, messageText: true };
+export const DEFAULT_NOTIFICATION_SETTINGS: NotificationSettings = { knocks: false, messages: false, messageText: true, events: true };
 
 export function loadNotificationSettings(storage: Pick<Storage, "getItem"> = localStorage): NotificationSettings {
   try {
@@ -21,6 +24,7 @@ export function loadNotificationSettings(storage: Pick<Storage, "getItem"> = loc
       knocks: typeof parsed?.knocks === "boolean" ? parsed.knocks : false,
       messages: typeof parsed?.messages === "boolean" ? parsed.messages : false,
       messageText: typeof parsed?.messageText === "boolean" ? parsed.messageText : true,
+      events: typeof parsed?.events === "boolean" ? parsed.events : true,
     };
   } catch {
     return { ...DEFAULT_NOTIFICATION_SETTINGS };
@@ -29,6 +33,17 @@ export function loadNotificationSettings(storage: Pick<Storage, "getItem"> = loc
 
 export function saveNotificationSettings(settings: NotificationSettings, storage: Pick<Storage, "setItem"> = localStorage) {
   storage.setItem(SETTINGS_KEY, JSON.stringify(settings));
+}
+
+/** Title and body of an event notification, or null for an update that is not one. */
+export function eventNotificationText(type: string, notice: EventNotice | undefined): { title: string; body: string } | null {
+  if (!notice) return null;
+  const when = notice.startsAt ? boardTime(notice.startsAt) : "";
+  if (type === "event.invited") {
+    return { title: notice.title, body: [`${notice.host} invited you`, when, notice.room].filter(Boolean).join(" · ") };
+  }
+  if (type === "event.reminder") return { title: notice.title, body: ["Starts in 10 minutes", notice.room].filter(Boolean).join(" · ") };
+  return null;
 }
 
 /** A knock on the user themself, not on a nest they look after. */

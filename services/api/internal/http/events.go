@@ -84,6 +84,9 @@ type LiveUpdate struct {
 	// who may see that share.
 	Share  *relay.ShareInfo `json:"share,omitempty"`
 	Reason string           `json:"reason,omitempty"`
+	// Event is set on "event.invited" and "event.reminder" updates, which go only to
+	// the event's invitees.
+	Event *EventNotice `json:"event,omitempty"`
 	At   string          `json:"at"`
 }
 

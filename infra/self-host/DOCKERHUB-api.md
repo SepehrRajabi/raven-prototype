@@ -37,6 +37,7 @@ docker compose run --rm api user create --username alice --password '...' --role
 | `RAVEN_MINIMUM_CLIENT_VERSION` | Older desktop clients are asked to update |
 | `RAVEN_SERVER_NAME`, `RAVEN_SERVER_DESCRIPTION` | Shown on the sign-in screen |
 | `RAVEN_TRUSTED_PROXIES` | Proxy addresses (CIDR list) whose `X-Forwarded-For` is believed |
+| `RAVEN_LINK_PREVIEWS` | `on` lets the server read the pages people link to in chat, for link previews (public addresses only). Off by default |
 | `RAVEN_API_ADDR` | Listen address, default `0.0.0.0:6977` in compose |
 
 ## Command line

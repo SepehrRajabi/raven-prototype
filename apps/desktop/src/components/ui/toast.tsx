@@ -10,6 +10,7 @@ interface ToastItem {
   title: string;
   description?: string;
   action?: ToastAction;
+  secondaryAction?: ToastAction;
 }
 
 export interface ToastAction {
@@ -27,15 +28,19 @@ function emit() {
   for (const listener of listeners) listener();
 }
 
-/** Show a short, non-blocking message. The current view is never replaced. */
-export function toast(input: { title: string; description?: string; tone?: ToastTone; action?: ToastAction }) {
+/**
+ * Show a short, non-blocking message. The current view is never replaced. Returns its id,
+ * or null when the same message is already showing. A `persist` toast stays until dismissed.
+ */
+export function toast(input: { title: string; description?: string; tone?: ToastTone; action?: ToastAction; secondaryAction?: ToastAction; persist?: boolean }): number | null {
   const tone = input.tone ?? "neutral";
   // The same message twice in a row is one message.
-  if (items.some((item) => item.title === input.title && item.description === input.description)) return;
-  const item: ToastItem = { id: nextId++, tone, title: input.title, description: input.description, action: input.action };
+  if (items.some((item) => item.title === input.title && item.description === input.description)) return null;
+  const item: ToastItem = { id: nextId++, tone, title: input.title, description: input.description, action: input.action, secondaryAction: input.secondaryAction };
   items = [...items.slice(-2), item];
   emit();
-  window.setTimeout(() => dismissToast(item.id), DISMISS_AFTER_MS[tone]);
+  if (!input.persist) window.setTimeout(() => dismissToast(item.id), DISMISS_AFTER_MS[tone]);
+  return item.id;
 }
 
 export function dismissToast(id: number) {
@@ -75,18 +80,19 @@ export function Toaster({ className }: { className?: string }) {
             <div className="text-small font-medium">{item.title}</div>
             {item.description ? <p className="mt-0.5 text-caption text-muted-foreground">{item.description}</p> : null}
           </div>
-          {item.action ? (
+          {[item.action, item.secondaryAction].map((action) => action ? (
             <button
+              key={action.label}
               type="button"
               onClick={() => {
                 dismissToast(item.id);
-                item.action!.onClick();
+                action.onClick();
               }}
               className="-my-0.5 shrink-0 rounded-chip px-1.5 py-0.5 text-small font-medium text-foreground transition-colors hover:bg-accent"
             >
-              {item.action.label}
+              {action.label}
             </button>
-          ) : null}
+          ) : null)}
           <button
             type="button"
             aria-label="Dismiss"

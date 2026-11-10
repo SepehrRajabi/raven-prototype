@@ -58,6 +58,13 @@ func migrateVersioned(db *sql.DB, driver string) error {
 		{version: "2026110601_workshop", statements: workshopStatements()},
 		savedMessagesMigration(driver),
 		{version: "2026110701_space_names", statements: spaceNameStatements()},
+		{version: "2026111001_room_doors", statements: roomDoorStatements()},
+		{version: "2026111002_board_rules", statements: boardStatements()},
+		{version: "2026111003_board_notes", statements: boardNoteStatements()},
+		ravenMessagesMigration(driver),
+		{version: "2026111005_board_events", statements: boardEventStatements()},
+		{version: "2026111006_chat_link_previews", statements: chatLinkPreviewStatements()},
+		{version: "2026111006_library", statements: libraryStatements()},
 	}
 	for _, migration := range migrations {
 		if err := applyUpdateMigration(db, driver, migration); err != nil {

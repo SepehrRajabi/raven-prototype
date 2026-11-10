@@ -217,7 +217,7 @@ export interface RavenMediaAdapterState {
   cameraSupported: boolean;
   screenShareSupported: boolean;
   busy: boolean;
-  joinMediaSession: (nestId: string) => Promise<void>;
+  joinMediaSession: (nestId: string, options?: { muted?: boolean }) => Promise<void>;
   /** Abandon a join that is still connecting; the pending `joinMediaSession` rejects with `NestEntryCancelled`. */
   cancelMediaJoin: () => void;
   leaveMediaSession: () => Promise<void>;
@@ -844,7 +844,7 @@ export function useRavenMediaAdapter(
   }, [registerSession, rtcServerUrl]);
 
   const joinMediaSession = useCallback(
-    async (nestId: string) => {
+    async (nestId: string, options?: { muted?: boolean }) => {
       // A cancelled join still tears its media down; wait for that before starting over.
       while (joiningRef.current) {
         if (!joinAttemptRef.current?.cancelled) return joiningRef.current;
@@ -887,7 +887,7 @@ export function useRavenMediaAdapter(
           // Native sidecars reconcile and publish existing sources as soon as they
           // connect, so join defaults must be enforced before either sidecar joins.
           await guard(applyVideoJoinDefaults());
-          if (alwaysJoinMutedRef.current) await guard(muteLocalMicrophones());
+          if (alwaysJoinMutedRef.current || options?.muted) await guard(muteLocalMicrophones());
 
           // Open local capture before connecting, so a microphone kept from an earlier
           // call is already running when its track is published. A device that fails to

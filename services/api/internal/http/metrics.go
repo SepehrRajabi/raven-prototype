@@ -23,11 +23,15 @@ type serverMetrics struct {
 	chatSends       labelledCounter // by result
 	chatEvents      labelledCounter // by event type
 	chatRateLimited labelledCounter // by route
-	streamsClosed   labelledCounter // by reason
-	streamsOpened   atomic.Uint64
-	streamsOpen     atomic.Int64
-	changesRequests atomic.Uint64
-	changesResets   atomic.Uint64
+	// chatLinkPreviews counts link preview fetches by outcome: ok, nothing (the page had
+	// nothing to show), blocked (not a public address), failed, stale (the message
+	// changed meanwhile) and dropped (the queue was full).
+	chatLinkPreviews labelledCounter
+	streamsClosed    labelledCounter // by reason
+	streamsOpened    atomic.Uint64
+	streamsOpen      atomic.Int64
+	changesRequests  atomic.Uint64
+	changesResets    atomic.Uint64
 
 	sendDuration   *histogram // whole send request, in ms
 	publishDelay   *histogram // commit to frames queued, in ms
@@ -134,6 +138,7 @@ func (s *Server) adminMetrics(c *fiber.Ctx) error {
 	var out strings.Builder
 
 	writeLabelled(&out, "raven_chat_sends_total", "Message sends by outcome.", "result", m.chatSends.snapshot())
+	writeLabelled(&out, "raven_chat_link_previews_total", "Link preview fetches by outcome.", "result", m.chatLinkPreviews.snapshot())
 	m.sendDuration.write(&out, "raven_chat_send_duration_ms", "Time to handle a message send, in milliseconds.")
 	m.publishDelay.write(&out, "raven_chat_publish_delay_ms", "Time from a chat change being committed to its events being queued, in milliseconds.")
 	m.streamWriteLag.write(&out, "raven_stream_write_lag_ms", "Time a chat event waits in a client's queue before it is written, in milliseconds.")

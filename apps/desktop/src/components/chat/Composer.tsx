@@ -2,6 +2,12 @@ import { useEffect, useId, useLayoutEffect, useRef, useState, useSyncExternalSto
 import { ArrowUp, CornerUpLeft, ImagePlus, Pencil, Smile, X } from "lucide-react";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { EmojiPicker } from "./EmojiPicker";
+import { ComposerLibraryButton, useKeywordMatches, type ComposerLibraryContext } from "@/components/library/ComposerLibrary";
+import { LibraryMedia, PlaybackScopeProvider } from "@/components/library/LibraryMedia";
+import { keywordQuery, withoutKeyword } from "@/lib/library/keyword";
+import { PICKER_CAP } from "@/lib/library/playback";
+import { recordRecent } from "@/lib/library/picker";
+import type { LibraryItem } from "@/lib/library/types";
 import { loadEmoji, searchEmoji, withTone, type EmojiData } from "@/lib/emoji/data";
 import { recordEmoji, skinTone } from "@/lib/emoji/prefs";
 import { shortcodeQuery, completedShortcode } from "@/lib/emoji/shortcodes";
@@ -51,6 +57,10 @@ export interface ComposerProps {
   mentionResolver?: MentionResolver;
   /** The heading over nests in the `@` list (`data.labels.nestPlural`). */
   nestHeading?: string;
+  /** GIFs and stickers, when this server has them and this conversation can take them. */
+  library?: ComposerLibraryContext | null;
+  /** Sends a GIF or sticker as its own message, replying when a reply is being written. */
+  onSendLibrary?: (item: LibraryItem) => void;
 }
 
 async function filesToSources(files: File[]): Promise<TraySource[]> {
@@ -60,7 +70,7 @@ async function filesToSources(files: File[]): Promise<TraySource[]> {
 const NO_CANDIDATES: MentionCandidate[] = [];
 
 /** Where a message is written. Enter sends it; Shift+Enter starts a new line. */
-export function Composer({ conversationId, name, replyingTo, editing, onCancelReply, onCancelEdit, onSend, onSaveEdit, onTyping, onEditLast, imageLimits, mentionCandidates = NO_CANDIDATES, mentionResolver, nestHeading = "" }: ComposerProps) {
+export function Composer({ conversationId, name, replyingTo, editing, onCancelReply, onCancelEdit, onSend, onSaveEdit, onTyping, onEditLast, imageLimits, mentionCandidates = NO_CANDIDATES, mentionResolver, nestHeading = "", library = null, onSendLibrary }: ComposerProps) {
   const [text, setText] = useState(() => drafts.get(conversationId) ?? "");
   const picked = useRef<PickedMention[]>(draftMentions.get(conversationId) ?? []);
   const pickedBeforeEdit = useRef<PickedMention[]>([]);
@@ -133,7 +143,13 @@ export function Composer({ conversationId, name, replyingTo, editing, onCancelRe
   const mentionPeople = mention && mentionOpen ? filterCandidates(mentionCandidates.filter((candidate) => candidate.target === "user"), mention.query, 6) : [];
   const mentionNests = mention && mentionOpen ? filterCandidates(mentionCandidates.filter((candidate) => candidate.target !== "user"), mention.query, 6) : [];
   const mentionList = [...mentionPeople, ...mentionNests];
-  const choices = suggestions.length > 0 ? suggestions.length : mentionList.length;
+  // `:word` also offers GIFs and stickers, below the emoji, in any script.
+  const keyword = library && onSendLibrary && !editing ? keywordQuery(text, caret) : null;
+  const keywordKey = keyword ? `${keyword.start}:${keyword.query}` : null;
+  const keywordShown = keyword && dismissed !== keywordKey ? keyword : null;
+  const libraryMatches = useKeywordMatches(conversationId, keywordShown?.query ?? null);
+  const keywordChoices = suggestions.length + libraryMatches.length;
+  const choices = keywordChoices > 0 ? keywordChoices : mentionList.length;
   const activeSuggestion = Math.min(suggestionIndex, Math.max(0, choices - 1));
 
   const insertEmoji = (emoji: string, start = selection.current.start, end = selection.current.end) => {
@@ -154,6 +170,23 @@ export function Composer({ conversationId, name, replyingTo, editing, onCancelRe
     const emoji = withTone(suggestions[index], skinTone());
     recordEmoji(emoji); insertEmoji(emoji, token.start, caret);
   };
+
+  const chooseLibrary = (index: number) => {
+    const item = libraryMatches[index];
+    if (!keyword || !item || !library || !onSendLibrary) return;
+    // The word goes; the rest of what was written stays in the box.
+    const rest = withoutKeyword(text, keyword);
+    setText(rest);
+    selection.current = { start: keyword.start, end: keyword.start };
+    setCaret(keyword.start); setSuggestionIndex(0);
+    recordRecent(library.userId, item);
+    onSendLibrary(item);
+    requestAnimationFrame(() => {
+      field.current?.focus();
+      field.current?.setSelectionRange(keyword.start, keyword.start);
+    });
+  };
+  const chooseKeyword = (index: number) => (index < suggestions.length ? chooseSuggestion(index) : chooseLibrary(index - suggestions.length));
 
   const chooseMention = (index: number) => {
     const candidate = mentionList[index];
@@ -233,12 +266,12 @@ export function Composer({ conversationId, name, replyingTo, editing, onCancelRe
       }
       if ((event.key === "Enter" && !event.shiftKey) || event.key === "Tab") {
         event.preventDefault();
-        if (suggestions.length > 0) chooseSuggestion(activeSuggestion);
+        if (keywordChoices > 0) chooseKeyword(activeSuggestion);
         else chooseMention(activeSuggestion);
         return;
       }
       if (event.key === "Escape") {
-        event.preventDefault(); setDismissed(suggestions.length > 0 ? tokenKey : mentionKey); return;
+        event.preventDefault(); setDismissed(keywordChoices > 0 ? (keywordKey ?? tokenKey) : mentionKey); return;
       }
     } else if (mentionOpen && event.key === "Escape") {
       event.preventDefault(); setDismissed(mentionKey); return;
@@ -287,11 +320,22 @@ export function Composer({ conversationId, name, replyingTo, editing, onCancelRe
         />
       ) : null}
       <div className="relative flex items-end gap-2">
-        {suggestions.length > 0 ? <div id={suggestionsId} role="listbox" aria-label="Emoji suggestions" className="absolute bottom-full left-0 z-50 mb-2 w-[280px] rounded-card border bg-popover p-1 text-popover-foreground shadow-raised">
+        {keywordChoices > 0 ? <div id={suggestionsId} role="listbox" aria-label={libraryMatches.length > 0 ? "Emoji, GIFs and stickers" : "Emoji suggestions"} className="absolute bottom-full left-0 z-50 mb-2 w-[280px] rounded-card border bg-popover p-1 text-popover-foreground shadow-raised">
           {suggestions.map((entry, index) => <div key={entry.emoji} id={`${suggestionsId}-${index}`} role="option" aria-selected={index === activeSuggestion} onMouseDown={(event) => event.preventDefault()} onClick={() => chooseSuggestion(index)} className={cn("flex h-8 cursor-pointer items-center gap-2 rounded-control px-2 text-small text-muted-foreground hover:bg-secondary", index === activeSuggestion && "bg-secondary")}>
             <span className="text-[20px] leading-none">{withTone(entry, skinTone())}</span>
             <span>:{entry.shortcodes.find((code) => code.startsWith(token!.query))}:</span>
           </div>)}
+          {libraryMatches.length > 0 ? <PlaybackScopeProvider cap={PICKER_CAP} mode="hover">
+            <div role="presentation" className="px-2 pb-1 pt-1.5 text-caption text-subtle">GIFs and stickers</div>
+            <div role="presentation" className="flex flex-wrap gap-1 px-1 pb-1">
+              {libraryMatches.map((item, at) => {
+                const index = suggestions.length + at;
+                return <div key={item.id} id={`${suggestionsId}-${index}`} role="option" aria-selected={index === activeSuggestion} aria-label={item.title || (item.kind === "gif" ? "GIF" : "Sticker")} onMouseDown={(event) => event.preventDefault()} onMouseEnter={() => setSuggestionIndex(index)} onClick={() => chooseLibrary(at)} className={cn("flex h-14 w-14 cursor-pointer items-center justify-center rounded-control hover:bg-secondary", index === activeSuggestion && "bg-secondary ring-1 ring-inset ring-foreground/25")}>
+                  <LibraryMedia media={item} width={48} height={48} active={index === activeSuggestion} className="pointer-events-none" />
+                </div>;
+              })}
+            </div>
+          </PlaybackScopeProvider> : null}
         </div> : mentionOpen ? <div id={suggestionsId} role="listbox" aria-label="People and places to mention" className="absolute bottom-full left-0 z-50 mb-2 w-[280px] animate-pop-in rounded-card border bg-popover p-1 text-popover-foreground shadow-raised">
           {mentionList.length === 0 ? <p className="px-2 py-1.5 text-small text-muted-foreground">Nobody here by that name</p> : null}
           {mentionList.map((candidate, index) => <div key={`${candidate.target}:${candidate.id}`} role="presentation">
@@ -363,6 +407,9 @@ export function Composer({ conversationId, name, replyingTo, editing, onCancelRe
             <EmojiPicker autoFocus onPick={(emoji) => insertEmoji(emoji)} />
           </PopoverContent>
         </Popover>
+        {library && onSendLibrary && !editing ? (
+          <ComposerLibraryButton conversationId={conversationId} context={library} replyToMessageId={replyingTo?.id} onSend={onSendLibrary} onClosed={() => field.current?.focus()} />
+        ) : null}
         <Tooltip label={editing ? "Save" : "Send"} shortcut="Enter">
           <Button size="icon" title="" aria-label={editing ? "Save changes" : "Send message"} disabled={blocked} onClick={submit}>
             <ArrowUp className="h-4 w-4" />

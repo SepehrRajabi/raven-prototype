@@ -36,6 +36,9 @@ type chatAccess struct {
 
 // sendError is the reason to give someone whose access has CanSend false.
 func (a chatAccess) sendError() error {
+	if a.Kind == chatKindRaven {
+		return errChatRavenReadOnly
+	}
 	if a.SendDisabled {
 		return errCapabilitySendMessages
 	}
@@ -135,6 +138,12 @@ func (s *Server) chatAccessFor(q chatQuerier, conversationID, userID string) (ch
 		}
 		access.Role = memberRole.String
 		access.CanSend = true
+	case chatKindRaven:
+		// One member. They can read it but never write to it.
+		if memberState.String != "joined" {
+			return chatAccess{}, errChatNotFound
+		}
+		access.Role = memberRole.String
 	case chatKindNest:
 		var treeRole string
 		err := q.QueryRow(

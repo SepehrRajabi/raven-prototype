@@ -1,4 +1,6 @@
 import { useCallback, useMemo, useState, type ReactNode } from "react";
+import { roomEventCaptions } from "@/lib/events";
+import { useNow } from "./useNow";
 import { capabilitiesOf } from "@/lib/permissions";
 import { Avatar } from "@/components/ui/avatar";
 import { Tooltip } from "@/components/ui/tooltip";
@@ -116,10 +118,13 @@ export function Sidebar({
   // Joining always passes the threshold, so the person sees what they will reveal first.
   const joinNest = (nest: LauncherNest) => onNavigate({ kind: "nest", id: nest.id });
 
-  const nestRow = (nest: LauncherNest, nested: boolean) => (
+  const now = useNow();
+  const captionsOf = (treeId: string) => roomEventCaptions(data.treeDetails[treeId]?.events, now);
+  const nestRow = (nest: LauncherNest, nested: boolean, caption?: string) => (
     <NestRow
       key={nest.id}
       nest={nest}
+      caption={caption}
       nested={nested}
       active={(view.kind === "nest" || view.kind === "waiting") && view.id === nest.id}
       here={media.activeNestId === nest.id}
@@ -278,6 +283,7 @@ export function Sidebar({
                 const expandable = live.length > 0 || showsText;
                 const open = expandable && !collapsedTrees.has(tree.id);
                 const active = (view.kind === "tree" || view.kind === "tree-settings") && view.id === tree.id;
+                const captions = open ? captionsOf(tree.id) : undefined;
                 return (
                   <div key={tree.id}>
                     <div className={cn("group flex h-9 items-center rounded-control transition-colors", active ? "bg-secondary" : "hover:bg-secondary/60")}>
@@ -310,8 +316,8 @@ export function Sidebar({
                     </div>
                     {open ? (
                       <div className="space-y-px">
-                        {chat && showsText ? <TreeTextNests chat={chat} treeId={tree.id} view={view} onNavigate={onNavigate} /> : null}
-                        {live.map((nest) => nestRow(nest, true))}
+                        {chat && showsText ? <TreeTextNests chat={chat} treeId={tree.id} view={view} captions={captions} onNavigate={onNavigate} /> : null}
+                        {live.map((nest) => nestRow(nest, true, captions?.get(nest.id)))}
                       </div>
                     ) : null}
                   </div>
@@ -382,11 +388,13 @@ function NestRow({
   here,
   joinable,
   joinLabel,
+  caption,
   onOpen,
   onJoin,
 }: {
   nest: LauncherNest;
   nested: boolean;
+  caption?: string;
   active: boolean;
   here: boolean;
   joinable: boolean;
@@ -397,15 +405,22 @@ function NestRow({
   const live = nest.lifecycleState === "active";
   const people = nest.currentParticipants.map((participant) => ({ id: participant.userId, name: displayNameFor(participant) }));
   return (
-    <div className={cn("group relative flex h-9 items-center rounded-control transition-colors", active ? "bg-secondary" : "hover:bg-secondary/60")}>
+    <div className={cn("group relative flex items-center rounded-control transition-colors", caption ? "min-h-9" : "h-9", active ? "bg-secondary" : "hover:bg-secondary/60")}>
       <button
         type="button"
         onClick={onOpen}
         aria-current={active ? "page" : undefined}
-        className={cn("flex h-9 min-w-0 flex-1 items-center gap-2.5 pr-2 text-left", nested ? "pl-[34px]" : "pl-2")}
+        className={cn("flex min-w-0 flex-1 items-center gap-2.5 pr-2 text-left", caption ? "min-h-9 py-1" : "h-9", nested ? "pl-[34px]" : "pl-2")}
       >
         <NestGlyph kind="voice" live={live} className={live ? "text-live" : "text-subtle"} />
-        <span className="min-w-0 flex-1 truncate text-small text-foreground">{nest.name}</span>
+        {caption ? (
+          <span className="min-w-0 flex-1">
+            <span className="block truncate text-small text-foreground">{nest.name}</span>
+            <span className="block truncate text-caption text-subtle"><bdi>{caption}</bdi></span>
+          </span>
+        ) : (
+          <span className="min-w-0 flex-1 truncate text-small text-foreground">{nest.name}</span>
+        )}
         {here ? (
           <span className="shrink-0 text-caption text-live">You’re here</span>
         ) : (

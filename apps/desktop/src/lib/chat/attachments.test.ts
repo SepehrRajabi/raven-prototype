@@ -55,7 +55,9 @@ describe("the line that stands for a message", () => {
   test("says what it holds when there is no caption", () => {
     expect(attachmentsExcerpt([{ kind: "image" }])).toBe("Photo");
     expect(attachmentsExcerpt([{ kind: "image" }, { kind: "image" }])).toBe("2 photos");
-    expect(attachmentsExcerpt([{ kind: "sticker" }])).toBe("Attachment");
+    expect(attachmentsExcerpt([{ kind: "sticker" }])).toBe("Sticker");
+    expect(attachmentsExcerpt([{ kind: "gif" }])).toBe("GIF");
+    expect(attachmentsExcerpt([{ kind: "file" }])).toBe("Attachment");
     expect(attachmentsExcerpt([{ kind: "image" }, { kind: "video" }])).toBe("2 attachments");
     expect(attachmentsExcerpt(undefined)).toBe("");
   });

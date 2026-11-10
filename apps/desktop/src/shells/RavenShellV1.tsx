@@ -16,6 +16,7 @@ import { SidebarResizeHandle } from "./ravenv1/SidebarResizeHandle";
 import { readSidebarWidth, SIDEBAR_RAIL_WIDTH, useSidebarMaxWidth, writeSidebarWidth } from "./ravenv1/sidebarWidth";
 import { BareTopBar, TopBar } from "./ravenv1/TopBar";
 import { MainView } from "./ravenv1/views";
+import { RoomKnockToasts } from "./ravenv1/RoomKnockToasts";
 import { resolveTreeSettingsSection, TreeSettingsNav } from "./ravenv1/views/TreeSettingsView";
 import type { RavenView } from "./ravenv1/state";
 import { useRavenShellData } from "./ravenv1/useRavenShellData";
@@ -440,6 +441,7 @@ export function RavenShellV1() {
       <ErrorBoundary name="dock" fallback={(retry) => <RegionFallback compact onRetry={retry} onLeave={leaveFromFallback} />}>
         <DeviceDock data={data} media={media} chat={chat} view={view} onNavigate={navigation.navigate} onToggleMixer={toggleMixer} />
       </ErrorBoundary>
+      <RoomKnockToasts data={data} media={media} />
       <Toaster />
     </div>
   );

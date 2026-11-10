@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import type { FormEvent } from "react";
-import { Activity, Boxes, ClipboardList, LogOut, Settings, Users } from "lucide-react";
+import { Activity, Boxes, ClipboardList, Images, LogOut, Settings, Users } from "lucide-react";
 import { ApiError, browserApi } from "./api";
 import type { AdminApi } from "./api";
 import type { SessionUser } from "./types";
@@ -13,6 +13,7 @@ import { UsersView } from "./views/UsersView";
 import { UserView } from "./views/UserView";
 import { SpacesView } from "./views/SpacesView";
 import { SpaceView } from "./views/SpaceView";
+import { LibraryView } from "./views/LibraryView";
 import { SettingsView } from "./views/SettingsView";
 import { AuditView } from "./views/AuditView";
 
@@ -158,6 +159,7 @@ const NAV: Array<{ route: Route; label: string; icon: typeof Users; match: Route
   { route: { page: "overview" }, label: "Overview", icon: Activity, match: ["overview"] },
   { route: { page: "users" }, label: "Users", icon: Users, match: ["users", "user"] },
   { route: { page: "spaces" }, label: "Spaces", icon: Boxes, match: ["spaces", "space"] },
+  { route: { page: "library" }, label: "GIFs and stickers", icon: Images, match: ["library"] },
   { route: { page: "settings" }, label: "Settings", icon: Settings, match: ["settings"] },
   { route: { page: "audit" }, label: "Audit log", icon: ClipboardList, match: ["audit"] },
 ];
@@ -224,6 +226,8 @@ function Page({ api, route, me }: { api: AdminApi; route: Route; me: SessionUser
       return <SpacesView api={api} />;
     case "space":
       return <SpaceView key={route.id} api={api} spaceId={route.id} />;
+    case "library":
+      return <LibraryView api={api} />;
     case "settings":
       return <SettingsView api={api} />;
     case "audit":

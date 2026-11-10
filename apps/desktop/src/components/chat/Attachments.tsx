@@ -6,6 +6,8 @@ import { getAttachmentUrl, getLocalUrl, localKey, mediaCache, serverKey } from "
 import type { ChatAttachment, PendingAttachment } from "@/lib/chat/types";
 import { cn } from "@/lib/utils";
 import { placeholderUrl, useCachedUrl, useNearViewport } from "./attachmentHooks";
+import { LibraryMedia, type LibraryMediaSource } from "@/components/library/LibraryMedia";
+import { libraryBox } from "@/lib/library/types";
 
 /** One image as the list draws it, wherever its bytes come from. */
 interface ImageEntry {
@@ -144,8 +146,36 @@ export function UnknownAttachments() {
   );
 }
 
+/**
+ * A GIF or sticker sent from a library: one per message, with no bubble. A click pauses
+ * it. An attachment missing its asset is drawn as unknown.
+ */
+function LibraryAttachments({ attachments, footer }: RendererProps) {
+  return (
+    <>
+      {attachments.map((attachment, index) => {
+        const source = libraryMediaOf(attachment);
+        if (!source) return <UnknownAttachments key={attachment.id} />;
+        const box = libraryBox(source.kind, attachment.width, attachment.height);
+        return (
+          <div key={attachment.id} className="relative max-w-full" style={{ width: box.width }}>
+            <LibraryMedia media={source} width={box.width} height={box.height} holdOnClick />
+            {index === attachments.length - 1 ? footer : null}
+          </div>
+        );
+      })}
+    </>
+  );
+}
+
+/** What LibraryMedia needs from a message's GIF or sticker; null when it is incomplete. */
+export function libraryMediaOf(attachment: ChatAttachment): LibraryMediaSource | null {
+  if (!attachment.assetId || !attachment.format || (attachment.kind !== "gif" && attachment.kind !== "sticker")) return null;
+  return { assetId: attachment.assetId, kind: attachment.kind, format: attachment.format, variants: attachment.variants, title: attachment.name };
+}
+
 /** The renderer for each kind this version can draw. A new kind is a new entry here. */
-const attachmentRenderers: Record<string, (props: RendererProps) => ReactNode> = { image: ImageAttachments };
+const attachmentRenderers: Record<string, (props: RendererProps) => ReactNode> = { image: ImageAttachments, gif: LibraryAttachments, sticker: LibraryAttachments };
 const RENDERED_KINDS: ReadonlySet<string> = new Set(Object.keys(attachmentRenderers));
 
 /** A message's attachments, each run of one kind drawn by that kind's renderer. */

@@ -50,6 +50,11 @@ const (
 // run integrity_check. It is safe here because every existing row already satisfies the
 // wider list.
 func sqliteWidenChatKindCheck(tx *sql.Tx) error {
+	return sqliteReplaceChatKindCheck(tx, sqliteChatKindCheckOld, sqliteChatKindCheckNew)
+}
+
+// sqliteReplaceChatKindCheck swaps the kind CHECK in chat_conversations' stored SQL.
+func sqliteReplaceChatKindCheck(tx *sql.Tx, oldCheck, newCheck string) error {
 	var version int64
 	if err := tx.QueryRow(`PRAGMA schema_version`).Scan(&version); err != nil {
 		return err
@@ -59,7 +64,7 @@ func sqliteWidenChatKindCheck(tx *sql.Tx) error {
 	}
 	result, err := tx.Exec(
 		`UPDATE sqlite_schema SET sql = replace(sql, ?, ?) WHERE type = 'table' AND name = 'chat_conversations' AND instr(sql, ?) > 0`,
-		sqliteChatKindCheckOld, sqliteChatKindCheckNew, sqliteChatKindCheckOld,
+		oldCheck, newCheck, oldCheck,
 	)
 	if err != nil {
 		return fmt.Errorf("edit chat_conversations schema: %w", err)
@@ -86,7 +91,7 @@ func sqliteWidenChatKindCheck(tx *sql.Tx) error {
 	if err := tx.QueryRow(`SELECT sql FROM sqlite_schema WHERE type = 'table' AND name = 'chat_conversations'`).Scan(&stored); err != nil {
 		return err
 	}
-	if !strings.Contains(stored, sqliteChatKindCheckNew) {
+	if !strings.Contains(stored, newCheck) {
 		return fmt.Errorf("chat_conversations kind CHECK was not widened")
 	}
 	return nil

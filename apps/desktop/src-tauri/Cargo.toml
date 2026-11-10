@@ -1,6 +1,6 @@
 [package]
 name = "raven-desktop"
-version = "0.1.10"
+version = "0.1.11"
 description = "Raven desktop client"
 authors = ["Raven"]
 license = ""
@@ -36,6 +36,9 @@ tauri-plugin-opener = "2.2.7"
 tauri-plugin-updater = "=2.10.1"
 # The save picker for chat images.
 tauri-plugin-dialog = "2"
+# GIF and sticker libraries: hashing before an upload, and opening .ravenpack files.
+sha2 = "0.10"
+zip = { version = "4.6", default-features = false, features = ["deflate-flate2"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 thiserror = "2"
@@ -79,6 +82,11 @@ nokhwa = { version = "0.10", features = ["input-native"] }
 # through X11 on Linux (a Wayland session cannot grant global key grabs to apps).
 [target.'cfg(any(windows, target_os = "linux"))'.dependencies]
 tauri-plugin-global-shortcut = "2"
+
+# Opt-in "Launch at Startup", which starts it in the tray. Only where the
+# tray exists.
+[target.'cfg(any(windows, target_os = "macos"))'.dependencies]
+tauri-plugin-autostart = "~2.5.1"
 
 [target.'cfg(windows)'.dependencies]
 # The tray's one-time "still running" notice, and one Raven per desktop session.

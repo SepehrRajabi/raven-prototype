@@ -9,13 +9,13 @@ export interface NestEntryController {
   enteringNestId: string | null;
   /** The Nest whose last entry ended in a join request that is still waiting for an answer. */
   requestedNestId: string | null;
-  enter: (nestId: string) => Promise<NestEntryResult>;
+  enter: (nestId: string, options?: { muted?: boolean }) => Promise<NestEntryResult>;
   cancel: () => void;
 }
 
 export function useNestEntry(
   joinNest: (nestId: string) => Promise<"joined" | "waiting">,
-  joinMediaSession: (nestId: string) => Promise<void>,
+  joinMediaSession: (nestId: string, options?: { muted?: boolean }) => Promise<void>,
   cancelMediaJoin: () => void,
 ): NestEntryController {
   const [pending, setPending] = useState<NestEntryPending | null>(null);
@@ -32,7 +32,7 @@ export function useNestEntry(
     cancelMediaJoin();
   }, [cancelMediaJoin]);
 
-  const enter = useCallback(async (nestId: string): Promise<NestEntryResult> => {
+  const enter = useCallback(async (nestId: string, options?: { muted?: boolean }): Promise<NestEntryResult> => {
     // One entry at a time; a second click while one is running is ignored.
     if (runRef.current) return "cancelled";
     const run: NestEntryRun = { cancelled: false, wake: null };
@@ -44,7 +44,7 @@ export function useNestEntry(
           joinNest,
           announce: (id) => api.announceNestEntry(id).catch(() => null),
           withdraw: (id) => api.cancelNestEntry(id),
-          joinMedia: joinMediaSession,
+          joinMedia: (id) => joinMediaSession(id, options),
           now: () => Date.now(),
           sleep: (ms, onWake) =>
             new Promise<void>((resolve) => {

@@ -6,7 +6,7 @@ import { ForwardDialog } from "@/components/chat/ForwardDialog";
 import { SelectionBar } from "@/components/chat/SelectionBar";
 import { ImageViewer } from "@/components/chat/ImageViewer";
 import { Composer } from "@/components/chat/Composer";
-import { ConversationAvatar } from "@/components/chat/ConversationRow";
+import { ConversationAvatar, SystemBadge } from "@/components/chat/ConversationRow";
 import { MessageList, type MessageListHandle } from "@/components/chat/MessageList";
 import { Button } from "@/components/ui/button";
 import { ConfirmDialog } from "@/components/ui/dialog";
@@ -15,8 +15,10 @@ import { toast } from "@/components/ui/toast";
 import { failureText } from "@/lib/chat/errors";
 import { notifies } from "@/lib/chat/notify";
 import { canSelect, clickSelection, selectionAfterKey, startSelection, type MessageSelection } from "@/lib/chat/selection";
-import { canShow, reactionLimits } from "@/lib/chat/attachments";
+import { canShow, isLibraryMessage, reactionLimits } from "@/lib/chat/attachments";
 import { addToTray } from "@/lib/chat/composerTray";
+import { dropsClaimed } from "@/lib/library/dropTarget";
+import { libraryCapabilities, type LibraryItem } from "@/lib/library/types";
 import { excerptOf, summarize, textNestsOfTree } from "@/lib/chat/reducer";
 import type { MentionCandidate, MentionResolver, MentionTarget } from "@/lib/chat/mentions";
 import type { ChatStore } from "@/lib/chat/store";
@@ -145,6 +147,8 @@ function OpenConversation({
   const imageLimits = useImageLimits(data);
   // Images can come in only where something can be sent, and not while editing a message.
   const takesImages = summary.canSend && imageLimits && !editing ? imageLimits : null;
+  const libraryCaps = useMemo(() => libraryCapabilities(data.serverProperties.properties), [data.serverProperties.properties]);
+  const library = useMemo(() => (libraryCaps && summary.canSend && me ? { userId: me, inSpace: Boolean(summary.treeId), capabilities: libraryCaps } : null), [libraryCaps, summary.canSend, me, summary.treeId]);
 
   // Files dragged over the window. Only the conversation on screen listens, so a drop
   // lands nowhere else.
@@ -159,6 +163,8 @@ function OpenConversation({
         else if (payload.type === "leave") setDropping(false);
         else if (payload.type === "drop") {
           setDropping(false);
+          // The open GIF and sticker picker takes the files instead.
+          if (dropsClaimed()) return;
           addToTray(id, payload.paths.map((path) => ({ kind: "path" as const, path })), takesImages);
         }
       })
@@ -305,8 +311,19 @@ function OpenConversation({
     list.current?.scrollToLatest();
   };
 
+  const sendLibrary = (item: LibraryItem) => {
+    const reply = replyingTo;
+    chat.sendLibrary(
+      id,
+      { itemId: item.id, kind: item.kind, format: item.format, assetId: item.assetId, variants: item.variants, width: item.width, height: item.height, title: item.title || undefined },
+      reply ? { id: reply.id, seq: reply.seq, senderId: reply.senderId, senderName: reply.senderName, excerpt: excerptOf(reply.body), attachments: summarize(reply.attachments) } : undefined,
+    );
+    setReplyingTo(null);
+    list.current?.scrollToLatest();
+  };
+
   const editLast = () => {
-    const mine = [...conversation.messages].reverse().find((message) => message.senderId === me && message.kind === "text" && !message.deletedAt && !message.origin);
+    const mine = [...conversation.messages].reverse().find((message) => message.senderId === me && message.kind === "text" && !message.deletedAt && !message.origin && !isLibraryMessage(message));
     if (mine && summary.canSend) startEdit(mine);
   };
 
@@ -352,7 +369,7 @@ function OpenConversation({
     ? <span className="text-warning">Reconnecting… Messages you send will go when Raven is back online.</span>
     : summary.kind === "dm"
       ? status
-      : summary.kind === "saved"
+      : summary.kind === "saved" || summary.kind === "raven"
         ? undefined
         : summary.kind === "group"
         ? `${summary.memberCount} ${summary.memberCount === 1 ? "person" : "people"}`
@@ -360,6 +377,8 @@ function OpenConversation({
 
   const intro = summary.kind === "dm"
     ? `Messages here are between you and ${name}.${summary.peerReadSeq !== undefined && sharesReadStatus && !summary.peerDeleted ?" You can each see when the other has read them; Settings › Messages turns that off." : ""}`
+    : summary.kind === "raven"
+      ? "Messages from Raven and your server’s admin arrive here."
     : summary.kind === "saved"
       ? "Only you can see this. Keep notes here, or add messages from any conversation."
       : summary.kind === "group"
@@ -379,6 +398,7 @@ function OpenConversation({
           )
         }
         title={name}
+        badge={summary.kind === "raven" ? <SystemBadge /> : undefined}
         subtitle={subtitle}
         titleLink={summary.kind === "dm" && summary.peer ? { label: `Open ${name}’s profile`, onOpen: () => onNavigate({ kind: "user", id: summary.peer!.id }) } : undefined}
         actions={
@@ -463,6 +483,7 @@ function OpenConversation({
           onDeleteForEveryone={askDelete}
           onOpenImage={openImage}
           onOpenPerson={(userId) => onNavigate({ kind: "user", id: userId })}
+          onOpenSpace={(treeId) => onNavigate({ kind: "tree", id: treeId })}
           onSave={summary.kind === "saved" ? undefined : saveMessage}
           onOpenSource={openSource}
           onForward={forwardOne}
@@ -479,6 +500,10 @@ function OpenConversation({
             onSave={summary.kind === "saved" ? undefined : saveChosen}
             onCancel={() => setSelection(null)}
           />
+        ) : summary.kind === "raven" ? (
+          <p className="mx-auto w-full max-w-3xl shrink-0 px-6 pb-5 text-center text-small text-muted-foreground">
+            {"Raven can't read replies. Messages here come from Raven and your server's admin."}
+          </p>
         ) : summary.canSend ? (
           <Composer
             conversationId={id}
@@ -499,6 +524,8 @@ function OpenConversation({
             }}
             onEditLast={editLast}
             imageLimits={imageLimits}
+            library={library}
+            onSendLibrary={sendLibrary}
             mentionCandidates={mentionCandidates}
             mentionResolver={mentionResolver}
             nestHeading={data.labels.nestPlural}
@@ -671,6 +698,8 @@ function describeConfirmation(confirming: Confirmation, name: string, kind: Conv
         title: `Clear ${name} for you?`,
         description: kind === "dm"
           ? "Everything here disappears from your devices, and the conversation leaves your list until there is a new message. The other person keeps their copy."
+          : kind === "raven"
+          ? "Everything here disappears from your devices. New messages from Raven still arrive."
           : kind === "saved"
           ? "Everything here disappears from your devices and can’t be brought back."
           : "Everything here disappears from your devices. Other people keep their copy, and new messages still arrive.",

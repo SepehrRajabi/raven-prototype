@@ -133,11 +133,14 @@ export function PendingList({
                 </>
               ) : item.kind === "knock" ? (
                 compact ? (
-                  <IconAnswer label={`Dismiss knock from ${item.from}`} disabled={busy} onClick={() => actions.run(key, () => data.dismissKnock(item.knock.id))}><X /></IconAnswer>
+                  <>
+                    <IconAnswer label={`Let ${item.from} in`} disabled={busy} onClick={() => actions.run(key, () => data.letInKnock(item.knock.id))}><Check /></IconAnswer>
+                    <IconAnswer label={`Not now, ${item.from}`} disabled={busy} onClick={() => actions.run(key, () => data.declineRoomKnock(item.knock.id))}><X /></IconAnswer>
+                  </>
                 ) : (
                   <>
-                    <Button size="xs" variant="secondary" onClick={() => open(pendingTarget(item))}>Open</Button>
-                    <Button size="xs" variant="ghost" disabled={busy} onClick={() => actions.run(key, () => data.dismissKnock(item.knock.id))}>Dismiss</Button>
+                    <Button size="xs" disabled={busy} onClick={() => actions.run(key, () => data.letInKnock(item.knock.id))}>Let in</Button>
+                    <Button size="xs" variant="ghost" disabled={busy} onClick={() => actions.run(key, () => data.declineRoomKnock(item.knock.id))}>Not now</Button>
                   </>
                 )
               ) : item.kind === "answer" ? (

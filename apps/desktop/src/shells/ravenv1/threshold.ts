@@ -1,3 +1,10 @@
+import type { NestDoor } from "@/lib/api";
+
+/** Whether the threshold offers Knock instead of Join. The server has the last word. */
+export function mustKnock({ door, peopleInside, canManage, selfInside }: { door: NestDoor | undefined; peopleInside: number; canManage: boolean; selfInside: boolean }): boolean {
+  return door === "knock" && peopleInside > 0 && !canManage && !selfInside;
+}
+
 /** What joining will reveal, as the threshold says it under the mic, camera and screen chips. */
 export interface JoinSummaryInput {
   /** The mic will be live on arrival (a microphone exists, it is on, and no "join muted" setting holds it). */

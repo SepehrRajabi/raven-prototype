@@ -110,6 +110,8 @@ services:
       S3_PATH_STYLE: ${S3_PATH_STYLE:-true}
       RAVEN_MEDIA_PREFIX: ${RAVEN_MEDIA_PREFIX:-profile-images}
       RAVEN_CHAT_MEDIA_PREFIX: ${RAVEN_CHAT_MEDIA_PREFIX:-chat-attachments}
+      # "on" lets the server read the pages people link to in chat, for link previews.
+      RAVEN_LINK_PREVIEWS: ${RAVEN_LINK_PREVIEWS:-off}
       # The edge proxy reaches the API over Docker's networks. Only from those addresses
       # is X-Forwarded-For believed, so sign-in throttling and the address shown beside a
       # session are the person's and cannot be made up by them.

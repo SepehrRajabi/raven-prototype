@@ -13,6 +13,7 @@ export function ViewHeader({
   subtitle,
   actions,
   titleLink,
+  badge,
 }: {
   leading?: ReactNode;
   title: string;
@@ -20,6 +21,8 @@ export function ViewHeader({
   actions?: ReactNode;
   /** Makes the picture and the title open something, such as the person's profile. */
   titleLink?: { label: string; onOpen: () => void };
+  /** A small chip beside the title, such as "System". */
+  badge?: ReactNode;
 }) {
   return (
     <header className="flex min-h-14 shrink-0 items-center gap-3 border-b border-border/70 px-6 py-2.5">
@@ -40,6 +43,11 @@ export function ViewHeader({
               </button>
             </Tooltip>
           </h1>
+        ) : badge ? (
+          <div className="flex min-w-0 items-center gap-2">
+            <h1 className="truncate text-title-sm font-semibold">{title}</h1>
+            {badge}
+          </div>
         ) : (
           <h1 className="truncate text-title-sm font-semibold">{title}</h1>
         )}
@@ -129,6 +137,7 @@ export function LiveNestCard({
   here,
   canJoin,
   showTree = true,
+  joinVariant = "default",
   onOpen,
 }: {
   nest: Nest | LauncherNest;
@@ -136,6 +145,8 @@ export function LiveNestCard({
   here: boolean;
   canJoin: boolean;
   showTree?: boolean;
+  /** "secondary" where the page already has its one primary button. */
+  joinVariant?: "default" | "secondary";
   /** The card and its Join button are one target: joining always passes the threshold. */
   onOpen: () => void;
 }) {
@@ -161,7 +172,7 @@ export function LiveNestCard({
         {here ? (
           <Button size="sm" variant="secondary" className="pointer-events-auto relative" onClick={onOpen}>Return</Button>
         ) : (
-          <Button size="sm" className="pointer-events-auto relative" disabled={!canJoin} onClick={onOpen}>Join…</Button>
+          <Button size="sm" variant={joinVariant} className="pointer-events-auto relative" disabled={!canJoin} onClick={onOpen}>Join…</Button>
         )}
       </div>
     </div>

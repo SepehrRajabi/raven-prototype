@@ -81,10 +81,12 @@ func (s *Server) drainChatObjectPurges() error {
 	}
 	for _, key := range keys {
 		// A copy (Saved messages, a forward) shares the original's objects. While any
-		// variant row still names this one, it stays stored; the last row's delete queues
-		// it again.
+		// variant row, link preview or library variant still names this one, it stays
+		// stored; the last row's delete queues it again.
 		var inUse int
-		err := s.db.QueryRow(`SELECT COUNT(*) FROM chat_attachment_variants WHERE object_key = ?`, key).Scan(&inUse)
+		err := s.db.QueryRow(`SELECT (SELECT COUNT(*) FROM chat_attachment_variants WHERE object_key = ?)
+ + (SELECT COUNT(*) FROM chat_link_previews WHERE image_key = ?)
+ + (SELECT COUNT(*) FROM library_asset_variants WHERE object_key = ?)`, key, key, key).Scan(&inUse)
 		if err != nil {
 			return err
 		}
@@ -111,7 +113,7 @@ func (s *Server) drainChatObjectPurges() error {
 	return nil
 }
 
-// chatRequestBodyLimit keeps every route except a variant upload to 1 MB. The global
+// chatRequestBodyLimit keeps every route except a variant or library upload to 1 MB. The global
 // BodyLimit has to fit the largest upload, and fasthttp reads the body before any handler
 // runs, so this saves parsing, not memory.
 func chatRequestBodyLimit(c *fiber.Ctx) error {
@@ -119,6 +121,8 @@ func chatRequestBodyLimit(c *fiber.Ctx) error {
 	// matching suffix. Checking the buffered length also covers chunked requests.
 	parts := strings.Split(strings.Trim(c.Path(), "/"), "/")
 	upload := c.Method() == fiber.MethodPut && len(parts) == 8 && parts[0] == "v1" && parts[1] == "chat" && parts[2] == "conversations" && parts[4] == "attachments" && parts[6] == "variants"
+	// The library original route allows the 20 MB a GIF or video can start as.
+	upload = upload || (c.Method() == fiber.MethodPut && len(parts) == 5 && parts[0] == "v1" && parts[1] == "library" && parts[2] == "assets" && parts[4] == "original")
 	if !upload && (c.Request().Header.ContentLength() > 1024*1024 || len(c.Body()) > 1024*1024) {
 		return fiber.NewError(413, "That request is too large.")
 	}

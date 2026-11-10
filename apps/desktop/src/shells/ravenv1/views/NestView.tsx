@@ -7,8 +7,9 @@ import { LiveMediaStage } from "@/components/media/LiveMediaStage";
 import type { VoiceModeration } from "@/components/media/VoiceModeration";
 import { watchNewSharesPreference } from "@/components/media/stageState";
 import { Button } from "@/components/ui/button";
+import { HouseRulesLine } from "./HouseRules";
 import { PortsControl } from "@/components/workshop/PortsPanel";
-import { api, type LauncherNest, type Nest } from "@/lib/api";
+import { api, ApiError, type LauncherNest, type Nest } from "@/lib/api";
 import { knownConnectedPeerIds } from "@/lib/callArrivals";
 import { callStatesByUser, callStateSupported, voiceModerationSupported } from "@/lib/callState";
 import { canModerateVoice } from "@/lib/permissions";
@@ -16,10 +17,12 @@ import { toast } from "@/components/ui/toast";
 import { cn } from "@/lib/utils";
 import { AvatarStack, GroupedList, LiveDot, SectionLabel } from "../atoms";
 import { reachRank } from "../people";
-import { joinSummary } from "../threshold";
+import { joinSummary, mustKnock } from "../threshold";
+import { useRoomKnock } from "../useRoomKnock";
 import { formatRelativeTime, type RavenShellData, type RavenView } from "../state";
 import type { RavenMediaAdapterState } from "../useRavenMediaAdapter";
 import type { NestEntryController } from "../useNestEntry";
+import { treeCan } from "@/lib/permissions";
 import { DoorwayHeader, DoorwayPage, namesSentence, nestPeople, treeNameFor } from "./shared";
 import { ReachableRow } from "./HomeView";
 
@@ -146,18 +149,41 @@ function NestThreshold({
   const treeLabel = data.labels.treeSingular.toLowerCase();
   const tree = nest.treeId ? data.getTree(nest.treeId) : undefined;
   const selfId = data.user?.id;
-  const people = nestPeople(nest, data).filter((person) => person.id !== selfId);
+  const everyone = nestPeople(nest, data);
+  const people = everyone.filter((person) => person.id !== selfId);
   const enteringHere = entry.enteringNestId === nest.id;
   const countdown = entry.pending?.nestId === nest.id ? entry.pending : null;
   const requested = entry.requestedNestId === nest.id;
   const busyElsewhere = Boolean(entry.enteringNestId && !enteringHere) || media.phase === "leaving";
   const otherNest = media.activeNestId && media.activeNestId !== nest.id ? data.getNest(media.activeNestId) : undefined;
   const closed = nest.lifecycleState === "expired" || nest.lifecycleState === "closed" || nest.status === "ended";
-  const failed = !enteringHere && media.phase === "error" && Boolean(media.error);
+  const quiet = nest.door === "quiet";
+  // The server said to knock even though this client thought it could walk in.
+  const [refused, setRefused] = useState(false);
+  useEffect(() => setRefused(false), [nest.id, people.length]);
+  const joinRoom = () => {
+    void entry
+      .enter(nest.id, { muted: quiet })
+      .then((result) => {
+        if (result === "joined") onNavigate({ kind: "nest", id: nest.id });
+      })
+      .catch((err: unknown) => {
+        if (err instanceof ApiError && err.reasonCode === "knock_required") setRefused(true);
+      });
+  };
+  const roomKnock = useRoomKnock(nest.id, selfId, joinRoom);
+  const knockFirst = roomKnock.phase !== "admitted" && !enteringHere && (refused || mustKnock({
+    door: nest.door,
+    peopleInside: people.length,
+    canManage: treeCan(nest.treeId ? data.getTreeDetails(nest.treeId) : undefined, "rooms.manage"),
+    selfInside: everyone.length > people.length,
+  }));
+  const knockSent = roomKnock.phase === "waiting" || roomKnock.phase === "sending";
+  const failed = !enteringHere && !knockFirst && media.phase === "error" && Boolean(media.error);
   // The API refuses a voted-out person with "You were voted out of this call. You can come back in N minutes."
   const votedOut = failed ? /^You were voted out of this call\.\s*(.*)$/.exec(media.error ?? "")?.[1] || null : null;
 
-  const joinsMuted = data.preferences.alwaysJoinMuted;
+  const joinsMuted = data.preferences.alwaysJoinMuted || quiet;
   const joinsCameraOff = data.preferences.joinWithCameraOff;
   const pushToTalk = usePushToTalk().settings;
   // "Join muted" holds the mic outside a call (`joinMutedHoldsMic`), so the chip shows the setting rather than a choice.
@@ -173,9 +199,9 @@ function NestThreshold({
   });
   const settingNote = !media.audioSupported
     ? "No microphone found."
-    : joinsMuted && joinsCameraOff
+    : data.preferences.alwaysJoinMuted && joinsCameraOff
       ? "Your settings are to join muted with your camera off."
-      : joinsMuted
+      : data.preferences.alwaysJoinMuted
         ? "Your setting is to join muted."
         : joinsCameraOff
           ? "Your setting is to join with your camera off."
@@ -213,17 +239,10 @@ function NestThreshold({
     </button>
   );
 
-  const join = () => {
-    void entry
-      .enter(nest.id)
-      .then((result) => {
-        if (result === "joined") onNavigate({ kind: "nest", id: nest.id });
-      })
-      .catch(() => undefined);
-  };
-
   const waiting = Boolean(countdown) || enteringHere;
-  const joinLabel = countdown
+  const joinLabel = knockFirst
+    ? knockSent ? "Knocked. Waiting for someone inside…" : "Knock"
+    : countdown
     ? `Joining in ${countdown.secondsLeft}…`
     : enteringHere
       ? "Connecting…"
@@ -272,6 +291,8 @@ function NestThreshold({
         )}
       </div>
 
+      <HouseRulesLine rules={treeDetails?.rules ?? []} />
+
       {closed ? (
         <div className="mt-6">
           <Button size="lg" variant="secondary" onClick={() => (tree ? onNavigate({ kind: "tree", id: tree.id }) : onBack())}>
@@ -309,6 +330,7 @@ function NestThreshold({
               {settingNote} {media.audioSupported ? settingsLink : null}
             </p>
           ) : null}
+          {quiet ? <p className="mt-1 text-small text-muted-foreground">You'll join muted. Unmute when you want to talk.</p> : null}
 
           {otherNest && !waiting ? (
             <p role="status" className="mt-6 text-small text-muted-foreground">
@@ -321,9 +343,9 @@ function NestThreshold({
               ref={joinRef}
               size="lg"
               className="relative min-w-0 flex-1 overflow-hidden"
-              disabled={busyElsewhere || enteringHere}
+              disabled={busyElsewhere || enteringHere || (knockFirst && knockSent)}
               aria-disabled={countdown ? true : undefined}
-              onClick={waiting ? undefined : join}
+              onClick={knockFirst ? roomKnock.knock : waiting ? undefined : joinRoom}
             >
               {countdown && countdownFrom ? (
                 <span
@@ -335,7 +357,9 @@ function NestThreshold({
               {enteringHere ? <Loader2 className="relative h-4 w-4 animate-spin" /> : null}
               <span className="relative truncate" aria-live="polite">{joinLabel}</span>
             </Button>
-            {waiting ? (
+            {knockFirst && knockSent ? (
+              <Button size="lg" variant="ghost" onClick={roomKnock.cancel}>Cancel</Button>
+            ) : waiting ? (
               <Button size="lg" variant="ghost" onClick={entry.cancel}>Cancel</Button>
             ) : (
               <Button size="lg" variant="ghost" onClick={onBack}>Back</Button>
@@ -362,6 +386,12 @@ function NestThreshold({
                   )}
                 </div>
               </div>
+            ) : knockFirst ? (
+              knockSent ? null : (
+                <p role="status" className="text-small text-muted-foreground">
+                  {roomKnock.phase === "declined" ? "Not now. Try again later." : "Someone inside lets you in. They see your name."}
+                </p>
+              )
             ) : requested && !enteringHere ? (
               <p role="status" className="text-small text-muted-foreground">You asked to join. Someone inside needs to let you in.</p>
             ) : countdown ? (

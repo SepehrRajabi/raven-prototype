@@ -27,6 +27,7 @@ import type {
   UserPresenceState,
   UserReachability,
   KnockReply,
+  NestDoor,
 } from "@/lib/api";
 
 export type Presence = "open" | "around" | "focused" | "dnd" | "invisible" | "offline";
@@ -151,7 +152,7 @@ export interface RavenShellData {
   selectApiServer: (url: string) => Promise<void>;
   refresh: () => Promise<void>;
   retryConnection: () => Promise<void>;
-  updatePreferences: (patch: Partial<Pick<UserPreferences, "displayName" | "uiLabels" | "colorPalette" | "alwaysJoinMuted" | "joinWithCameraOff" | "joinWithoutScreenSharing" | "followScreenShares" | "watchNewShares">>) => Promise<void>;
+  updatePreferences: (patch: Partial<Pick<UserPreferences, "displayName" | "uiLabels" | "colorPalette" | "alwaysJoinMuted" | "joinWithCameraOff" | "joinWithoutScreenSharing" | "followScreenShares" | "watchNewShares" | "ravenMessages">>) => Promise<void>;
   getTree: (id: string) => Tree | undefined;
   getNest: (id: string) => Nest | LauncherNest | undefined;
   getPerson: (id: string) => ShellPerson | undefined;
@@ -161,11 +162,14 @@ export interface RavenShellData {
   searchUsers: (query: string) => Promise<PublicUser[]>;
   searchTrees: (query: string) => Promise<TreeSearchResult[]>;
   createTree: (name: string) => Promise<Tree>;
-  updateTreeSettings: (treeId: string, settings: { name: string; description: string; joinPolicy: TreeJoinPolicy; visibility: TreeVisibility }) => Promise<Tree>;
+  updateTreeSettings: (treeId: string, settings: { name: string; description: string; joinPolicy: TreeJoinPolicy; visibility: TreeVisibility; savedStickersPublishable?: boolean }) => Promise<Tree>;
   deleteTree: (treeId: string, confirmation: string) => Promise<void>;
   joinTree: (treeId: string) => Promise<"joined" | "waiting">;
-  createTreeNest: (treeId: string, name: string) => Promise<Nest>;
+  createTreeNest: (treeId: string, name: string, door?: NestDoor) => Promise<Nest>;
   renameNest: (nestId: string, name: string) => Promise<void>;
+  updateNestSettings: (nestId: string, settings: { name?: string; door?: NestDoor }) => Promise<void>;
+  letInKnock: (knockId: string) => Promise<void>;
+  declineRoomKnock: (knockId: string) => Promise<void>;
   /** Ends a voice nest for everyone in it. The caller leaves the call first if it is in it. */
   deleteNest: (nestId: string) => Promise<void>;
   addTreeMember: (treeId: string, username: string, role?: TreeRole) => Promise<TreeMember>;

@@ -456,6 +456,8 @@ POST   /v1/chat/conversations/:id/messages
 POST   /v1/chat/conversations/:id/messages/:messageId/reactions
 POST   /v1/chat/conversations/:id/messages/:messageId/edit
 DELETE /v1/chat/conversations/:id/messages/:messageId?for=me|everyone
+DELETE /v1/chat/conversations/:id/messages/:messageId/link-preview
+GET    /v1/chat/conversations/:id/messages/:messageId/link-preview/image
 POST   /v1/chat/conversations/:id/read
 POST   /v1/chat/conversations/:id/typing
 ```
@@ -531,6 +533,16 @@ instead.
   previews and reply quotes omit reactions. `properties.chat.reactions` advertises
   `{maxPerPerson: 3, maxKinds: 20}`.
 - `POST …/edit` with `{ "body": "…" }`: the sender, within 48 hours.
+- Link previews, when the server announces `properties.chat.linkPreviews` (`{version: 1}`;
+  only with `RAVEN_LINK_PREVIEWS=on`). After a text message without attachments is sent,
+  the server reads the page at its first written-out `http(s)` address and adds
+  `linkPreview: {url, title?, description?, siteName?, image?: {contentType, width,
+  height}}` as a change to the message (`message.updated`, a new `changedSeq`). Text is
+  plain and shortened. An edit that changes the first address replaces the card; one that
+  keeps it keeps it. `DELETE …/link-preview` lets the sender take the card off for
+  everyone, also before it arrives, and answers `{ "message": ChatMessage }`. `GET
+  …/link-preview/image` serves the picture (JPEG, or PNG with transparency, at most 800
+  px) under the same rules as an attachment. Deleted messages omit the card.
 - `DELETE …?for=everyone` erases the text and leaves a marker. `?for=me` hides the message
   on the caller's devices and answers `{ "hideRev": 2, "unreadCount": 0 }`.
 - `POST …/read` with `{ "seq": 20 }` answers `{ "readSeq": 20, "unreadCount": 0 }`. The

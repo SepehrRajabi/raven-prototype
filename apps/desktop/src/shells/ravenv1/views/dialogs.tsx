@@ -4,8 +4,9 @@ import { Button } from "@/components/ui/button";
 import { Dialog } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectGroup, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { api, type Friend, type TreeRole } from "@/lib/api";
+import { api, type Friend, type TreeMember, type TreeRole } from "@/lib/api";
 import { friendsMatching } from "../people";
+import { displayNameFor } from "../state";
 
 
 /** Ask for one name and create something with it. */
@@ -159,6 +160,64 @@ export function AddTreeMemberDialog({
         <div className="flex justify-end gap-2">
           <Button variant="ghost" onClick={() => onOpenChange(false)}>Cancel</Button>
           <Button type="submit" disabled={working || !username.trim()}>{working ? "Adding…" : "Add person"}</Button>
+        </div>
+      </form>
+    </Dialog>
+  );
+}
+
+/** A name that applies inside one space only. Blank goes back to the usual name. */
+export function SpaceNameDialog({
+  member,
+  isSelf,
+  treeName,
+  onClose,
+  onSave,
+}: {
+  member: TreeMember | null;
+  isSelf: boolean;
+  treeName: string;
+  onClose: () => void;
+  onSave: (name: string) => Promise<void>;
+}) {
+  const [name, setName] = useState("");
+  const [working, setWorking] = useState(false);
+  useEffect(() => {
+    if (member) setName(member.nickname ?? "");
+  }, [member]);
+  const save = (next: string) => {
+    if (working) return;
+    setWorking(true);
+    void onSave(next)
+      .catch(() => undefined)
+      .finally(() => setWorking(false));
+  };
+  const who = member ? (isSelf ? "your" : `${member.username}’s`) : "";
+  return (
+    <Dialog
+      open={member != null}
+      onOpenChange={(open) => { if (!open) onClose(); }}
+      title={isSelf ? `Your name in ${treeName}` : `${member ? displayNameFor(member) : ""}’s name in ${treeName}`}
+      description={`Everyone in ${treeName} sees this instead of ${who} usual name. Nowhere else changes.`}
+      widthClassName="max-w-sm"
+    >
+      <form
+        className="space-y-4"
+        onSubmit={(event) => {
+          event.preventDefault();
+          save(name.trim());
+        }}
+      >
+        <label className="block space-y-1.5 text-small text-muted-foreground">
+          Name
+          <Input value={name} onChange={(event) => setName(event.currentTarget.value)} placeholder={member?.nickname ? member.username : member ? displayNameFor(member) : ""} maxLength={80} autoFocus />
+        </label>
+        <div className="flex justify-between gap-2">
+          <Button variant="ghost" disabled={working || !member?.nickname} onClick={() => save("")}>Use usual name</Button>
+          <div className="flex gap-2">
+            <Button variant="ghost" onClick={onClose}>Cancel</Button>
+            <Button type="submit" disabled={working}>{working ? "Saving…" : "Save"}</Button>
+          </div>
         </div>
       </form>
     </Dialog>

@@ -1,8 +1,9 @@
 import { useEffect, useState } from "react";
 import type { FormEvent } from "react";
-import { Plus } from "lucide-react";
+import { Plus, Send } from "lucide-react";
 import type { AdminApi } from "../api";
 import type { AdminUser, UserRole } from "../types";
+import { SendMessageDialog } from "../components/SendMessageDialog";
 import { Badge, Button, Dialog, Field, Input, List, Loading, Notice, PageHeader, Row, Select, TemporaryPasswordDialog } from "../components/ui";
 import { formatAgo, plural } from "../lib/format";
 import { navigate, routeHref } from "../lib/route";
@@ -13,6 +14,7 @@ export function UsersView({ api }: { api: AdminApi }) {
   const [query, setQuery] = useState("");
   const [status, setStatus] = useState("");
   const [creating, setCreating] = useState(false);
+  const [messaging, setMessaging] = useState(false);
   const [created, setCreated] = useState<{ user: AdminUser; temporaryPassword: string } | null>(null);
   // Search a moment after typing stops rather than on every key.
   useEffect(() => {
@@ -27,10 +29,16 @@ export function UsersView({ api }: { api: AdminApi }) {
         title="Users"
         description="Everyone with an account on this server."
         actions={
-          <Button variant="primary" onClick={() => setCreating(true)}>
-            <Plus size={16} aria-hidden />
-            New user
-          </Button>
+          <>
+            <Button onClick={() => setMessaging(true)}>
+              <Send size={16} aria-hidden />
+              Send a message
+            </Button>
+            <Button variant="primary" onClick={() => setCreating(true)}>
+              <Plus size={16} aria-hidden />
+              New user
+            </Button>
+          </>
         }
       />
       <div className="mb-4 flex flex-wrap gap-2">
@@ -65,6 +73,17 @@ export function UsersView({ api }: { api: AdminApi }) {
         </>
       ) : users.loading ? (
         <Loading />
+      ) : null}
+      {messaging ? (
+        <SendMessageDialog
+          api={api}
+          title="Send a message"
+          audiences={[
+            { label: "Everyone with an account", to: "all" },
+            ...(users.data && (query || status) && users.data.length > 0 ? [{ label: `The ${plural(users.data.length, "user")} listed`, to: users.data.map((user) => user.id) }] : []),
+          ]}
+          onClose={() => setMessaging(false)}
+        />
       ) : null}
       {creating ? (
         <CreateUserDialog

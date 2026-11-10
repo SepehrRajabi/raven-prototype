@@ -21,8 +21,8 @@ export interface AttachmentLimits {
 }
 
 /** The kinds this version can show, and the sources it can fetch from. */
-export const SHOWN_KINDS = new Set(["image"]);
-export const FETCHED_SOURCES = new Set(["stored"]);
+/** Which source each kind this version can show comes from. */
+const SHOWN: Record<string, string> = { image: "stored", gif: "library", sticker: "library" };
 
 const isRecord = (value: unknown): value is Record<string, unknown> => Boolean(value) && typeof value === "object" && !Array.isArray(value);
 const isPositive = (value: unknown): value is number => typeof value === "number" && Number.isFinite(value) && value > 0;
@@ -73,7 +73,7 @@ export function canSendImages(limits: AttachmentLimits | null): limits is Attach
 
 /** Whether this version of Raven can draw an attachment, rather than only mention it. */
 export function canShow(attachment: Pick<ChatAttachment, "kind" | "source">): boolean {
-  return SHOWN_KINDS.has(attachment.kind) && FETCHED_SOURCES.has(attachment.source);
+  return SHOWN[attachment.kind] === attachment.source;
 }
 
 /** "Photo", "2 photos", "Attachment". Empty when there is nothing attached. */
@@ -81,6 +81,8 @@ export function attachmentsExcerpt(attachments: ChatAttachmentSummary[] | undefi
   if (!attachments || attachments.length === 0) return "";
   const count = attachments.length;
   if (attachments.every((attachment) => attachment.kind === "image")) return count === 1 ? "Photo" : `${count} photos`;
+  if (count === 1 && attachments[0].kind === "gif") return "GIF";
+  if (count === 1 && attachments[0].kind === "sticker") return "Sticker";
   return count === 1 ? "Attachment" : `${count} attachments`;
 }
 
@@ -165,4 +167,9 @@ export function onlyPictures(attachments: Array<Pick<ChatAttachment, "kind" | "s
   return attachments.length > 0 && attachments.every((attachment) => canShow(attachment) && PICTURE_KINDS.has(attachment.kind));
 }
 
-const PICTURE_KINDS = new Set(["image"]);
+const PICTURE_KINDS = new Set(["image", "gif", "sticker"]);
+
+/** A GIF or sticker sent from a library. The server refuses to edit these. */
+export function isLibraryMessage(message: { attachments?: Array<Pick<ChatAttachment, "source">> }): boolean {
+  return Boolean(message.attachments?.some((attachment) => attachment.source === "library"));
+}

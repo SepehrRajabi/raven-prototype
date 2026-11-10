@@ -103,6 +103,8 @@ services:
       LIVEKIT_API_SECRET: ${LIVEKIT_API_SECRET:?LIVEKIT_API_SECRET is required}
       # Profile pictures and chat images live on this volume; no S3 needed.
       RAVEN_MEDIA_DIR: /var/lib/raven/media
+      # "on" lets the server read the pages people link to in chat, for link previews.
+      RAVEN_LINK_PREVIEWS: ${RAVEN_LINK_PREVIEWS:-off}
       # Your reverse proxy reaches the API from the host's Docker bridge, which is in
       # these ranges. Only from there is X-Forwarded-For believed.
       RAVEN_TRUSTED_PROXIES: ${RAVEN_TRUSTED_PROXIES:-172.16.0.0/12,192.168.0.0/16,10.0.0.0/8}

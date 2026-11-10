@@ -9,9 +9,7 @@ import (
 	_ "image/gif"
 	_ "image/jpeg"
 	_ "image/png"
-	"log"
 	stdhttp "net/http"
-	"os"
 	"path"
 	"strings"
 	"unicode/utf8"
@@ -36,6 +34,9 @@ type ChatAttachment struct {
 	Placeholder string          `json:"placeholder,omitempty"`
 	Variants    []string        `json:"variants"`
 	Meta        json.RawMessage `json:"meta,omitempty"`
+	// AssetID and Format are set on a library GIF or sticker, fetched by the asset.
+	AssetID string `json:"assetId,omitempty"`
+	Format  string `json:"format,omitempty"`
 }
 
 type chatVariantRule struct {
@@ -82,10 +83,13 @@ func chatAttachmentReady(q chatQuerier, id string) (bool, error) {
 
 // The joined query loads descriptions and variants for the whole page at once.
 func loadChatAttachments(q chatQuerier, where string, args ...any) (map[string][]ChatAttachment, error) {
+	// A library attachment has no variants of its own; it lists its asset's.
 	rows, err := q.Query(`SELECT a.message_id, a.id, a.kind, a.source, a.content_type, a.size_bytes, a.name,
- a.width, a.height, a.duration_ms, a.placeholder, a.meta_json, v.variant
+ a.width, a.height, a.duration_ms, a.placeholder, a.meta_json, COALESCE(v.variant, lv.variant), COALESCE(a.asset_id, ''), COALESCE(la.format, '')
  FROM chat_attachments a LEFT JOIN chat_attachment_variants v ON v.attachment_id = a.id
- WHERE `+where+` ORDER BY a.message_id, a.position, a.id, v.variant`, args...)
+ LEFT JOIN library_assets la ON la.id = a.asset_id
+ LEFT JOIN library_asset_variants lv ON lv.asset_id = a.asset_id AND lv.variant <> 'original' AND lv.object_key IS NOT NULL
+ WHERE `+where+` ORDER BY a.message_id, a.position, a.id, COALESCE(v.variant, lv.variant)`, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -95,7 +99,7 @@ func loadChatAttachments(q chatQuerier, where string, args ...any) (map[string][
 	for rows.Next() {
 		var a ChatAttachment
 		var message, meta, variant sql.NullString
-		if err := rows.Scan(&message, &a.ID, &a.Kind, &a.Source, &a.ContentType, &a.Size, &a.Name, &a.Width, &a.Height, &a.DurationMs, &a.Placeholder, &meta, &variant); err != nil {
+		if err := rows.Scan(&message, &a.ID, &a.Kind, &a.Source, &a.ContentType, &a.Size, &a.Name, &a.Width, &a.Height, &a.DurationMs, &a.Placeholder, &meta, &variant, &a.AssetID, &a.Format); err != nil {
 			return nil, err
 		}
 		if a.ID != lastID {
@@ -417,19 +421,15 @@ func (s *Server) uploadChatAttachment(c *fiber.Ctx) error {
 	if err := validateChatVariant(a, variant, contentType, body); err != nil {
 		return err
 	}
-	prefix := strings.Trim(strings.TrimSpace(os.Getenv("RAVEN_CHAT_MEDIA_PREFIX")), "/")
-	if prefix == "" {
-		prefix = "chat-attachments"
-	}
 	extension := map[string]string{"image/jpeg": ".jpg", "image/png": ".png", "image/gif": ".gif", "image/webp": ".webp"}[contentType]
-	objectKey := path.Join(prefix, conversation, id, variant+"-"+auth.NewID()+extension)
+	objectKey := path.Join(chatMediaPrefix(), conversation, id, variant+"-"+auth.NewID()+extension)
 	if err := s.profileMedia.Put(c.UserContext(), objectKey, body, contentType); err != nil {
 		return fiber.NewError(503, "The image couldn't be stored. Try again.")
 	}
 	recorded := false
 	defer func() {
 		if !recorded {
-			s.cleanupChatUpload(c, objectKey)
+			s.discardChatObject(objectKey)
 		}
 	}()
 
@@ -469,15 +469,6 @@ func (s *Server) uploadChatAttachment(c *fiber.Ctx) error {
 	return c.JSON(response)
 }
 
-func (s *Server) cleanupChatUpload(c *fiber.Ctx, key string) {
-	if err := s.profileMedia.Delete(c.UserContext(), key); err != nil {
-		// Preserve cleanup even when both the database update and object deletion fail.
-		_, queueErr := s.db.Exec(`INSERT INTO chat_object_purges (object_key, queued_at) VALUES (?, ?) ON CONFLICT (object_key) DO NOTHING`, key, database.Now())
-		if queueErr != nil {
-			log.Printf("chat upload cleanup: key=%s could not queue purge: %v", key, queueErr)
-		}
-	}
-}
 func (s *Server) fetchChatAttachment(c *fiber.Ctx) error {
 	conversation, id, variant, user := c.Params("id"), c.Params("attachmentId"), c.Params("variant"), currentUser(c).ID
 	access, err := s.chatAccessFor(s.db, conversation, user)
@@ -514,6 +505,12 @@ func (s *Server) fetchChatAttachment(c *fiber.Ctx) error {
 			return errChatMessageGone
 		}
 	}
+	return s.sendChatObject(c, key, contentType)
+}
+
+// sendChatObject answers with a stored chat object. Its key never changes once written,
+// so it is its ETag and it may be cached for good, privately. Authorization comes first.
+func (s *Server) sendChatObject(c *fiber.Ctx, key, contentType string) error {
 	c.Set(fiber.HeaderCacheControl, "private, max-age=31536000, immutable")
 	c.Set(fiber.HeaderETag, avatarETag(key))
 	c.Set("X-Content-Type-Options", "nosniff")

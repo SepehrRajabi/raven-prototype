@@ -1,7 +1,7 @@
 // What the server sends for text chat, and what the client keeps about it.
 // The wire shapes mirror services/api/internal/http/chat.go.
 
-export type ChatKind = "dm" | "group" | "nest" | "saved";
+export type ChatKind = "dm" | "group" | "nest" | "saved" | "raven";
 
 export interface ChatUser {
   id: string;
@@ -37,6 +37,9 @@ export interface ChatAttachment {
   /** What can be fetched, for example ["full", "preview"]. */
   variants: string[];
   meta?: Record<string, unknown>;
+  /** A GIF or sticker (`source: "library"`): the library asset and what `play` is. */
+  assetId?: string;
+  format?: "webm" | "webp" | "tgs";
 }
 
 /** All a list or a quote needs to say what a message holds ("Photo"). */
@@ -59,10 +62,28 @@ export interface ChatReplyRef {
 
 /** What a system line says happened. */
 export interface ChatSystemPayload {
-  event: "group_created" | "members_added" | "member_left" | "member_removed" | "renamed" | "topic_changed" | string;
+  /** Raven's own messages (a conversation of kind `raven`) say what they are here instead. */
+  type?: "admin" | "event" | string;
+  /** The words of an `admin` message. Plain text: never parse it. */
+  text?: string;
+  event?: "group_created" | "members_added" | "member_left" | "member_removed" | "renamed" | "topic_changed" | string;
   name?: string;
   user?: ChatUser;
   users?: ChatUser[];
+  /** An `event` message: an invitation from a space, with the names as they were when sent. */
+  eventId?: string;
+  treeId?: string;
+  space?: string;
+  title?: string;
+  host?: string;
+  hostUserId?: string;
+  startsAt?: string;
+  endsAt?: string;
+  rrule?: string;
+  target?: { kind?: "voice" | "text" | string; id?: string; name?: string };
+  /** Re-sent after the event was edited. */
+  updated?: boolean;
+  cancelled?: boolean;
 }
 
 export interface ChatReaction {
@@ -88,6 +109,21 @@ export interface ChatOrigin {
   };
 }
 
+/**
+ * The card the server adds under a message with a web address: what the page says about
+ * itself. It arrives after the message, as a change to it. The text is plain text.
+ */
+export interface ChatLinkPreview {
+  /** The address in the message the card is for. */
+  url: string;
+  title?: string;
+  description?: string;
+  siteName?: string;
+  /** The page's picture, fetched from the message's link-preview/image route. */
+  /** `version` changes whenever the picture does; older servers leave it out. */
+  image?: { version?: string; contentType: string; width: number; height: number };
+}
+
 export interface ChatMessage {
   id: string;
   conversationId: string;
@@ -102,6 +138,7 @@ export interface ChatMessage {
   /** The text, or the caption when there are attachments. May be empty then. */
   body: string;
   attachments?: ChatAttachment[];
+  linkPreview?: ChatLinkPreview;
   reactions?: ChatReaction[];
   replyTo?: ChatReplyRef;
   system?: ChatSystemPayload;
@@ -302,11 +339,25 @@ export interface PendingAttachment {
  *   sending  the request is out, or it failed in a way worth retrying and will go again
  *   failed   it will not be retried without the person asking
  */
+/** What a pending GIF or sticker needs to be sent and drawn before the server answers. */
+export interface PendingLibraryItem {
+  itemId: string;
+  kind: "gif" | "sticker";
+  format: "webm" | "webp" | "tgs";
+  assetId: string;
+  variants: string[];
+  width?: number;
+  height?: number;
+  title?: string;
+}
+
 export interface PendingMessage {
   clientMessageId: string;
   conversationId: string;
   body: string;
   attachments?: PendingAttachment[];
+  /** A GIF or sticker from a library: sent alone, with no text or attachments. */
+  library?: PendingLibraryItem;
   replyTo?: ChatReplyRef;
   createdAt: string;
   state: "queued" | "sending" | "failed";

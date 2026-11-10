@@ -296,8 +296,8 @@ func (s *Server) deleteAccountCore(user User, erase bool) error {
 			}
 			return err
 		}
-		if kind == chatKindSaved && creatorID == user.ID {
-			// Nobody else can read their Saved messages, so it goes with the account.
+		if (kind == chatKindSaved || kind == chatKindRaven) && creatorID == user.ID {
+			// Nobody else can read their Saved messages or Raven messages, so they go with the account.
 			if err := chatDeleteConversationTx(tx, conversationID); err != nil {
 				return err
 			}
@@ -370,6 +370,11 @@ func (s *Server) deleteAccountCore(user User, erase bool) error {
 		{`DELETE FROM user_presence WHERE user_id = ?`, []any{user.ID}},
 		{`DELETE FROM user_capability_overrides WHERE user_id = ?`, []any{user.ID}},
 		{`DELETE FROM auth_sessions WHERE user_id = ?`, []any{user.ID}},
+		// The personal GIF and sticker library goes, public items included. Maintenance
+		// purges assets nothing else uses; messages already sent keep theirs.
+		{`DELETE FROM library_items WHERE owner_user_id = ?`, []any{user.ID}},
+		{`DELETE FROM library_collections WHERE owner_user_id = ?`, []any{user.ID}},
+		{`DELETE FROM library_usage WHERE user_id = ?`, []any{user.ID}},
 	}
 	for _, statement := range statements {
 		if _, err := tx.Exec(statement.query, statement.args...); err != nil {

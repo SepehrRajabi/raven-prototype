@@ -8,6 +8,7 @@ export type Route =
   | { page: "user"; id: string }
   | { page: "spaces" }
   | { page: "space"; id: string }
+  | { page: "library" }
   | { page: "settings" }
   | { page: "audit" };
 
@@ -18,6 +19,8 @@ export function parseRoute(hash: string): Route {
       return parts[1] ? { page: "user", id: parts[1] } : { page: "users" };
     case "spaces":
       return parts[1] ? { page: "space", id: parts[1] } : { page: "spaces" };
+    case "library":
+      return { page: "library" };
     case "settings":
       return { page: "settings" };
     case "audit":

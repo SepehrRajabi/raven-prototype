@@ -5,7 +5,7 @@
 // trying again can never produce a second message.
 
 import { isHttpFailure } from "./errors";
-import type { PendingAttachment, PendingMessage, PreparedAttachment } from "./types";
+import type { PendingAttachment, PendingLibraryItem, PendingMessage, PreparedAttachment } from "./types";
 
 /** How long a message keeps being retried on its own before the person is asked. */
 export const SEND_RETRY_WINDOW_MS = 10 * 60_000;
@@ -139,6 +139,25 @@ export function saveOutbox(storage: OutboxStorage, userId: string, pending: Pend
  * it may be hours old, so each message comes back marked as not sent and waits for the
  * person to send it or discard it.
  */
+/** A saved GIF or sticker; null when it isn't one or is damaged. */
+function readPendingLibrary(value: unknown): PendingLibraryItem | null {
+  if (!value || typeof value !== "object") return null;
+  const item = value as Partial<PendingLibraryItem>;
+  if (typeof item.itemId !== "string" || typeof item.assetId !== "string") return null;
+  if (item.kind !== "gif" && item.kind !== "sticker") return null;
+  if (item.format !== "webm" && item.format !== "webp" && item.format !== "tgs") return null;
+  return {
+    itemId: item.itemId,
+    kind: item.kind,
+    format: item.format,
+    assetId: item.assetId,
+    variants: Array.isArray(item.variants) ? item.variants.filter((variant): variant is string => typeof variant === "string") : [],
+    width: typeof item.width === "number" ? item.width : undefined,
+    height: typeof item.height === "number" ? item.height : undefined,
+    title: typeof item.title === "string" ? item.title : undefined,
+  };
+}
+
 export function loadOutbox(storage: OutboxStorage, userId: string): PendingMessage[] {
   try {
     const parsed = JSON.parse(storage.getItem(storageKey(userId)) ?? "null") as { version?: number; items?: unknown } | null;
@@ -153,12 +172,14 @@ export function loadOutbox(storage: OutboxStorage, userId: string): PendingMessa
       // One that can no longer be read would send the message without it. Leave the
       // message out rather than send something different from what was written.
       if (attachments.length !== saved.length) return [];
-      if (!candidate.body.trim() && attachments.length === 0) return [];
+      const library = readPendingLibrary(candidate.library);
+      if (!candidate.body.trim() && attachments.length === 0 && !library) return [];
       return [{
         clientMessageId: candidate.clientMessageId,
         conversationId: candidate.conversationId,
         body: candidate.body,
         ...(attachments.length ? { attachments } : {}),
+        ...(library ? { library } : {}),
         ...(candidate.reuploaded ? { reuploaded: true } : {}),
         replyTo: candidate.replyTo,
         createdAt: typeof candidate.createdAt === "string" ? candidate.createdAt : new Date().toISOString(),

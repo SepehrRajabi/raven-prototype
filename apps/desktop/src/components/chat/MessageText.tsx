@@ -8,7 +8,7 @@ import { NestGlyph, PresenceDot } from "@/shells/ravenv1/atoms";
 import type { Presence } from "@/shells/ravenv1/state";
 
 /** Opens a web address in the person's browser, never inside Raven's own window. */
-function openAddress(href: string) {
+export function openAddress(href: string) {
   void invoke("plugin:opener|open_url", { url: href }).catch(() => {
     // Not inside the desktop app (a browser preview): fall back to a new tab.
     window.open(href, "_blank", "noopener,noreferrer");

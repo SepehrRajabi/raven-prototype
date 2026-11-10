@@ -64,6 +64,9 @@ const (
 	chatKindNest  = "nest"
 	// chatKindSaved is a person's Saved messages: one member, notes and copies.
 	chatKindSaved = "saved"
+	// chatKindRaven is a person's Raven contact: one member, messages from Raven and the
+	// server's admin, never written to by the person.
+	chatKindRaven = "raven"
 
 	chatMessageText   = "text"
 	chatMessageSystem = "system"
@@ -128,6 +131,7 @@ type ChatMessage struct {
 	Kind            string           `json:"kind"`
 	Body            string           `json:"body"`
 	Attachments     []ChatAttachment `json:"attachments,omitempty"`
+	LinkPreview     *ChatLinkPreview `json:"linkPreview,omitempty"`
 	ReplyTo         *ChatReplyRef    `json:"replyTo,omitempty"`
 	System          json.RawMessage  `json:"system,omitempty"`
 	CreatedAt       string           `json:"createdAt"`
@@ -240,11 +244,16 @@ func (s *Server) registerChatRoutes(service fiber.Router) {
 	conversation.Post("/messages/:messageId/reactions", s.chatLimiter("react", 60, time.Minute), s.chatRoute("react", s.reactToChatMessage))
 	conversation.Post("/messages/:messageId/edit", s.chatLimiter("edit", 30, time.Minute), s.chatRoute("edit", s.editChatMessage))
 	conversation.Delete("/messages/:messageId", s.chatLimiter("delete", 60, time.Minute), s.chatRoute("delete message", s.deleteChatMessage))
+	conversation.Get("/messages/:messageId/link-preview/image", s.chatRoute("fetch link preview image", s.fetchChatLinkPreviewImage))
+	conversation.Delete("/messages/:messageId/link-preview", s.chatLimiter("edit", 30, time.Minute), s.chatRoute("remove link preview", s.removeChatLinkPreview))
 	conversation.Post("/read", s.chatRoute("read", s.markChatRead))
 	conversation.Get("/seen", s.chatRoute("seen", s.getChatSeen))
 	conversation.Post("/typing", s.chatLimiter("typing", 20, 10*time.Second), s.chatRoute("typing", s.chatTyping))
 
 	s.registerTreeLayoutRoutes(service)
+	s.registerBoardRoutes(service)
+	s.registerNoteRoutes(service)
+	s.registerEventRoutes(service)
 }
 
 // chatRoute logs a chat request that failed for a reason the caller could not have
@@ -290,6 +299,7 @@ func (s *Server) userLimiter(route string, max int, window time.Duration, messag
 var (
 	errChatNotFound      = fiber.NewError(fiber.StatusNotFound, "This conversation isn’t available.")
 	errChatMessageGone   = fiber.NewError(fiber.StatusNotFound, "That message isn’t available.")
+	errChatRavenReadOnly = fiber.NewError(fiber.StatusForbidden, "Raven can’t read replies.")
 	errChatFriendsOnly   = fiber.NewError(fiber.StatusForbidden, "You can only message people you are friends with.")
 	errChatPeerDeleted   = fiber.NewError(fiber.StatusForbidden, "This account was deleted. You can still read your conversation.")
 	errChatNotAllowed    = fiber.NewError(fiber.StatusForbidden, "You are not allowed to do that here.")

@@ -51,6 +51,12 @@ export function NotificationSettingsPanel() {
         disabled={!settings.messages}
         onChange={(messageText) => set({ messageText })}
       />
+      <SettingsToggleRow
+        label="Events"
+        description="Invitations to events and a reminder 10 minutes before they start."
+        checked={settings.events}
+        onChange={(events) => set({ events })}
+      />
     </SettingsRows>
   );
 }

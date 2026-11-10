@@ -1,0 +1,15 @@
+services:
+  raven-telegram-bot:
+    build:
+      context: ../../..
+      dockerfile: infra/homelab/telegram-bot/Dockerfile
+    restart: unless-stopped
+    environment:
+      TELEGRAM_BOT_TOKEN: ${TORAVEN_TELEGRAM_BOT_TOKEN:?TORAVEN_TELEGRAM_BOT_TOKEN is required}
+      TELEGRAM_API_URL: ${TELEGRAM_API_URL:-https://api.telegram.org}
+      RAVEN_BOT_DATA_DIR: /var/lib/raven-bot
+    volumes:
+      - raven_telegram_bot_data:/var/lib/raven-bot
+
+volumes:
+  raven_telegram_bot_data:

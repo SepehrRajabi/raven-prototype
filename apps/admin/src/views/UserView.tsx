@@ -4,6 +4,7 @@ import { ArrowLeft } from "lucide-react";
 import type { AdminApi } from "../api";
 import type { AdminUser, CapabilityMode, SessionUser, UserCapability, UserDetail } from "../types";
 import { ImageViewer } from "../components/ImageViewer";
+import { SendMessageDialog } from "../components/SendMessageDialog";
 import { Badge, Button, ConfirmDialog, Dialog, Field, Input, List, Loading, Notice, PageHeader, Row, Section, Select, TemporaryPasswordDialog } from "../components/ui";
 import { CAPABILITY_LIMITS, CAPABILITY_TEXT, describeEffective, formatAgo, formatDate, formatDateTime } from "../lib/format";
 import { IMAGE_TYPES, imageProblem } from "../lib/image";
@@ -16,6 +17,7 @@ export function UserView({ api, userId, me }: { api: AdminApi; userId: string; m
   const detail = useLoad(() => api.user(userId), userId);
   const [pending, setPending] = useState<Pending>(null);
   const [temporaryPassword, setTemporaryPassword] = useState("");
+  const [messaging, setMessaging] = useState(false);
   const [error, setError] = useState("");
 
   if (detail.error && !detail.data) {
@@ -50,9 +52,16 @@ export function UserView({ api, userId, me }: { api: AdminApi; userId: string; m
           </span>
         }
         actions={
-          <Button size="sm" onClick={() => setPending("rename")}>
-            Edit name
-          </Button>
+          <>
+            {user.status === "active" ? (
+              <Button size="sm" onClick={() => setMessaging(true)}>
+                Send a message
+              </Button>
+            ) : null}
+            <Button size="sm" onClick={() => setPending("rename")}>
+              Edit name
+            </Button>
+          </>
         }
       />
       {error ? <div className="mb-4"><Notice>{error}</Notice></div> : null}
@@ -178,6 +187,7 @@ export function UserView({ api, userId, me }: { api: AdminApi; userId: string; m
         </List>
       </Section>
 
+      {messaging ? <SendMessageDialog api={api} title={`Message ${user.displayName}`} audiences={[{ label: user.displayName, to: [user.id] }]} onClose={() => setMessaging(false)} /> : null}
       {pending === "suspend" ? <SuspendDialog api={api} detail={detail.data} onClose={() => setPending(null)} onDone={apply} /> : null}
       {pending === "rename" ? <RenameDialog api={api} detail={detail.data} onClose={() => setPending(null)} onDone={apply} /> : null}
       {pending === "reactivate" ? (

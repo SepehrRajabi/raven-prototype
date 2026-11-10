@@ -28,6 +28,9 @@ const ID_CHECK_UPDATES: &str = "tray:check-updates";
 const ID_OPEN: &str = "tray:open";
 const ID_QUIT: &str = "tray:quit";
 const ID_PRESENCE_PREFIX: &str = "tray:presence:";
+/// Passed by the sign-in entry that "Launch at Startup" registers, so that
+/// launch leaves the window closed and Raven in the tray.
+pub const AUTOSTART_FLAG: &str = "--hidden";
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
@@ -51,6 +54,7 @@ impl Default for TraySettings {
 #[serde(default, rename_all = "camelCase")]
 pub struct TraySettingsPatch {
     pub close_to_tray: Option<bool>,
+    pub launch_at_startup: Option<bool>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -58,6 +62,9 @@ pub struct TraySettingsPatch {
 pub struct TraySettingsView {
     pub supported: bool,
     pub close_to_tray: bool,
+    /// Raven starts in the tray when the user signs in to the computer. Off until the
+    /// user turns it on; the operating system's sign-in list is the record of it.
+    pub launch_at_startup: bool,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize)]
@@ -164,6 +171,8 @@ pub enum TrayError {
     Io { message: String },
     #[error("tray updates are only available to the main window")]
     NotMainWindow,
+    #[error("start at sign-in could not be changed: {message}")]
+    Autostart { message: String },
 }
 
 pub fn new_tray_state() -> TrayState {
@@ -174,15 +183,34 @@ pub fn new_tray_state() -> TrayState {
 }
 
 /// Load the saved settings and put the icon in the notification area (the menu bar on
-/// macOS).
-pub fn initialize(app: &AppHandle) -> Result<(), TrayError> {
+/// macOS). Returns whether the icon is there.
+pub fn initialize(app: &AppHandle) -> Result<bool, TrayError> {
     let state = app.state::<TrayState>();
     *state.settings.lock().map_err(state_poisoned)? = load_settings_from_path(&settings_path(app)?);
     #[cfg(any(windows, target_os = "macos"))]
-    if let Err(error) = platform::install(app) {
-        eprintln!("[raven] tray icon could not be created: {error}");
+    let installed = match platform::install(app) {
+        Ok(()) => true,
+        Err(error) => {
+            eprintln!("[raven] tray icon could not be created: {error}");
+            false
+        }
+    };
+    #[cfg(not(any(windows, target_os = "macos")))]
+    let installed = false;
+    refresh(app, &state)?;
+    Ok(installed)
+}
+
+/// The main window starts hidden. Show it, unless the sign-in entry started Raven and
+/// the tray icon is there to bring it back.
+pub fn show_main_at_launch(app: &AppHandle, tray_ready: bool) {
+    if !(tray_ready && launched_at_sign_in(std::env::args())) {
+        show_main_window(app);
     }
-    refresh(app, &state)
+}
+
+fn launched_at_sign_in(mut args: impl Iterator<Item = String>) -> bool {
+    args.any(|arg| arg == AUTOSTART_FLAG)
 }
 
 #[tauri::command]
@@ -214,9 +242,12 @@ pub fn tray_set_unread(
 }
 
 #[tauri::command]
-pub fn tray_get_settings(state: State<'_, TrayState>) -> Result<TraySettingsView, TrayError> {
+pub fn tray_get_settings(
+    app: AppHandle,
+    state: State<'_, TrayState>,
+) -> Result<TraySettingsView, TrayError> {
     let settings = state.settings.lock().map_err(state_poisoned)?.clone();
-    Ok(settings_view(&settings))
+    Ok(settings_view(&app, &settings))
 }
 
 #[tauri::command]
@@ -225,6 +256,9 @@ pub fn tray_update_settings(
     state: State<'_, TrayState>,
     patch: TraySettingsPatch,
 ) -> Result<TraySettingsView, TrayError> {
+    if let Some(enabled) = patch.launch_at_startup {
+        autostart::set(&app, enabled)?;
+    }
     let next = {
         let mut settings = state.settings.lock().map_err(state_poisoned)?;
         if let Some(close_to_tray) = patch.close_to_tray {
@@ -233,7 +267,7 @@ pub fn tray_update_settings(
         settings.clone()
     };
     save_settings_to_path(&settings_path(&app)?, &next)?;
-    Ok(settings_view(&next))
+    Ok(settings_view(&app, &next))
 }
 
 /// The main window's close button. On Windows and macOS it hides the window and leaves
@@ -260,10 +294,50 @@ fn is_stale(current: &ThumbnailToolbarSnapshot, next: &ThumbnailToolbarSnapshot)
     next.generation == current.generation && next.revision <= current.revision
 }
 
-fn settings_view(settings: &TraySettings) -> TraySettingsView {
+fn settings_view(app: &AppHandle, settings: &TraySettings) -> TraySettingsView {
     TraySettingsView {
         supported: cfg!(any(windows, target_os = "macos")),
         close_to_tray: settings.close_to_tray,
+        launch_at_startup: autostart::is_enabled(app),
+    }
+}
+
+/// The sign-in entry is kept by the operating system (the Run key on Windows, a
+/// LaunchAgent on macOS), so it is read from there rather than from tray.json.
+#[cfg(any(windows, target_os = "macos"))]
+mod autostart {
+    use tauri::AppHandle;
+    use tauri_plugin_autostart::ManagerExt;
+
+    use super::TrayError;
+
+    pub(super) fn is_enabled(app: &AppHandle) -> bool {
+        app.autolaunch().is_enabled().unwrap_or(false)
+    }
+
+    pub(super) fn set(app: &AppHandle, enabled: bool) -> Result<(), TrayError> {
+        let launcher = app.autolaunch();
+        // Removing an entry that is not there is an error on Windows.
+        if launcher.is_enabled().unwrap_or(false) == enabled {
+            return Ok(());
+        }
+        let result = if enabled { launcher.enable() } else { launcher.disable() };
+        result.map_err(|error| TrayError::Autostart { message: error.to_string() })
+    }
+}
+
+#[cfg(not(any(windows, target_os = "macos")))]
+mod autostart {
+    use tauri::AppHandle;
+
+    use super::TrayError;
+
+    pub(super) fn is_enabled(_app: &AppHandle) -> bool {
+        false
+    }
+
+    pub(super) fn set(_app: &AppHandle, _enabled: bool) -> Result<(), TrayError> {
+        Ok(())
     }
 }
 
@@ -1107,6 +1181,14 @@ mod tests {
         entries.iter().any(|entry| {
             matches!(entry, MenuEntry::Item { id, enabled: true, .. } if *id == wanted)
         })
+    }
+
+    #[test]
+    fn only_the_sign_in_entry_starts_hidden() {
+        let args = |list: &[&str]| list.iter().map(|arg| arg.to_string()).collect::<Vec<_>>().into_iter();
+        assert!(launched_at_sign_in(args(&["raven.exe", AUTOSTART_FLAG])));
+        assert!(!launched_at_sign_in(args(&["raven.exe"])));
+        assert!(!launched_at_sign_in(args(&["raven.exe", "--hidden-extra"])));
     }
 
     #[test]

@@ -1,5 +1,18 @@
 import { describe, expect, test } from "bun:test";
-import { joinSummary } from "./threshold";
+import { joinSummary, mustKnock } from "./threshold";
+
+describe("mustKnock", () => {
+  const room = { door: "knock" as const, peopleInside: 1, canManage: false, selfInside: false };
+  test("a knock-first room with someone inside asks for a knock", () => expect(mustKnock(room)).toBe(true));
+  test("an empty room does not", () => expect(mustKnock({ ...room, peopleInside: 0 })).toBe(false));
+  test("people who run the room walk in", () => expect(mustKnock({ ...room, canManage: true })).toBe(false));
+  test("someone already inside walks back in", () => expect(mustKnock({ ...room, selfInside: true })).toBe(false));
+  test("open, quiet and older servers do not", () => {
+    expect(mustKnock({ ...room, door: "open" })).toBe(false);
+    expect(mustKnock({ ...room, door: "quiet" })).toBe(false);
+    expect(mustKnock({ ...room, door: undefined })).toBe(false);
+  });
+});
 
 describe("joinSummary", () => {
   test("muted with the camera off", () => {

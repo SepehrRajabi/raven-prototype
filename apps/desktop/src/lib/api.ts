@@ -72,6 +72,8 @@ export type TreeJoinPolicy = "free" | "request";
 export type TreeVisibility = "public" | "private";
 export type UserPresenceState = "offline" | "available" | "dnd" | "in_nest" | "invisible";
 export type UserReachability = "open" | "around" | "focused" | "unavailable";
+/** How a room lets people in. Temporary nests are always open. */
+export type NestDoor = "open" | "knock" | "quiet";
 export type KnockStatus = "pending" | "accepted" | "declined" | "dismissed" | "expired";
 /** An answer to a knock on a person: Coming now, Coming in 10 min, Ask me later, Not today. */
 export type KnockReply = "coming" | "soon" | "later" | "not_today" | "message";
@@ -92,6 +94,8 @@ export interface NestLiveUpdate {
   /** On "workshop.share.*" updates: the share, and on "ended" why it ended. */
   share?: WorkshopShare;
   reason?: string;
+  /** On "event.invited" and "event.reminder", which reach the event's invitees only. */
+  event?: EventNotice;
   at?: string;
 }
 
@@ -115,6 +119,8 @@ export interface UserPreferences {
    * that predate it. Not derived from `followScreenShares` (which defaulted on).
    */
   watchNewShares?: boolean;
+  /** Everything Raven sends to this person: event messages and the server admin's notes. On unless turned off; absent from servers that predate it. */
+  ravenMessages?: boolean;
   updatedAt: string;
 }
 
@@ -187,6 +193,8 @@ export interface Nest {
   type: NestType;
   status: "active" | "ended";
   lifecycleState: "created" | "waiting" | "ready" | "active" | "empty" | "expired" | "closed";
+  /** Absent from older servers, which have no doors. */
+  door?: NestDoor;
   createdAt: string;
   updatedAt: string;
   archivedAt?: string | null;
@@ -400,14 +408,107 @@ export interface FriendRequest {
   resolvedAt?: string | null;
 }
 
+/** One house rule of a space. Icon ids come from shells/ravenv1/boardIcons.ts. */
+export interface TreeRule {
+  id: string;
+  icon: string;
+  text: string;
+  position: number;
+}
+
+/** A pinned note on a space's lobby. Title and description may hold mention tokens. */
+export interface TreeNote {
+  id: string;
+  title: string;
+  description: string;
+  /** ISO time it stops showing, or null for no end. */
+  endsAt: string | null;
+  position: number;
+}
+
+export interface TreeNoteInput {
+  title: string;
+  description: string;
+  endsAt: string | null;
+}
+
+/** One sitting of a scheduled event, in UTC. */
+export interface TreeEventOccurrence {
+  startsAt: string;
+  endsAt: string;
+}
+
+/** A gathering scheduled in one room of a space. Title and description may hold mention tokens. */
+export interface TreeEvent {
+  id: string;
+  title: string;
+  description: string;
+  hostUserId: string;
+  /** The host's name in this space. */
+  hostName: string;
+  nestId: string | null;
+  conversationId: string | null;
+  roomName: string;
+  /** The first start of the series. */
+  startsAt: string;
+  endsAt: string | null;
+  durationMinutes: number | null;
+  /** RFC 5545 subset, for example "FREQ=WEEKLY;BYDAY=SU". Null for a one-off. */
+  rrule: string | null;
+  /** The IANA zone the series repeats in. */
+  tz: string;
+  inviteAll: boolean;
+  /** Empty for people who cannot manage the board. */
+  inviteeIds: string[];
+  sendInviteMessage: boolean;
+  pinned: boolean;
+  /** The occurrence under way or next. */
+  occurrence: TreeEventOccurrence;
+}
+
+export interface TreeEventInput {
+  title: string;
+  description: string;
+  hostUserId: string;
+  nestId: string | null;
+  conversationId: string | null;
+  startsAt: string;
+  endsAt: string | null;
+  durationMinutes: number | null;
+  rrule: string | null;
+  tz: string;
+  inviteAll: boolean;
+  inviteeIds: string[];
+  sendInviteMessage: boolean;
+  pinned: boolean;
+}
+
+/** Rides on "event.invited" and "event.reminder", which reach invitees only. */
+export interface EventNotice {
+  id: string;
+  treeId: string;
+  title: string;
+  space: string;
+  room: string;
+  host: string;
+  startsAt: string;
+}
+
 export interface TreeDetails {
   tree: Tree;
   members: TreeMember[];
   activeNests: Nest[];
   inactiveNests: Nest[];
   joinRequests: TreeJoinRequest[];
+  rules: TreeRule[];
+  /** Absent from older servers. */
+  notes?: TreeNote[];
+  /** Scheduled events that are not over, pinned first. Absent from older servers. */
+  events?: TreeEvent[];
   /** The asker's role here and what it allows, decided by the server. */
   viewer?: { role: TreeRole; permissions: string[] };
+  /** The space's sticker settings. Absent from servers without GIFs and stickers. */
+  library?: { savedStickersPublishable: boolean };
 }
 
 export interface HomeState {
@@ -545,10 +646,19 @@ export function parseNestLiveUpdateData(data: string): NestLiveUpdate | null {
       share: parsed.share && typeof parsed.share === "object" ? (parsed.share as WorkshopShare) : undefined,
       reason: typeof parsed.reason === "string" && parsed.reason ? parsed.reason : undefined,
       at: typeof parsed.at === "string" && parsed.at ? parsed.at : undefined,
+      event: parseEventNotice(parsed.event),
     };
   } catch {
     return null;
   }
+}
+
+function parseEventNotice(value: unknown): EventNotice | undefined {
+  if (!value || typeof value !== "object") return undefined;
+  const notice = value as Record<string, unknown>;
+  const text = (key: string) => (typeof notice[key] === "string" ? (notice[key] as string) : "");
+  if (!text("id") || !text("title")) return undefined;
+  return { id: text("id"), treeId: text("treeId"), title: text("title"), space: text("space"), room: text("room"), host: text("host"), startsAt: text("startsAt") };
 }
 
 export class ApiClient {
@@ -904,7 +1014,7 @@ export class ApiClient {
     return this.request<{ preferences: UserPreferences }>("/v1/preferences");
   }
 
-  updatePreferences(patch: Partial<Pick<UserPreferences, "displayName" | "uiLabels" | "colorPalette" | "alwaysJoinMuted" | "joinWithCameraOff" | "joinWithoutScreenSharing" | "followScreenShares" | "watchNewShares">>) {
+  updatePreferences(patch: Partial<Pick<UserPreferences, "displayName" | "uiLabels" | "colorPalette" | "alwaysJoinMuted" | "joinWithCameraOff" | "joinWithoutScreenSharing" | "followScreenShares" | "watchNewShares" | "ravenMessages">>) {
     return this.request<{ preferences: UserPreferences; user: User }>("/v1/preferences", {
       method: "POST",
       body: JSON.stringify(patch),
@@ -976,11 +1086,59 @@ export class ApiClient {
     return this.request<TreeDetails>(`/v1/trees/${id}`);
   }
 
-  updateTreeSettings(treeId: string, payload: { name: string; description: string; joinPolicy: TreeJoinPolicy; visibility: TreeVisibility }) {
+  updateTreeSettings(treeId: string, payload: { name: string; description: string; joinPolicy: TreeJoinPolicy; visibility: TreeVisibility; savedStickersPublishable?: boolean }) {
     return this.request<{ tree: Tree }>(`/v1/trees/${treeId}/settings`, {
       method: "POST",
       body: JSON.stringify(payload),
     });
+  }
+
+  createTreeRule(treeId: string, payload: { icon: string; text: string }) {
+    return this.request<{ rule: TreeRule }>(`/v1/trees/${treeId}/rules`, { method: "POST", body: JSON.stringify(payload) });
+  }
+
+  editTreeRule(treeId: string, ruleId: string, payload: { icon: string; text: string }) {
+    return this.request<{ rule: TreeRule }>(`/v1/trees/${treeId}/rules/${ruleId}`, { method: "POST", body: JSON.stringify(payload) });
+  }
+
+  deleteTreeRule(treeId: string, ruleId: string) {
+    return this.request<void>(`/v1/trees/${treeId}/rules/${ruleId}`, { method: "DELETE" });
+  }
+
+  orderTreeRules(treeId: string, ids: string[]) {
+    return this.request<{ rules: TreeRule[] }>(`/v1/trees/${treeId}/rules/order`, { method: "POST", body: JSON.stringify({ ids }) });
+  }
+
+  createTreeNote(treeId: string, payload: TreeNoteInput) {
+    return this.request<{ note: TreeNote }>(`/v1/trees/${treeId}/notes`, { method: "POST", body: JSON.stringify(payload) });
+  }
+
+  editTreeNote(treeId: string, noteId: string, payload: TreeNoteInput) {
+    return this.request<{ note: TreeNote }>(`/v1/trees/${treeId}/notes/${noteId}`, { method: "POST", body: JSON.stringify(payload) });
+  }
+
+  deleteTreeNote(treeId: string, noteId: string) {
+    return this.request<void>(`/v1/trees/${treeId}/notes/${noteId}`, { method: "DELETE" });
+  }
+
+  orderTreeNotes(treeId: string, ids: string[]) {
+    return this.request<{ notes: TreeNote[] }>(`/v1/trees/${treeId}/notes/order`, { method: "POST", body: JSON.stringify({ ids }) });
+  }
+
+  createTreeEvent(treeId: string, payload: TreeEventInput) {
+    return this.request<{ event: TreeEvent }>(`/v1/trees/${treeId}/events`, { method: "POST", body: JSON.stringify(payload) });
+  }
+
+  editTreeEvent(treeId: string, eventId: string, payload: TreeEventInput) {
+    return this.request<{ event: TreeEvent }>(`/v1/trees/${treeId}/events/${eventId}`, { method: "POST", body: JSON.stringify(payload) });
+  }
+
+  deleteTreeEvent(treeId: string, eventId: string) {
+    return this.request<void>(`/v1/trees/${treeId}/events/${eventId}`, { method: "DELETE" });
+  }
+
+  pinTreeEvent(treeId: string, eventId: string, pinned: boolean) {
+    return this.request<void>(`/v1/trees/${treeId}/events/${eventId}/pin`, { method: "POST", body: JSON.stringify({ pinned }) });
   }
 
   uploadTreeAvatar(treeId: string, file: File) {
@@ -1067,10 +1225,10 @@ export class ApiClient {
     });
   }
 
-  createTreeNest(treeId: string, name: string) {
+  createTreeNest(treeId: string, name: string, door?: NestDoor) {
     return this.request<{ nest: Nest }>(`/v1/trees/${treeId}/nests`, {
       method: "POST",
-      body: JSON.stringify({ name }),
+      body: JSON.stringify({ name, ...(door ? { door } : {}) }),
     });
   }
 
@@ -1106,6 +1264,13 @@ export class ApiClient {
 
   archiveNest(nestId: string) {
     return this.request<void>(`/v1/nests/${nestId}/archive`, { method: "POST" });
+  }
+
+  updateNestSettings(nestId: string, settings: { name?: string; door?: NestDoor }) {
+    return this.request<{ nest: Nest }>(`/v1/nests/${nestId}/settings`, {
+      method: "POST",
+      body: JSON.stringify(settings),
+    });
   }
 
   renameNest(nestId: string, name: string) {

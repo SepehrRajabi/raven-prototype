@@ -36,6 +36,10 @@ func (s *Server) runMaintenance(now time.Time) {
 	if err := s.expireChatAttachments(now); err != nil {
 		log.Printf("maintenance: expire chat attachments: %v", err)
 	}
+	if err := s.sweepLibraryAssets(now); err != nil {
+		log.Printf("maintenance: sweep library assets: %v", err)
+	}
+	s.startLibraryConversions()
 	if err := s.drainChatObjectPurges(); err != nil {
 		log.Printf("maintenance: drain chat object purges: %v", err)
 	}
@@ -47,6 +51,12 @@ func (s *Server) runMaintenance(now time.Time) {
 	}
 	if err := s.expireEmptyTemporaryNests(); err != nil {
 		log.Printf("maintenance: expire empty temporary nests: %v", err)
+	}
+	if err := s.expireTreeNotes(now); err != nil {
+		log.Printf("maintenance: expire pinned notes: %v", err)
+	}
+	if err := s.runTreeEvents(now); err != nil {
+		log.Printf("maintenance: scheduled events: %v", err)
 	}
 	s.revalidateWorkshop("")
 	s.sweepWorkshopSessions()
@@ -150,6 +160,10 @@ func (s *Server) signalNestEntry(c *fiber.Ctx, updateType string) error {
 			return err
 		}
 		return fiber.NewError(fiber.StatusForbidden, "admission is required before entering this Nest")
+	}
+	// A heads-up from someone who may not walk in would just be a knock nobody can answer.
+	if err := s.requireDoor(user.ID, nest); err != nil {
+		return err
 	}
 	occupants, err := s.nestOccupantIDs(nest.ID, user.ID)
 	if err != nil {

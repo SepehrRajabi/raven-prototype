@@ -66,8 +66,19 @@ export function SavedAvatar({ userId, name, className }: { userId: string; name:
   );
 }
 
+/** Raven's own contact: the app's mark, never a person's picture. */
+export function RavenAvatar({ className }: { className?: string }) {
+  return <img src="/favicon.png" alt="" aria-hidden className={cn("shrink-0 rounded-full bg-secondary object-contain p-1", className)} />;
+}
+
+/** Marks a message source that is not a person. Bordered, quiet, never a colour. */
+export function SystemBadge({ className }: { className?: string }) {
+  return <span className={cn("shrink-0 rounded-full border border-border px-1.5 text-caption text-muted-foreground", className)}>System</span>;
+}
+
 /** The picture for a conversation: the other person, the group's initials, or a text nest's mark. */
 export function ConversationAvatar({ conversation, me, className }: { conversation: ChatConversation; /** Whose Saved messages this would be. */ me?: string; className?: string }) {
+  if (conversation.kind === "raven") return <RavenAvatar className={className} />;
   if (conversation.kind === "saved" && me) return <SavedAvatar userId={me} name={conversation.name} className={className} />;
   if (conversation.kind === "nest") {
     return (
@@ -87,29 +98,40 @@ export const ConversationRowCompact = memo(function ConversationRowCompact({
   conversation,
   active,
   nested = false,
+  caption,
   onOpen,
 }: {
   conversation: ChatConversation;
   active: boolean;
   nested?: boolean;
+  /** What is on in a text room now, under its name. */
+  caption?: string;
   onOpen: (id: string) => void;
 }) {
   const unread = conversation.unreadCount > 0;
+  const name = <bdi>{conversation.name}</bdi>;
   return (
     <button
       type="button"
       onClick={() => onOpen(conversation.id)}
       aria-current={active ? "page" : undefined}
       className={cn(
-        "flex h-9 w-full items-center gap-2.5 rounded-control pr-2 text-left transition-colors",
+        "flex w-full items-center gap-2.5 rounded-control pr-2 text-left transition-colors",
+        caption ? "min-h-9 py-1" : "h-9",
         nested ? "pl-[30px]" : "pl-2",
         active ? "bg-secondary" : "hover:bg-secondary/60",
       )}
     >
       <ConversationAvatar conversation={conversation} className={conversation.kind === "nest" ? "h-5 w-5" : "h-6 w-6 text-[10px]"} />
-      <span className={cn("min-w-0 flex-1 truncate text-small", unread || active ? "font-medium text-foreground" : "text-muted-foreground")}>
-        <bdi>{conversation.name}</bdi>
-      </span>
+      {caption ? (
+        <span className="min-w-0 flex-1">
+          <span className={cn("block truncate text-small", unread || active ? "font-medium text-foreground" : "text-muted-foreground")}>{name}</span>
+          <span className="block truncate text-caption text-subtle"><bdi>{caption}</bdi></span>
+        </span>
+      ) : (
+        <span className={cn("min-w-0 flex-1 truncate text-small", unread || active ? "font-medium text-foreground" : "text-muted-foreground")}>{name}</span>
+      )}
+      {conversation.kind === "raven" ? <SystemBadge /> : null}
       <MutedIndicator conversation={conversation} />
       {conversation.kind === "group" ? <GroupIndicator /> : null}
       <MentionDot count={conversation.mentionCount} />
@@ -136,6 +158,7 @@ export const ConversationRow = memo(function ConversationRow({
       <span className="min-w-0 flex-1">
         <span className="flex items-baseline gap-2">
           <span className={cn("min-w-0 flex-1 truncate text-body", unread ? "font-semibold" : "font-medium")}><bdi>{conversation.name}</bdi></span>
+          {conversation.kind === "raven" ? <SystemBadge className="self-center" /> : null}
           <MutedIndicator conversation={conversation} />
           {conversation.kind === "group" ? <GroupIndicator className="self-center" /> : null}
           <time className="shrink-0 text-caption tabular-nums text-subtle">{listTime(conversation.lastActivityMs)}</time>

@@ -43,18 +43,22 @@ type Server struct {
 	setParticipantPermission func(room, identity string, permission *livekit.ParticipantPermission)
 	// setParticipantName renames a connected LiveKit participant. Also a field for tests.
 	setParticipantName func(room, identity, name string)
-	voiceLimitsSeen          *voiceLimitTracker
-	callVotes                *callVotes
-	loginThrottle            *loginThrottle
-	events                   *eventBroker
-	metrics                  *serverMetrics
-	chatLocks                *keyedMutex
-	chatForwards             chatForwardBudget
+	voiceLimitsSeen    *voiceLimitTracker
+	callVotes          *callVotes
+	loginThrottle      *loginThrottle
+	events             *eventBroker
+	metrics            *serverMetrics
+	chatLocks          *keyedMutex
+	chatForwards       chatForwardBudget
+	// linkPreviews fetches the cards for links in messages; nil when they are off.
+	linkPreviews *chatLinkPreviewer
 	// inviteLocks keeps one account's invite count and insert together.
 	inviteLocks *keyedMutex
 	// workshop is the Workshop's port sharing: every active share, in memory.
 	workshop    *relay.Registry
 	relayServer *relay.Server
+	// libraryConversion runs ffmpeg for GIFs and stickers, when it is installed.
+	libraryConversion *libraryConverter
 	// What the compatibility gate compares clients against (see compat.go).
 	serverVersion    string
 	minClientVersion string
@@ -101,8 +105,11 @@ type UserPreferences struct {
 	// WatchNewShares replaces FollowScreenShares for clients where screen shares are
 	// opt-in. It starts off for everyone: the old value defaulted to true and meant
 	// something cheaper ("bring a share to the front"), so it is not carried over.
-	WatchNewShares bool   `json:"watchNewShares"`
-	UpdatedAt      string `json:"updatedAt"`
+	WatchNewShares bool `json:"watchNewShares"`
+	// RavenMessages is the switch for everything Raven sends to a person: event
+	// invitations and updates, and the server admin's messages.
+	RavenMessages bool   `json:"ravenMessages"`
+	UpdatedAt     string `json:"updatedAt"`
 }
 
 type Nest struct {
@@ -114,6 +121,7 @@ type Nest struct {
 	Type           string  `json:"type"`
 	Status         string  `json:"status"`
 	LifecycleState string  `json:"lifecycleState"`
+	Door           string  `json:"door"`
 	CreatedAt      string  `json:"createdAt"`
 	UpdatedAt      string  `json:"updatedAt"`
 	ArchivedAt     *string `json:"archivedAt,omitempty"`
@@ -216,6 +224,7 @@ func New(db *database.DB) *Server {
 		events:            newEventBroker(),
 		metrics:           newServerMetrics(),
 		chatLocks:         newKeyedMutex(),
+		linkPreviews:      newChatLinkPreviewerFromEnv(),
 		inviteLocks:       newKeyedMutex(),
 		serverVersion:     fallbackString(os.Getenv("RAVEN_VERSION"), "0.1.0"),
 		minClientVersion:  fallbackString(os.Getenv("RAVEN_MINIMUM_CLIENT_VERSION"), "0.1.0"),
@@ -231,6 +240,8 @@ func New(db *database.DB) *Server {
 	s.workshop.OnEvent = s.publishWorkshopEvent
 	s.relayServer = relay.NewServer(s.workshop, relayPolicy{s})
 	s.loginThrottle = newLoginThrottle()
+	s.libraryConversion = detectLibraryConversion()
+	s.startChatLinkPreviews()
 	s.routes()
 	return s
 }
@@ -243,7 +254,7 @@ func New(db *database.DB) *Server {
 func fiberConfig() fiber.Config {
 	config := fiber.Config{
 		AppName:      "Raven API",
-		BodyLimit:    chatImageFullBytes + 64*1024,
+		BodyLimit:    libraryOriginalBytes + 64*1024,
 		ErrorHandler: errorHandler,
 	}
 	if proxies := splitCSV(os.Getenv("RAVEN_TRUSTED_PROXIES")); len(proxies) > 0 {
@@ -283,7 +294,7 @@ func (s *Server) routes() {
 		AllowHeaders:  "Origin, Content-Type, Accept, X-Session-ID, X-Raven-OS, X-Raven-Device, X-Raven-Client-Version, X-Raven-Capabilities, X-Request-ID, X-Idempotency-Key",
 		ExposeHeaders: "X-Session-ID, X-Request-ID, Retry-After",
 		// PUT carries the bytes of a chat attachment's variant.
-		AllowMethods: "GET,POST,PUT,DELETE,OPTIONS",
+		AllowMethods: "GET,POST,PUT,PATCH,DELETE,OPTIONS",
 	}))
 	s.app.Get("/healthz", func(c *fiber.Ctx) error {
 		return c.JSON(fiber.Map{
@@ -317,6 +328,7 @@ func (s *Server) routes() {
 	s.registerAdminRoutes(authenticated)
 	service := authenticated.Use(s.requireCompatibleClient)
 	s.registerChatRoutes(service)
+	s.registerLibraryRoutes(service)
 	s.registerWorkshopRoutes(service)
 	service.Get("/invites", s.listInvites)
 	service.Post("/invites", s.createInvite)
@@ -404,9 +416,20 @@ func (s *Server) getServerProperties(c *fiber.Ctx) error {
 	if attachments := s.chatAttachmentCapabilities(); attachments != nil {
 		chat["attachments"] = attachments
 	}
+	if linkPreviews := s.chatLinkPreviewCapabilities(); linkPreviews != nil {
+		chat["linkPreviews"] = linkPreviews
+	}
 	accounts, err := s.accountSettings(s.db)
 	if err != nil {
 		return err
+	}
+	properties := map[string]any{
+		"chat": chat,
+		// Which ways in the sign-in screen may offer before anyone is signed in.
+		"accounts": map[string]any{"signUp": accounts.SignUpOpen, "invitations": accounts.InvitationsOpen},
+	}
+	if library := s.libraryCapabilities(); library != nil {
+		properties["library"] = library
 	}
 	return c.JSON(ServerProperties{
 		Name:         fallbackString(s.serverName, "Raven"),
@@ -415,17 +438,17 @@ func (s *Server) getServerProperties(c *fiber.Ctx) error {
 		RTCServerURL: fallbackString(s.liveKitURL, "ws://127.0.0.1:7880"),
 		// Lets a client tell that this server has text chat, and its limits, before it
 		// shows anything that depends on it.
-		Properties: map[string]any{
-			"chat": chat,
-			// Which ways in the sign-in screen may offer before anyone is signed in.
-			"accounts": map[string]any{"signUp": accounts.SignUpOpen, "invitations": accounts.InvitationsOpen},
-		},
+		Properties: properties,
 	})
 }
 
 func errorHandler(c *fiber.Ctx, err error) error {
 	code := fiber.StatusInternalServerError
 	message := "internal error"
+	var reasoned *reasonedError
+	if errors.As(err, &reasoned) {
+		return c.Status(reasoned.status).JSON(fiber.Map{"error": reasoned.message, "reasonCode": reasoned.reason})
+	}
 	var fiberErr *fiber.Error
 	if errors.As(err, &fiberErr) {
 		code = fiberErr.Code
@@ -641,6 +664,7 @@ func (s *Server) updatePreferences(c *fiber.Ctx) error {
 		JoinWithoutScreenSharing *bool   `json:"joinWithoutScreenSharing"`
 		FollowScreenShares       *bool   `json:"followScreenShares"`
 		WatchNewShares           *bool   `json:"watchNewShares"`
+		RavenMessages            *bool   `json:"ravenMessages"`
 	}
 	if err := c.BodyParser(&body); err != nil {
 		return fiber.NewError(fiber.StatusBadRequest, "invalid preferences payload")
@@ -686,6 +710,10 @@ func (s *Server) updatePreferences(c *fiber.Ctx) error {
 	if body.WatchNewShares != nil {
 		watchNewShares = *body.WatchNewShares
 	}
+	ravenMessages := user.Preferences.RavenMessages
+	if body.RavenMessages != nil {
+		ravenMessages = *body.RavenMessages
+	}
 
 	now := database.Now()
 	var persistedDisplayName any
@@ -693,8 +721,8 @@ func (s *Server) updatePreferences(c *fiber.Ctx) error {
 		persistedDisplayName = displayName
 	}
 	if _, err := s.db.Exec(
-		`INSERT INTO user_preferences (user_id, display_name, ui_labels, color_palette, always_join_muted, join_with_camera_off, join_without_screen_sharing, follow_screen_shares, watch_new_shares, created_at, updated_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		`INSERT INTO user_preferences (user_id, display_name, ui_labels, color_palette, always_join_muted, join_with_camera_off, join_without_screen_sharing, follow_screen_shares, watch_new_shares, raven_messages, created_at, updated_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		 ON CONFLICT(user_id) DO UPDATE SET
 			display_name = excluded.display_name,
 			ui_labels = excluded.ui_labels,
@@ -704,8 +732,9 @@ func (s *Server) updatePreferences(c *fiber.Ctx) error {
 			join_without_screen_sharing = excluded.join_without_screen_sharing,
 			follow_screen_shares = excluded.follow_screen_shares,
 			watch_new_shares = excluded.watch_new_shares,
+			raven_messages = excluded.raven_messages,
 			updated_at = excluded.updated_at`,
-		user.ID, persistedDisplayName, uiLabels, colorPalette, alwaysJoinMuted, joinWithCameraOff, joinWithoutScreenSharing, followScreenShares, watchNewShares, now, now,
+		user.ID, persistedDisplayName, uiLabels, colorPalette, alwaysJoinMuted, joinWithCameraOff, joinWithoutScreenSharing, followScreenShares, watchNewShares, ravenMessages, now, now,
 	); err != nil {
 		return err
 	}
@@ -806,6 +835,7 @@ func (s *Server) createNestWithType(c *fiber.Ctx, defaultType string) error {
 		Name   string `json:"name"`
 		Type   string `json:"type"`
 		TreeID string `json:"treeId"`
+		Door   string `json:"door"`
 	}
 	if err := c.BodyParser(&body); err != nil {
 		return fiber.NewError(fiber.StatusBadRequest, "invalid Nest payload")
@@ -817,6 +847,13 @@ func (s *Server) createNestWithType(c *fiber.Ctx, defaultType string) error {
 	nestType := normalizeNestType(body.Type, defaultType)
 	if nestType == "" {
 		return fiber.NewError(fiber.StatusBadRequest, "Nest type must be persistent or temporary")
+	}
+	door, err := normalizeNestDoor(body.Door)
+	if err != nil {
+		return err
+	}
+	if nestType != "persistent" && door != doorOpen {
+		return fiber.NewError(fiber.StatusBadRequest, "Only rooms in a Tree can have a door")
 	}
 	var treeID *string
 	if nestType == "persistent" {
@@ -845,7 +882,7 @@ func (s *Server) createNestWithType(c *fiber.Ctx, defaultType string) error {
 	} else if err := s.requireStartRooms(user); err != nil {
 		return err
 	}
-	nest, err := s.createNestForUser(user, name, nestType, treeID)
+	nest, err := s.createNestForUser(user, name, nestType, door, treeID)
 	if err != nil {
 		return err
 	}
@@ -1278,6 +1315,9 @@ func (s *Server) joinOrRequest(nest Nest, user User) (fiber.Map, error) {
 		// There is nobody to ask: the way into a tree's nest is to be in the tree.
 		return nil, fiber.NewError(fiber.StatusForbidden, "This Nest belongs to a Tree you’re not in.")
 	}
+	if err := s.requireDoor(user.ID, nest); err != nil {
+		return nil, err
+	}
 	state, _, err := s.membershipState(nest.ID, user.ID)
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return nil, err
@@ -1313,7 +1353,7 @@ func (s *Server) joinOrRequest(nest Nest, user User) (fiber.Map, error) {
 }
 
 func (s *Server) queryNests(clause string, args ...any) ([]Nest, error) {
-	query := `SELECT n.id, n.name, n.join_code, n.creator_user_id, n.tree_id, n.type, n.status, n.lifecycle_state, n.created_at, n.updated_at, n.archived_at, n.ended_at, n.empty_since, n.expires_at, n.last_activity_at FROM nests n ` + clause
+	query := `SELECT n.id, n.name, n.join_code, n.creator_user_id, n.tree_id, n.type, n.status, n.lifecycle_state, n.door, n.created_at, n.updated_at, n.archived_at, n.ended_at, n.empty_since, n.expires_at, n.last_activity_at FROM nests n ` + clause
 	rows, err := s.db.Query(query, args...)
 	if err != nil {
 		return nil, err
@@ -1323,7 +1363,7 @@ func (s *Server) queryNests(clause string, args ...any) ([]Nest, error) {
 	for rows.Next() {
 		var nest Nest
 		var treeID, archivedAt, endedAt, emptySince, expiresAt sql.NullString
-		if err := rows.Scan(&nest.ID, &nest.Name, &nest.JoinCode, &nest.CreatorUserID, &treeID, &nest.Type, &nest.Status, &nest.LifecycleState, &nest.CreatedAt, &nest.UpdatedAt, &archivedAt, &endedAt, &emptySince, &expiresAt, &nest.LastActivityAt); err != nil {
+		if err := rows.Scan(&nest.ID, &nest.Name, &nest.JoinCode, &nest.CreatorUserID, &treeID, &nest.Type, &nest.Status, &nest.LifecycleState, &nest.Door, &nest.CreatedAt, &nest.UpdatedAt, &archivedAt, &endedAt, &emptySince, &expiresAt, &nest.LastActivityAt); err != nil {
 			return nil, err
 		}
 		nest.TreeID = nullStringPtr(treeID)
@@ -1339,8 +1379,8 @@ func (s *Server) queryNests(clause string, args ...any) ([]Nest, error) {
 func (s *Server) findNest(id string) (Nest, error) {
 	var nest Nest
 	var treeID, archivedAt, endedAt, emptySince, expiresAt sql.NullString
-	err := s.db.QueryRow(`SELECT id, name, join_code, creator_user_id, tree_id, type, status, lifecycle_state, created_at, updated_at, archived_at, ended_at, empty_since, expires_at, last_activity_at FROM nests WHERE id = ?`, id).
-		Scan(&nest.ID, &nest.Name, &nest.JoinCode, &nest.CreatorUserID, &treeID, &nest.Type, &nest.Status, &nest.LifecycleState, &nest.CreatedAt, &nest.UpdatedAt, &archivedAt, &endedAt, &emptySince, &expiresAt, &nest.LastActivityAt)
+	err := s.db.QueryRow(`SELECT id, name, join_code, creator_user_id, tree_id, type, status, lifecycle_state, door, created_at, updated_at, archived_at, ended_at, empty_since, expires_at, last_activity_at FROM nests WHERE id = ?`, id).
+		Scan(&nest.ID, &nest.Name, &nest.JoinCode, &nest.CreatorUserID, &treeID, &nest.Type, &nest.Status, &nest.LifecycleState, &nest.Door, &nest.CreatedAt, &nest.UpdatedAt, &archivedAt, &endedAt, &emptySince, &expiresAt, &nest.LastActivityAt)
 	nest.TreeID = nullStringPtr(treeID)
 	nest.ArchivedAt = nullStringPtr(archivedAt)
 	nest.EndedAt = nullStringPtr(endedAt)
@@ -1352,8 +1392,8 @@ func (s *Server) findNest(id string) (Nest, error) {
 func (s *Server) findNestByCode(code string) (Nest, error) {
 	var nest Nest
 	var treeID, archivedAt, endedAt, emptySince, expiresAt sql.NullString
-	err := s.db.QueryRow(`SELECT id, name, join_code, creator_user_id, tree_id, type, status, lifecycle_state, created_at, updated_at, archived_at, ended_at, empty_since, expires_at, last_activity_at FROM nests WHERE join_code = ?`, code).
-		Scan(&nest.ID, &nest.Name, &nest.JoinCode, &nest.CreatorUserID, &treeID, &nest.Type, &nest.Status, &nest.LifecycleState, &nest.CreatedAt, &nest.UpdatedAt, &archivedAt, &endedAt, &emptySince, &expiresAt, &nest.LastActivityAt)
+	err := s.db.QueryRow(`SELECT id, name, join_code, creator_user_id, tree_id, type, status, lifecycle_state, door, created_at, updated_at, archived_at, ended_at, empty_since, expires_at, last_activity_at FROM nests WHERE join_code = ?`, code).
+		Scan(&nest.ID, &nest.Name, &nest.JoinCode, &nest.CreatorUserID, &treeID, &nest.Type, &nest.Status, &nest.LifecycleState, &nest.Door, &nest.CreatedAt, &nest.UpdatedAt, &archivedAt, &endedAt, &emptySince, &expiresAt, &nest.LastActivityAt)
 	nest.TreeID = nullStringPtr(treeID)
 	nest.ArchivedAt = nullStringPtr(archivedAt)
 	nest.EndedAt = nullStringPtr(endedAt)
@@ -1387,6 +1427,7 @@ func userSelectSQL() string {
 		CASE WHEN COALESCE(up.join_without_screen_sharing, FALSE) THEN 'true' ELSE 'false' END,
 		CASE WHEN COALESCE(up.follow_screen_shares, TRUE) THEN 'true' ELSE 'false' END,
 		CASE WHEN COALESCE(up.watch_new_shares, FALSE) THEN 'true' ELSE 'false' END,
+		CASE WHEN COALESCE(up.raven_messages, TRUE) THEN 'true' ELSE 'false' END,
 		COALESCE(up.updated_at, u.updated_at), u.created_at, u.updated_at
 		FROM users u
 		LEFT JOIN user_preferences up ON up.user_id = u.id`
@@ -1412,6 +1453,7 @@ func scanUser(scanner rowScanner, user *User, passwordHash *string) error {
 		&user.Preferences.JoinWithoutScreenSharing,
 		&user.Preferences.FollowScreenShares,
 		&user.Preferences.WatchNewShares,
+		&user.Preferences.RavenMessages,
 		&user.Preferences.UpdatedAt,
 		&user.CreatedAt,
 		&user.UpdatedAt,
@@ -1442,6 +1484,7 @@ func defaultUserPreferences(username, updatedAt string) UserPreferences {
 		JoinWithoutScreenSharing: false,
 		FollowScreenShares:       true,
 		WatchNewShares:           false,
+		RavenMessages:            true,
 		UpdatedAt:                updatedAt,
 	}
 }
@@ -1674,14 +1717,32 @@ func (s *Server) renameNest(c *fiber.Ctx) error {
 		return fiber.NewError(fiber.StatusForbidden, "creator or moderator role required")
 	}
 	var body struct {
-		Name string `json:"name"`
+		Name string  `json:"name"`
+		Door *string `json:"door"`
 	}
 	if err := c.BodyParser(&body); err != nil {
 		return fiber.NewError(fiber.StatusBadRequest, "invalid Nest payload")
 	}
-	nest, err := s.renameNestCore(nestID, body.Name)
+	door := ""
+	if body.Door != nil {
+		var err error
+		if door, err = normalizeNestDoor(*body.Door); err != nil {
+			return err
+		}
+	}
+	nest, err := s.findNest(nestID)
 	if err != nil {
 		return err
+	}
+	if body.Door == nil || strings.TrimSpace(body.Name) != "" {
+		if nest, err = s.renameNestCore(nestID, body.Name); err != nil {
+			return err
+		}
+	}
+	if body.Door != nil {
+		if nest, err = s.setNestDoor(nest, door); err != nil {
+			return err
+		}
 	}
 	return c.JSON(fiber.Map{"nest": withLinks(nest)})
 }

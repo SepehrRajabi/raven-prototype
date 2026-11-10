@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { AdminApi, ApiError } from "./api";
 import { parseRoute, routeHref } from "./lib/route";
+import { sendResult } from "./lib/sendResult";
 import { describeDetail, describeEffective, formatAgo } from "./lib/format";
 import type { UserCapability } from "./types";
 
@@ -110,6 +111,7 @@ describe("AdminApi", () => {
     await api.setUserCapability("a/b", "spaces.create", "allow", 2);
     await api.deleteSpace("s 1", "Guild");
     await api.transferSpace("s1", { userId: "u1" });
+    await api.sendMessage(["u1"], "Hello");
     expect(server.calls[0]).toMatchObject({
       path: "/v1/admin/users/a%2Fb/capabilities",
       method: "POST",
@@ -117,12 +119,31 @@ describe("AdminApi", () => {
     });
     expect(server.calls[1]).toMatchObject({ path: "/v1/admin/spaces/s%201", method: "DELETE", body: { confirmation: "Guild" } });
     expect(server.calls[2]).toMatchObject({ path: "/v1/admin/spaces/s1/transfer", body: { userId: "u1" } });
+    expect(server.calls[3]).toMatchObject({ path: "/v1/admin/messages", method: "POST", body: { to: ["u1"], text: "Hello" } });
+  });
+
+  test("lists, unpublishes and deletes published GIFs and stickers", async () => {
+    const server = fakeServer((call) => ({ body: call.method === "GET" ? { items: [{ id: "i1" }] } : {} }));
+    const api = new AdminApi(server.fetchImpl, new MemoryStore());
+    expect(await api.publicLibrary(" cat hat ")).toEqual([{ id: "i1" }] as never);
+    await api.unpublishLibraryItem("i/1");
+    await api.deleteLibraryItem("i1");
+    expect(server.calls[0]).toMatchObject({ path: "/v1/admin/library/public?q=cat%20hat", method: "GET" });
+    expect(server.calls[1]).toMatchObject({ path: "/v1/admin/library/items/i%2F1/unpublish", method: "POST" });
+    expect(server.calls[2]).toMatchObject({ path: "/v1/admin/library/items/i1", method: "DELETE" });
+  });
+});
+
+describe("sendResult", () => {
+  test("leaves out the second sentence when nobody turned messages off", () => {
+    expect(sendResult(5, 0)).toBe("Sent to 5.");
+    expect(sendResult(5, 2)).toBe("Sent to 5. 2 turned Raven messages off.");
   });
 });
 
 describe("routes", () => {
   test("round-trip through the hash", () => {
-    for (const route of [{ page: "overview" }, { page: "users" }, { page: "user", id: "a b" }, { page: "spaces" }, { page: "space", id: "x/y" }, { page: "settings" }, { page: "audit" }] as const) {
+    for (const route of [{ page: "overview" }, { page: "users" }, { page: "user", id: "a b" }, { page: "spaces" }, { page: "space", id: "x/y" }, { page: "library" }, { page: "settings" }, { page: "audit" }] as const) {
       expect(parseRoute(routeHref(route))).toEqual(route);
     }
     expect(parseRoute("#/nonsense")).toEqual({ page: "overview" });

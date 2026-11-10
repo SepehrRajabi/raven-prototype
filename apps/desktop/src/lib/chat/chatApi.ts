@@ -65,12 +65,15 @@ export interface ChatApi {
   clearConversation(id: string): Promise<void>;
   messages(id: string, cursor?: { before?: number; after?: number; around?: number; limit?: number }): Promise<ChatPage>;
   changes(id: string, after: number): Promise<ChatChanges>;
-  send(id: string, message: { clientMessageId: string; body: string; replyToMessageId?: string; attachmentIds?: string[] }): Promise<{ message: ChatMessage; duplicate?: boolean }>;
+  send(id: string, message: { clientMessageId: string; body: string; replyToMessageId?: string; attachmentIds?: string[]; libraryItemId?: string }): Promise<{ message: ChatMessage; duplicate?: boolean }>;
   /** Declares an attachment. The same `clientUploadId` again returns the same one. */
   createAttachment(id: string, description: AttachmentDescription): Promise<AttachmentUploadState>;
   /** Stores the bytes of one variant. Uploading one the server already has is harmless. */
   uploadVariant(id: string, attachmentId: string, variant: string, bytes: ArrayBuffer | Blob, contentType: string): Promise<AttachmentUploadState>;
   fetchVariant(id: string, attachmentId: string, variant: string): Promise<Blob>;
+  fetchLinkPreviewImage(id: string, messageId: string): Promise<Blob>;
+  /** Takes the link preview off one of your own messages, for everyone. */
+  removeLinkPreview(id: string, messageId: string): Promise<{ message: ChatMessage }>;
   react(id: string, messageId: string, emoji: string, add: boolean): Promise<{ message: ChatMessage }>;
   edit(id: string, messageId: string, body: string): Promise<{ message: ChatMessage }>;
   deleteForEveryone(id: string, messageId: string): Promise<{ message: ChatMessage }>;
@@ -123,6 +126,8 @@ export const chatApi: ChatApi = {
   uploadVariant: (id, attachmentId, variant, bytes, contentType) =>
     api.call(variantPath(id, attachmentId, variant), { method: "PUT", headers: { "Content-Type": contentType }, body: bytes }),
   fetchVariant: (id, attachmentId, variant) => api.callBlob(variantPath(id, attachmentId, variant)),
+  fetchLinkPreviewImage: (id, messageId) => api.callBlob(`${conversationPath(id)}/messages/${encodeURIComponent(messageId)}/link-preview/image`),
+  removeLinkPreview: (id, messageId) => api.call(`${conversationPath(id)}/messages/${encodeURIComponent(messageId)}/link-preview`, { method: "DELETE" }),
   react: (id, messageId, emoji, add) => api.call(`${conversationPath(id)}/messages/${encodeURIComponent(messageId)}/reactions`, json({ emoji, add })),
   edit: (id, messageId, body) => api.call(`${conversationPath(id)}/messages/${encodeURIComponent(messageId)}/edit`, json({ body })),
   deleteForEveryone: (id, messageId) => api.call(`${conversationPath(id)}/messages/${encodeURIComponent(messageId)}?for=everyone`, { method: "DELETE" }),

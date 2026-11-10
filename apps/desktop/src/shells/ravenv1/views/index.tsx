@@ -77,7 +77,7 @@ export function MainView({
     case "tree-settings": {
       const details = data.getTreeDetails(view.id);
       return details ? (
-        <TreeSettingsView details={details} section={resolveTreeSettingsSection(view.section, details, data)} data={data} onNavigate={onNavigate} />
+        <TreeSettingsView details={details} section={resolveTreeSettingsSection(view.section, details, data)} data={data} chat={chat} onNavigate={onNavigate} />
       ) : (
         <MissingView what={data.labels.treeSingular} onNavigate={onNavigate} />
       );

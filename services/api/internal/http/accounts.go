@@ -32,12 +32,18 @@ const (
 // case.
 var ErrUsernameTaken = errors.New("username already exists")
 
+// reservedUsernames cannot be registered: Raven's own messages come from the name "raven".
+var reservedUsernames = map[string]bool{"raven": true}
+
 var usernamePattern = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]{2,31}$`)
 
 // ValidateNewUsername is the rule for names given to new accounts: 3 to 32 lowercase
 // letters, digits, dots, dashes and underscores, starting with a letter or digit.
 // Accounts that already exist keep the names they have.
 func ValidateNewUsername(username string) error {
+	if reservedUsernames[username] {
+		return errors.New("that username is reserved")
+	}
 	if !usernamePattern.MatchString(username) {
 		return errors.New("username must be 3 to 32 characters: lowercase letters, digits, dot, dash or underscore, starting with a letter or digit")
 	}

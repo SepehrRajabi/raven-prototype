@@ -52,6 +52,10 @@ func TestSavedMessagesMigrationUpgrade(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, statement := range []string{
+		`DROP INDEX idx_chat_messages_replace_key`,
+		`ALTER TABLE chat_messages DROP COLUMN replace_key`,
+		`ALTER TABLE user_preferences DROP COLUMN raven_messages`,
+		`DELETE FROM schema_migrations WHERE version = '2026111004_raven_messages'`,
 		`DROP INDEX idx_chat_messages_origin`,
 		`DROP INDEX idx_chat_attachment_variants_object`,
 		`ALTER TABLE chat_messages DROP COLUMN origin_message_id`,
@@ -80,6 +84,8 @@ func TestSavedMessagesMigrationUpgrade(t *testing.T) {
 	}
 	for _, statement := range []string{
 		`PRAGMA writable_schema = ON`,
+		fmt.Sprintf(`UPDATE sqlite_schema SET sql = replace(sql, '%s', '%s') WHERE name = 'chat_conversations'`,
+			strings.ReplaceAll(sqliteChatKindCheckRaven, "'", "''"), strings.ReplaceAll(sqliteChatKindCheckNew, "'", "''")),
 		fmt.Sprintf(`UPDATE sqlite_schema SET sql = replace(sql, '%s', '%s') WHERE name = 'chat_conversations'`,
 			strings.ReplaceAll(sqliteChatKindCheckNew, "'", "''"), strings.ReplaceAll(sqliteChatKindCheckOld, "'", "''")),
 		fmt.Sprintf(`PRAGMA schema_version = %d`, version+1),

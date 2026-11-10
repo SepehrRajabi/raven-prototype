@@ -8,7 +8,7 @@ export function Tabs({
 }: {
   value: string;
   onValueChange: (value: string) => void;
-  tabs: Array<{ value: string; label: string; content: React.ReactNode }>;
+  tabs: Array<{ value: string; label: React.ReactNode; content: React.ReactNode }>;
 }) {
   const current = tabs.find((tab) => tab.value === value) ?? tabs[0];
   return (
@@ -23,7 +23,7 @@ export function Tabs({
             role="tab"
             aria-selected={tab.value === current.value}
             className={cn(
-              "h-8 rounded-chip px-3 text-small font-medium text-muted-foreground transition-colors hover:text-foreground",
+              "inline-flex h-8 items-center gap-1.5 rounded-chip px-3 text-small font-medium text-muted-foreground transition-colors hover:text-foreground",
               tab.value === current.value && "bg-accent text-foreground",
             )}
             onClick={() => onValueChange(tab.value)}
