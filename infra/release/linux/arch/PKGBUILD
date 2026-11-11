@@ -1,0 +1,27 @@
+# Raven for Arch Linux. build-package.sh builds Tauri's deb layout against this system's
+# libraries, puts it here as raven.deb and runs makepkg with RAVEN_VERSION set; this file
+# only repackages that tree.
+
+pkgname=raven-desktop
+pkgver=${RAVEN_VERSION//-/_}
+pkgrel=1
+pkgdesc="Raven desktop client: calls, screen sharing and chat"
+arch=('x86_64' 'aarch64')
+url="https://github.com/raven-collective/raven-prototype"
+# The repository has no licence file yet.
+license=('LicenseRef-Raven')
+depends=('alsa-lib' 'gtk3' 'libayatana-appindicator' 'webkit2gtk-4.1')
+optdepends=(
+  'gst-plugin-pipewire: screen and window sharing'
+  'gst-plugins-base: screen and window sharing'
+  'pipewire: system audio sharing (pw-record, pw-dump)'
+  'xdg-desktop-portal: choosing what to share'
+)
+options=('!strip' '!debug')
+source=("raven.deb")
+sha256sums=('SKIP')
+
+package() {
+  # makepkg has already unpacked the deb into control.tar.* and data.tar.*.
+  bsdtar -xf "$srcdir"/data.tar.* -C "$pkgdir"
+}

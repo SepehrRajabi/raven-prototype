@@ -108,6 +108,43 @@ A release that already exists is left alone and compared with this build. It dow
 the release back and stops if a file differs: bump the version instead. If an upload died
 half way, the command names the draft to delete before running it again.
 
+## Linux distribution packages
+
+GitHub Actions (`.github/workflows/linux-packages.yml`) builds native packages next to
+the AppImage. Each is built in its family's oldest supported release, then installed with
+the distro's package manager on the releases listed, where the binary's libraries are
+checked:
+
+| Package | Built on | Install-tested on |
+| --- | --- | --- |
+| `Raven_X.Y.Z_amd64.deb` | Ubuntu 22.04 | Debian 12, 13; Ubuntu 22.04, 24.04 |
+| `Raven_X.Y.Z_x86_64_fedora.rpm` | Fedora 44 | Fedora 44 |
+| `Raven_X.Y.Z_x86_64_el10.rpm` | AlmaLinux 10 | AlmaLinux 10, Rocky Linux 10 (EPEL and CRB enabled) |
+| `Raven_X.Y.Z_x86_64_opensuse.rpm` | openSUSE Leap 16.0 | Leap 16.0, Tumbleweed |
+| `raven-desktop-X.Y.Z-1-x86_64.pkg.tar.zst` | Arch Linux | Arch Linux |
+
+It runs on pushes and pull requests that touch the desktop's Rust side or the packaging,
+on every `v*` tag, and by hand. Each run keeps the packages as workflow artifacts. They go
+on the GitHub release only when you ask, after `release.ps1 github` has created it:
+
+```sh
+gh workflow run linux-packages.yml --ref vX.Y.Z -f attach_to_release=true
+```
+
+That adds the packages and `SHA256SUMS-linux-packages`; the release's own files and
+notes are untouched. The packages are not signed, and the in-app updater only knows how
+to replace the AppImage: Raven installed from one of these packages still says when a
+new version is out, but installing it from Raven fails, so people update by installing
+the new package.
+
+To build one locally, with Docker, from the repository root (after `bun run build` in
+`apps/desktop`):
+
+```sh
+docker run --rm -v "$PWD:/src" -w /src fedora:44 sh -c \
+  'infra/release/linux/install-build-deps.sh && infra/release/linux/build-package.sh rpm out fedora'
+```
+
 ## What a friend sees
 
 Raven checks about ten seconds after it starts and every six hours. When a newer version
