@@ -135,6 +135,11 @@ x11-dl = "2.21"
 [target.'cfg(target_os = "macos")'.dependencies]
 # Native macOS display/window and system/app audio capture via ScreenCaptureKit.
 screencapturekit = { version = "8.0.0", features = ["macos_13_0"] }
+# Closing the main window in full screen waits for AppKit to finish leaving it.
+block2 = "0.6"
+objc2 = "0.6"
+objc2-app-kit = { version = "0.3", default-features = false, features = ["std", "objc2-core-foundation", "NSResponder", "NSWindow"] }
+objc2-foundation = { version = "0.3", default-features = false, features = ["std", "block2", "NSNotification", "NSOperation", "NSString"] }
 
 # Keep target/ small: line tables only for our crate, no debuginfo for dependencies.
 [profile.dev]

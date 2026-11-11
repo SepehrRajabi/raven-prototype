@@ -5131,6 +5131,7 @@ version = "0.1.11"
 dependencies = [
  "ashpd",
  "base64 0.22.1",
+ "block2",
  "cpal",
  "deep_filter",
  "fast_image_resize",
@@ -5143,6 +5144,9 @@ dependencies = [
  "ndarray",
  "nnnoiseless",
  "nokhwa",
+ "objc2",
+ "objc2-app-kit",
+ "objc2-foundation",
  "png 0.17.16",
  "quinn",
  "ringbuf",

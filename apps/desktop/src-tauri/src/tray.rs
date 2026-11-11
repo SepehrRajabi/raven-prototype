@@ -1076,12 +1076,124 @@ mod platform {
             return;
         }
         api.prevent_close();
+        #[cfg(target_os = "macos")]
+        full_screen::hide(window);
+        #[cfg(windows)]
         let _ = window.hide();
         // A Mac app that stays in the menu bar after its window closes is the norm there,
         // and the Dock icon still brings the window back, so no notice is needed.
         #[cfg(windows)]
         if let Err(error) = show_hint_once(app, &state) {
             eprintln!("[raven] tray hint could not be shown: {error}");
+        }
+    }
+
+    /// Hiding a window that is in native full screen takes it off its full-screen Space
+    /// but leaves the Space behind, empty and black, and hiding the app does not move it
+    /// either. macOS only lets it go by leaving full screen. So the window turns invisible,
+    /// leaves full screen (what shows is the Space sliding away, as when any full-screen
+    /// window closes), hides once AppKit says it is out, and goes back to full screen
+    /// when it is shown again.
+    #[cfg(target_os = "macos")]
+    pub(super) mod full_screen {
+        use std::{
+            cell::RefCell,
+            ptr::NonNull,
+            rc::Rc,
+            sync::atomic::{AtomicBool, Ordering},
+        };
+
+        use block2::RcBlock;
+        use objc2::{
+            rc::Retained,
+            runtime::{AnyObject, ProtocolObject},
+        };
+        use objc2_app_kit::{NSWindow, NSWindowDidExitFullScreenNotification};
+        use objc2_foundation::{NSNotification, NSNotificationCenter, NSObjectProtocol};
+
+        type Observer = Retained<ProtocolObject<dyn NSObjectProtocol>>;
+
+        /// Set while the window is on its way out of full screen to be hidden, so a second
+        /// close in the meantime does not hide it mid-animation.
+        static LEAVING: AtomicBool = AtomicBool::new(false);
+        /// The window was closed from full screen and goes back to it when shown.
+        static RESTORE: AtomicBool = AtomicBool::new(false);
+
+        /// Runs on the main thread: close requests arrive from the event loop.
+        pub(in super::super) fn hide(window: &tauri::Window) {
+            if LEAVING.load(Ordering::Acquire) {
+                return;
+            }
+            if !window.is_fullscreen().unwrap_or(false) {
+                let _ = window.hide();
+                return;
+            }
+            let Some(ns_window) = window
+                .ns_window()
+                .ok()
+                .and_then(|pointer| NonNull::new(pointer.cast::<NSWindow>()))
+            else {
+                let _ = window.hide();
+                return;
+            };
+            // SAFETY: Tauri hands out the live NSWindow of `window`, which outlives this
+            // call, and this runs on the main thread.
+            let ns_window: &NSWindow = unsafe { ns_window.as_ref() };
+            LEAVING.store(true, Ordering::Release);
+
+            let center = NSNotificationCenter::defaultCenter();
+            let observer: Rc<RefCell<Option<Observer>>> = Rc::new(RefCell::new(None));
+            let finish = {
+                let window = window.clone();
+                let observer = Rc::clone(&observer);
+                let center = center.clone();
+                move |restore: bool| {
+                    if let Some(token) = observer.borrow_mut().take() {
+                        // SAFETY: the token is the observer added below.
+                        unsafe { center.removeObserver(token.as_ref()) };
+                    }
+                    let _ = window.hide();
+                    // Visible again for the next show, now that it is ordered out.
+                    if let Some(ns_window) = window
+                        .ns_window()
+                        .ok()
+                        .and_then(|pointer| NonNull::new(pointer.cast::<NSWindow>()))
+                    {
+                        // SAFETY: as above.
+                        unsafe { ns_window.as_ref() }.setAlphaValue(1.0);
+                    }
+                    RESTORE.store(restore, Ordering::Release);
+                    LEAVING.store(false, Ordering::Release);
+                }
+            };
+            let finish = Rc::new(finish);
+            let block = {
+                let finish = Rc::clone(&finish);
+                RcBlock::new(move |_: NonNull<NSNotification>| finish(true))
+            };
+            // SAFETY: the object only filters the notification's sender. A nil queue runs
+            // the block on the posting (main) thread, the only thread it is touched on.
+            let token = unsafe {
+                center.addObserverForName_object_queue_usingBlock(
+                    Some(NSWindowDidExitFullScreenNotification),
+                    Some(AsRef::<AnyObject>::as_ref(ns_window)),
+                    None,
+                    &block,
+                )
+            };
+            *observer.borrow_mut() = Some(token);
+
+            ns_window.setAlphaValue(0.0);
+            if window.set_fullscreen(false).is_err() {
+                finish(false);
+            }
+        }
+
+        /// Puts a window closed from full screen back into full screen. Call after showing it.
+        pub(in super::super) fn restore(window: &tauri::WebviewWindow) {
+            if RESTORE.swap(false, Ordering::AcqRel) {
+                let _ = window.set_fullscreen(true);
+            }
         }
     }
 
@@ -1117,6 +1229,8 @@ pub(crate) fn show_main_window(app: &AppHandle) {
         let _ = window.show();
         let _ = window.unminimize();
         let _ = window.set_focus();
+        #[cfg(target_os = "macos")]
+        platform::full_screen::restore(&window);
     }
 }
 
