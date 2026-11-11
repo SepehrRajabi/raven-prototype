@@ -603,7 +603,6 @@ function viewKey(view: RavenView) {
     case "home":
     case "settings":
     case "mixer":
-    case "messages":
     case "licences":
       return view.kind;
     case "tree-preview":

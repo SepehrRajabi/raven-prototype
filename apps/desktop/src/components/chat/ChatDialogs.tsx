@@ -75,35 +75,6 @@ function useSelection(open: boolean) {
   return [selected, toggle] as const;
 }
 
-/** Pick one friend to write to. */
-export function NewMessageDialog({
-  open,
-  onOpenChange,
-  friends,
-  onPick,
-}: {
-  open: boolean;
-  onOpenChange: (open: boolean) => void;
-  friends: PickablePerson[];
-  onPick: (id: string) => Promise<void>;
-}) {
-  const [error, setError] = useState("");
-  useEffect(() => {
-    if (open) setError("");
-  }, [open]);
-  return (
-    <Dialog open={open} onOpenChange={onOpenChange} title="New message" description="You can message people you are friends with." widthClassName="max-w-sm">
-      <FriendPicker
-        friends={friends}
-        selected={new Set()}
-        emptyText="Add a friend first. Search for someone and send them a friend request."
-        onToggle={(id) => void onPick(id).catch((failure) => setError(failureText(failure, "Couldn’t open that conversation.")))}
-      />
-      {error ? <p className="mt-3 text-small text-destructive" role="alert">{error}</p> : null}
-    </Dialog>
-  );
-}
-
 /** Name a group and choose who is in it. */
 export function NewGroupDialog({
   open,
