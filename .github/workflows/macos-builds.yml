@@ -1,9 +1,11 @@
 # The desktop app for macOS, one build per processor, each on a runner of that kind:
 #
-#   Raven_X.Y.Z_aarch64.dmg   Apple silicon (M1 and later)   built on macos-15
-#   Raven_X.Y.Z_x64.dmg       Intel                          built on macos-15-intel
+#   Raven_X.Y.Z_aarch64.dmg   Apple silicon (M1 and later)   built on macos-26
+#   Raven_X.Y.Z_x64.dmg       Intel                          built on macos-26-intel
 #
-# Both run on macOS 13 and later (bundle.macOS.minimumSystemVersion). Each build is then
+# Both run on macOS 13 and later (bundle.macOS.minimumSystemVersion); the runners only
+# need to be new enough to build them: screencapturekit's Metal bridge (apple-metal)
+# needs the macOS 26 SDK, which macOS 15 images do not have by default. Each build is then
 # checked: the binary is for the right processor and macOS version, its signature holds,
 # and it loads nothing from outside macOS and the app itself.
 #
@@ -58,11 +60,11 @@ jobs:
       matrix:
         include:
           - name: apple-silicon
-            runner: macos-15
+            runner: macos-26
             target: aarch64-apple-darwin
             arch: arm64
           - name: intel
-            runner: macos-15-intel
+            runner: macos-26-intel
             target: x86_64-apple-darwin
             arch: x86_64
     steps:

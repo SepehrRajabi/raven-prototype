@@ -152,12 +152,14 @@ Mac, each natively on a runner of that kind:
 
 | Build | For | Built on |
 | --- | --- | --- |
-| `Raven_X.Y.Z_aarch64.dmg` | Apple silicon (M1 and later), macOS 13+ | `macos-15` |
-| `Raven_X.Y.Z_x64.dmg` | Intel, macOS 13+ | `macos-15-intel` |
+| `Raven_X.Y.Z_aarch64.dmg` | Apple silicon (M1 and later), macOS 13+ | `macos-26` |
+| `Raven_X.Y.Z_x64.dmg` | Intel, macOS 13+ | `macos-26-intel` |
 
 Each build is checked before it is kept: the binary is for that processor only, needs no
 macOS newer than 13.0, its signature verifies, and it loads nothing from outside macOS
-and the app (no Homebrew libraries).
+and the app (no Homebrew libraries). The runners are macOS 26 because screencapturekit's
+Metal bridge needs its SDK; what the app runs on is set by the deployment target, not the
+runner.
 
 It runs when the same things change as for the Linux packages, on every `v*` tag, and by
 hand. The DMGs are kept as workflow artifacts, and go on the GitHub release only when you
