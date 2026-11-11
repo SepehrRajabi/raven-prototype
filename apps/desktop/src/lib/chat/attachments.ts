@@ -59,6 +59,8 @@ export interface PollLimits {
   minOptions: number;
   maxOptions: number;
   maxOptionLength: number;
+  /** Feedback on each answer, when the server takes it. */
+  maxFeedbackLength?: number;
 }
 
 /** Null when the server has no polls, and then nothing offers to make one. */
@@ -66,9 +68,9 @@ export function pollLimits(properties: Record<string, unknown> | undefined): Pol
   const chat = properties?.chat;
   const raw = isRecord(chat) ? chat.polls : undefined;
   if (!isRecord(raw)) return null;
-  const { maxQuestionLength, minOptions, maxOptions, maxOptionLength } = raw;
+  const { maxQuestionLength, minOptions, maxOptions, maxOptionLength, maxFeedbackLength } = raw;
   if (!isPositive(maxQuestionLength) || !isPositive(minOptions) || !isPositive(maxOptions) || !isPositive(maxOptionLength) || minOptions > maxOptions) return null;
-  return { maxQuestionLength, minOptions, maxOptions, maxOptionLength };
+  return { maxQuestionLength, minOptions, maxOptions, maxOptionLength, ...(isPositive(maxFeedbackLength) ? { maxFeedbackLength } : {}) };
 }
 
 export interface ReactionLimits {

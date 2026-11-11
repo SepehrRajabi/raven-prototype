@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { Check, Plus, X } from "lucide-react";
+import { Check, MessageSquareText, Plus, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Dialog } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
@@ -13,6 +13,9 @@ interface DraftOption {
   key: number;
   text: string;
   correct: boolean;
+  feedback: string;
+  /** The feedback field is open. */
+  withFeedback: boolean;
 }
 
 function SettingRow({ label, hint, checked, onChange }: { label: string; hint: string; checked: boolean; onChange: (checked: boolean) => void }) {
@@ -61,7 +64,7 @@ export function PollDialog({
   onSend: (poll: ChatPollDraft) => Promise<void>;
 }) {
   const nextKey = useRef(0);
-  const blank = (): DraftOption => ({ key: nextKey.current++, text: "", correct: false });
+  const blank = (): DraftOption => ({ key: nextKey.current++, text: "", correct: false, feedback: "", withFeedback: false });
   const [question, setQuestion] = useState("");
   const [options, setOptions] = useState<DraftOption[]>([]);
   const [multiple, setMultiple] = useState(false);
@@ -71,7 +74,9 @@ export function PollDialog({
   const [error, setError] = useState("");
   const [tried, setTried] = useState(false);
   const optionFields = useRef(new Map<number, HTMLInputElement>());
+  const feedbackFields = useRef(new Map<number, HTMLInputElement>());
   const focusKey = useRef<number | null>(null);
+  const focusFeedback = useRef<number | null>(null);
 
   useEffect(() => {
     if (!open) return;
@@ -87,10 +92,12 @@ export function PollDialog({
   }, [open, limits.minOptions]);
 
   useEffect(() => {
-    if (focusKey.current === null) return;
-    optionFields.current.get(focusKey.current)?.focus();
+    if (focusKey.current !== null) optionFields.current.get(focusKey.current)?.focus();
+    if (focusFeedback.current !== null) feedbackFields.current.get(focusFeedback.current)?.focus();
     focusKey.current = null;
+    focusFeedback.current = null;
   }, [options]);
+  const takesFeedback = Boolean(limits.maxFeedbackLength);
 
   const update = (key: number, patch: Partial<DraftOption>) => setOptions((current) => current.map((option) => (option.key === key ? { ...option, ...patch } : option)));
   const add = () => {
@@ -109,7 +116,9 @@ export function PollDialog({
     setError("");
     const poll: ChatPollDraft = {
       question: question.trim(),
-      options: options.filter((option) => option.text.trim()).map((option) => ({ text: option.text.trim(), correct: quiz && option.correct })),
+      options: options
+        .filter((option) => option.text.trim())
+        .map((option) => ({ text: option.text.trim(), correct: quiz && option.correct, ...(takesFeedback && option.feedback.trim() ? { feedback: option.feedback.trim() } : {}) })),
       multiple,
       anonymous: allowAnonymous && anonymous,
     };
@@ -151,49 +160,88 @@ export function PollDialog({
           </div>
           <ul className="space-y-1.5">
             {options.map((option, index) => (
-              <li key={option.key} className="flex items-center gap-1.5">
-                {quiz ? (
-                  <button
-                    type="button"
-                    role="checkbox"
-                    aria-checked={option.correct}
-                    aria-label={`Answer ${index + 1} is correct`}
-                    title={option.correct ? "Correct" : "Mark as correct"}
-                    onClick={() => update(option.key, { correct: !option.correct })}
-                    className={cn(
-                      "flex h-6 w-6 shrink-0 items-center justify-center rounded-full border transition-colors",
-                      option.correct ? "border-live bg-live text-live-foreground" : "border-input text-transparent hover:border-subtle hover:text-subtle",
-                    )}
-                  >
-                    <Check className="h-3.5 w-3.5" aria-hidden />
-                  </button>
-                ) : null}
-                <Input
-                  ref={(element) => {
-                    if (element) optionFields.current.set(option.key, element);
-                    else optionFields.current.delete(option.key);
-                  }}
-                  value={option.text}
-                  onChange={(event) => update(option.key, { text: event.currentTarget.value })}
-                  onKeyDown={(event) => {
-                    // Enter moves on to the next answer, starting one after the last; on
-                    // a full or empty last answer it sends.
-                    if (event.key !== "Enter" || event.nativeEvent.isComposing) return;
-                    event.preventDefault();
-                    const next = options[index + 1];
-                    if (next) optionFields.current.get(next.key)?.focus();
-                    else if (options.length < limits.maxOptions && option.text.trim()) add();
-                    else submit();
-                  }}
-                  placeholder={`Answer ${index + 1}`}
-                  aria-label={`Answer ${index + 1}`}
-                  maxLength={limits.maxOptionLength}
-                  dir="auto"
-                />
-                {options.length > limits.minOptions ? (
-                  <Button size="icon-sm" variant="ghost" aria-label={`Remove answer ${index + 1}`} onClick={() => remove(option.key)}>
-                    <X className="h-4 w-4" />
-                  </Button>
+              <li key={option.key} className="space-y-1">
+                <div className="flex items-center gap-1.5">
+                  {quiz ? (
+                    <button
+                      type="button"
+                      role="checkbox"
+                      aria-checked={option.correct}
+                      aria-label={`Answer ${index + 1} is correct`}
+                      title={option.correct ? "Correct" : "Mark as correct"}
+                      onClick={() => update(option.key, { correct: !option.correct })}
+                      className={cn(
+                        "flex h-6 w-6 shrink-0 items-center justify-center rounded-full border transition-colors",
+                        option.correct ? "border-live bg-live text-live-foreground" : "border-input text-transparent hover:border-subtle hover:text-subtle",
+                      )}
+                    >
+                      <Check className="h-3.5 w-3.5" aria-hidden />
+                    </button>
+                  ) : null}
+                  <Input
+                    ref={(element) => {
+                      if (element) optionFields.current.set(option.key, element);
+                      else optionFields.current.delete(option.key);
+                    }}
+                    value={option.text}
+                    onChange={(event) => update(option.key, { text: event.currentTarget.value })}
+                    onKeyDown={(event) => {
+                      // Enter moves on to the next answer, starting one after the last; on
+                      // a full or empty last answer it sends.
+                      if (event.key !== "Enter" || event.nativeEvent.isComposing) return;
+                      event.preventDefault();
+                      const next = options[index + 1];
+                      if (next) optionFields.current.get(next.key)?.focus();
+                      else if (options.length < limits.maxOptions && option.text.trim()) add();
+                      else submit();
+                    }}
+                    placeholder={`Answer ${index + 1}`}
+                    aria-label={`Answer ${index + 1}`}
+                    maxLength={limits.maxOptionLength}
+                    dir="auto"
+                  />
+                  {takesFeedback ? (
+                    <Button
+                      size="icon-sm"
+                      variant="ghost"
+                      aria-label={option.withFeedback ? `Remove feedback on answer ${index + 1}` : `Add feedback to answer ${index + 1}`}
+                      aria-pressed={option.withFeedback}
+                      className={cn(option.withFeedback && "bg-secondary text-foreground")}
+                      onClick={() => {
+                        if (!option.withFeedback) focusFeedback.current = option.key;
+                        update(option.key, option.withFeedback ? { withFeedback: false, feedback: "" } : { withFeedback: true });
+                      }}
+                    >
+                      <MessageSquareText className="h-4 w-4" />
+                    </Button>
+                  ) : null}
+                  {options.length > limits.minOptions ? (
+                    <Button size="icon-sm" variant="ghost" aria-label={`Remove answer ${index + 1}`} onClick={() => remove(option.key)}>
+                      <X className="h-4 w-4" />
+                    </Button>
+                  ) : null}
+                </div>
+                {takesFeedback && option.withFeedback ? (
+                  <Input
+                    ref={(element) => {
+                      if (element) feedbackFields.current.set(option.key, element);
+                      else feedbackFields.current.delete(option.key);
+                    }}
+                    value={option.feedback}
+                    onChange={(event) => update(option.key, { feedback: event.currentTarget.value })}
+                    onKeyDown={(event) => {
+                      if (event.key !== "Enter" || event.nativeEvent.isComposing) return;
+                      event.preventDefault();
+                      const next = options[index + 1];
+                      if (next) optionFields.current.get(next.key)?.focus();
+                      else submit();
+                    }}
+                    placeholder="Feedback for whoever picks this (optional)"
+                    aria-label={`Feedback on answer ${index + 1}`}
+                    maxLength={limits.maxFeedbackLength}
+                    dir="auto"
+                    className={cn("h-8 text-small", quiz && "ml-[1.875rem] w-[calc(100%-1.875rem)]")}
+                  />
                 ) : null}
               </li>
             ))}

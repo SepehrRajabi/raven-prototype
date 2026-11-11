@@ -232,3 +232,49 @@ func TestChatPollForwardedIsANewPoll(t *testing.T) {
 		t.Fatalf("%d poll rows left after deleting", rows)
 	}
 }
+
+func feedbackOf(poll *ChatPoll) []string {
+	out := make([]string, len(poll.Options))
+	for i, option := range poll.Options {
+		out[i] = option.Feedback
+	}
+	return out
+}
+
+func TestChatPollFeedbackShowsToWhoChoseIt(t *testing.T) {
+	s, alice, bob, carol, _ := chatCrowd(t)
+	group := chatNewGroup(t, s, alice, "Lunch", bob, carol)
+	options := []map[string]any{
+		{"text": "Pizza", "feedback": "  Good   choice. "},
+		{"text": "Sushi"},
+		{"text": "Tacos", "feedback": "Spicy!"},
+	}
+	chatSendPoll(t, s, alice, group.ID, map[string]any{"question": "Lunch?", "options": []map[string]any{{"text": "a", "feedback": strings.Repeat("f", chatPollMaxFeedbackRunes+1)}, {"text": "b"}}}, http.StatusBadRequest)
+	sent := chatSendPoll(t, s, alice, group.ID, map[string]any{"question": "Lunch?", "options": options}, http.StatusCreated)
+	if want := []string{"Good choice.", "", "Spicy!"}; !reflect.DeepEqual(feedbackOf(sent.Poll), want) {
+		t.Fatalf("the asker's feedback: %q", feedbackOf(sent.Poll))
+	}
+	before := chatHistory(t, s, bob.token, group.ID, "").Messages
+	if got := feedbackOf(before[len(before)-1].Poll); !reflect.DeepEqual(got, []string{"", "", ""}) {
+		t.Fatalf("bob reads feedback before choosing: %q", got)
+	}
+
+	carolStream := chatListen(s, carol)
+	voted := chatVote(t, s, bob, group.ID, sent.ID, []int{0}, http.StatusOK)
+	if got := feedbackOf(voted.Poll); !reflect.DeepEqual(got, []string{"Good choice.", "", ""}) {
+		t.Fatalf("bob after choosing: %q", got)
+	}
+	if got := feedbackOf(nextChatEvent(t, carolStream).Message.Poll); !reflect.DeepEqual(got, []string{"", "", ""}) {
+		t.Fatalf("carol read bob's feedback: %q", got)
+	}
+
+	chatClosePoll(t, s, alice, group.ID, sent.ID, http.StatusOK)
+	after := chatHistory(t, s, carol.token, group.ID, "").Messages
+	if got := feedbackOf(after[len(after)-1].Poll); !reflect.DeepEqual(got, []string{"Good choice.", "", "Spicy!"}) {
+		t.Fatalf("carol once it ended: %q", got)
+	}
+	saved := chatSave(t, s, alice, http.StatusCreated, sent.ID).Saved
+	if got := feedbackOf(saved[0].Poll); !reflect.DeepEqual(got, []string{"Good choice.", "", "Spicy!"}) {
+		t.Fatalf("the copy lost its feedback: %q", got)
+	}
+}

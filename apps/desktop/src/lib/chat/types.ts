@@ -132,6 +132,11 @@ export interface ChatPollOption {
   voterIds?: string[];
   /** Set on every answer of a quiz once this viewer may know: never before. */
   correct?: boolean;
+  /**
+   * What the asker wrote for whoever picks this answer. Sent only to people who picked
+   * it, to the asker, and to everyone once the poll ended.
+   */
+  feedback?: string;
 }
 
 /**
@@ -156,7 +161,7 @@ export interface ChatPoll {
 /** A poll as it is written, before it is sent. */
 export interface ChatPollDraft {
   question: string;
-  options: Array<{ text: string; correct: boolean }>;
+  options: Array<{ text: string; correct: boolean; feedback?: string }>;
   multiple: boolean;
   anonymous: boolean;
 }

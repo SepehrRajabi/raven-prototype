@@ -152,6 +152,17 @@ export function PollCard({
                 {showResults ? (names ? <Tooltip label={names}>{figure}</Tooltip> : figure) : null}
                 {right ? <span className="sr-only">, correct answer</span> : wrongPick ? <span className="sr-only">, wrong answer</span> : null}
               </button>
+              {option.feedback ? (
+                <p
+                  className={cn(
+                    "ml-2 mt-1 break-words border-l-2 pl-2 text-caption text-muted-foreground",
+                    rightPick ? "border-live" : wrongPick ? "border-destructive" : "border-foreground/20",
+                  )}
+                  dir="auto"
+                >
+                  <bdi>{option.feedback}</bdi>
+                </p>
+              ) : null}
             </li>
           );
         })}

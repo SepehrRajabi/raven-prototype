@@ -36,3 +36,10 @@ func chatPollStatements() []string {
 		`CREATE INDEX IF NOT EXISTS idx_chat_poll_votes_user ON chat_poll_votes(user_id)`,
 	}
 }
+
+// chatPollFeedbackStatements adds what the asker writes for whoever picks an answer.
+func chatPollFeedbackStatements() []string {
+	return []string{
+		`ALTER TABLE chat_poll_options ADD COLUMN feedback TEXT NOT NULL DEFAULT ''`,
+	}
+}

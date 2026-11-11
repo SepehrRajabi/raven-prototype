@@ -19,6 +19,7 @@ const (
 	chatPollMinOptions       = 2
 	chatPollMaxOptions       = 10
 	chatPollMaxOptionRunes   = 100
+	chatPollMaxFeedbackRunes = 200
 )
 
 var (
@@ -49,6 +50,7 @@ type ChatPoll struct {
 
 	senderID string
 	correct  []bool
+	feedback []string
 	// votes is everyone's choices, by person. It never leaves the server as it is.
 	votes map[string][]int
 }
@@ -61,6 +63,10 @@ type ChatPollOption struct {
 	VoterIDs []string `json:"voterIds,omitempty"`
 	// Correct is set on every answer of a quiz once the viewer may know, and never before.
 	Correct *bool `json:"correct,omitempty"`
+	// Feedback is what the asker wrote for whoever chooses this answer. Like Correct it
+	// can give the answer away, so it is sent only to people who chose it, to the asker,
+	// and to everyone once the poll has ended.
+	Feedback string `json:"feedback,omitempty"`
 }
 
 // reveals tells whether viewerID may see a quiz's correct answers.
@@ -68,17 +74,28 @@ func (p *ChatPoll) reveals(viewerID string) bool {
 	return p.Quiz && (len(p.votes[viewerID]) > 0 || viewerID == p.senderID || p.ClosedAt != nil)
 }
 
+// showsAllFeedback tells whether viewerID may read every answer's feedback, not only
+// that of the answers they chose.
+func (p *ChatPoll) showsAllFeedback(viewerID string) bool {
+	return viewerID == p.senderID || p.ClosedAt != nil
+}
+
 // viewFor is the poll as viewerID sees it.
 func (p *ChatPoll) viewFor(viewerID string) *ChatPoll {
 	view := *p
 	view.MyVotes = append([]int{}, p.votes[viewerID]...)
 	view.Revealed = p.reveals(viewerID)
+	allFeedback := p.showsAllFeedback(viewerID)
 	view.Options = make([]ChatPollOption, len(p.Options))
 	for i, option := range p.Options {
 		option.Correct = nil
 		if view.Revealed {
 			correct := p.correct[i]
 			option.Correct = &correct
+		}
+		option.Feedback = ""
+		if i < len(p.feedback) && (allFeedback || slices.Contains(view.MyVotes, i)) {
+			option.Feedback = p.feedback[i]
 		}
 		view.Options[i] = option
 	}
@@ -90,6 +107,9 @@ func (p *ChatPoll) viewKey(viewerID string) string {
 	var key strings.Builder
 	if p.reveals(viewerID) {
 		key.WriteString("r")
+	}
+	if p.showsAllFeedback(viewerID) {
+		key.WriteString("f")
 	}
 	for _, position := range p.votes[viewerID] {
 		key.WriteString(",")
@@ -130,6 +150,8 @@ type chatPollInput struct {
 	Options  []struct {
 		Text    string `json:"text"`
 		Correct bool   `json:"correct"`
+		// Feedback is shown to whoever chooses the answer. Optional.
+		Feedback string `json:"feedback"`
 	} `json:"options"`
 	Multiple  bool `json:"multiple"`
 	Anonymous bool `json:"anonymous"`
@@ -162,6 +184,11 @@ func (p *chatPollInput) normalize() error {
 		}
 		seen[strings.ToLower(text)] = true
 		p.Options[i].Text = text
+		feedback := strings.Join(strings.Fields(p.Options[i].Feedback), " ")
+		if utf8.RuneCountInString(feedback) > chatPollMaxFeedbackRunes || !utf8.ValidString(feedback) {
+			return fiber.NewError(fiber.StatusBadRequest, "Feedback must be "+strconv.Itoa(chatPollMaxFeedbackRunes)+" characters or fewer.")
+		}
+		p.Options[i].Feedback = feedback
 	}
 	return nil
 }
@@ -187,8 +214,8 @@ func chatStorePollTx(tx *database.Tx, access chatAccess, messageID string, poll 
 	}
 	for position, option := range poll.Options {
 		if _, err := tx.Exec(
-			`INSERT INTO chat_poll_options (message_id, conversation_id, position, text, correct) VALUES (?, ?, ?, ?, ?)`,
-			messageID, conversationID, position, option.Text, option.Correct,
+			`INSERT INTO chat_poll_options (message_id, conversation_id, position, text, correct, feedback) VALUES (?, ?, ?, ?, ?, ?)`,
+			messageID, conversationID, position, option.Text, option.Correct, option.Feedback,
 		); err != nil {
 			return err
 		}
@@ -213,8 +240,8 @@ func chatCopyPollTx(tx *database.Tx, fromMessageID, toMessageID string, target c
 		return false, err
 	}
 	_, err = tx.Exec(
-		`INSERT INTO chat_poll_options (message_id, conversation_id, position, text, correct)
-		 SELECT ?, ?, position, text, correct FROM chat_poll_options WHERE message_id = ?`,
+		`INSERT INTO chat_poll_options (message_id, conversation_id, position, text, correct, feedback)
+		 SELECT ?, ?, position, text, correct, feedback FROM chat_poll_options WHERE message_id = ?`,
 		toMessageID, conversationID, fromMessageID,
 	)
 	return true, err
@@ -291,7 +318,7 @@ func withChatPolls(q chatQuerier, viewerID string, messages []ChatMessage) error
 		pollIDs = append(pollIDs, id)
 	}
 	in = chatPlaceholders(len(pollIDs))
-	rows, err = q.Query(`SELECT message_id, text, correct FROM chat_poll_options WHERE message_id IN (`+in+`) ORDER BY message_id, position`, pollIDs...)
+	rows, err = q.Query(`SELECT message_id, text, correct, feedback FROM chat_poll_options WHERE message_id IN (`+in+`) ORDER BY message_id, position`, pollIDs...)
 	if err != nil {
 		return err
 	}
@@ -299,13 +326,15 @@ func withChatPolls(q chatQuerier, viewerID string, messages []ChatMessage) error
 		var id string
 		var option ChatPollOption
 		var correct bool
-		if err := rows.Scan(&id, &option.Text, &correct); err != nil {
+		var feedback string
+		if err := rows.Scan(&id, &option.Text, &correct, &feedback); err != nil {
 			rows.Close()
 			return err
 		}
 		poll := polls[id]
 		poll.Options = append(poll.Options, option)
 		poll.correct = append(poll.correct, correct)
+		poll.feedback = append(poll.feedback, feedback)
 		poll.Quiz = poll.Quiz || correct
 	}
 	if err := rows.Close(); err != nil {
@@ -553,5 +582,6 @@ func chatPollCapabilities() map[string]any {
 		"minOptions":        chatPollMinOptions,
 		"maxOptions":        chatPollMaxOptions,
 		"maxOptionLength":   chatPollMaxOptionRunes,
+		"maxFeedbackLength": chatPollMaxFeedbackRunes,
 	}
 }

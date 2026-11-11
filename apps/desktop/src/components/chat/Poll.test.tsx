@@ -69,6 +69,19 @@ describe("polls", () => {
     expect(html).not.toContain("Take back vote");
   });
 
+  test("show the asker's feedback under the answers it was sent for", () => {
+    const html = render({
+      ...quiz([0]),
+      options: [
+        { text: "2", votes: 1, correct: false, feedback: "Count again." },
+        { text: "4", votes: 0, correct: true },
+        { text: "four", votes: 0, correct: true },
+      ],
+    });
+    expect(html).toContain("Count again.");
+    expect(html).toContain("border-destructive");
+  });
+
   test("say how a quiz went", () => {
     expect(quizOutcome(quiz([1]))).toBe("right");
     expect(quizOutcome(quiz([0]))).toBe("wrong");
@@ -97,6 +110,7 @@ describe("polls", () => {
     expect(pollLimits({ chat: {} })).toBeNull();
     expect(pollLimits({ chat: { polls: { maxQuestionLength: 300, minOptions: 2, maxOptions: 10, maxOptionLength: 100 } } })).toEqual({ maxQuestionLength: 300, minOptions: 2, maxOptions: 10, maxOptionLength: 100 });
     expect(pollLimits({ chat: { polls: { maxQuestionLength: 300, minOptions: 12, maxOptions: 10, maxOptionLength: 100 } } })).toBeNull();
+    expect(pollLimits({ chat: { polls: { maxQuestionLength: 300, minOptions: 2, maxOptions: 10, maxOptionLength: 100, maxFeedbackLength: 200 } } })?.maxFeedbackLength).toBe(200);
   });
 
   test("check what is written before sending", () => {
