@@ -96,7 +96,7 @@ pub fn read_pack<R: Read + Seek>(reader: R, root: &Path, limits: Limits) -> Resu
     let mut total = 0u64;
     for index in 0..archive.len() {
         let entry = archive.by_index_raw(index).map_err(|_| LibraryError::BadEntry)?;
-        let name = entry.name().to_string();
+        let name = entry.name().map_err(|_| LibraryError::BadEntry)?.to_string();
         if !entry_allowed(&name, entry.is_dir()) || !names.insert(name.clone()) {
             return Err(LibraryError::BadEntry);
         }

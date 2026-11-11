@@ -639,10 +639,11 @@ mod icon {
     }
 
     fn decode(bytes: &[u8], size: usize) -> Result<Vec<u8>, String> {
-        let mut decoder = png::Decoder::new(bytes);
+        let mut decoder = png::Decoder::new(std::io::Cursor::new(bytes));
         decoder.set_transformations(png::Transformations::normalize_to_color8());
         let mut reader = decoder.read_info().map_err(|error| error.to_string())?;
-        let mut buffer = vec![0; reader.output_buffer_size()];
+        let size_needed = reader.output_buffer_size().ok_or("tray icon is too large")?;
+        let mut buffer = vec![0; size_needed];
         let info = reader
             .next_frame(&mut buffer)
             .map_err(|error| error.to_string())?;
