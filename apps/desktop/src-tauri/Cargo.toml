@@ -33,42 +33,45 @@ webrtc-sys-build = "=0.3.18"
 # macos-private-api: transparent windows (the voice overlay) on macOS. No effect elsewhere.
 tauri = { version = "2.5.0", features = ["tray-icon", "macos-private-api"] }
 tauri-plugin-opener = "2.2.7"
-tauri-plugin-updater = "=2.10.1"
+tauri-plugin-updater = "=2.14.1"
 # The save picker for chat images.
 tauri-plugin-dialog = "2"
 # GIF and sticker libraries: hashing before an upload, and opening .ravenpack files.
-sha2 = "0.10"
-zip = { version = "4.6", default-features = false, features = ["deflate-flate2"] }
+sha2 = "0.11"
+zip = { version = "9", default-features = false, features = ["deflate-flate2"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 thiserror = "2"
 uuid = { version = "1", features = ["serde", "v4"] }
 rustls = { version = "0.23", default-features = false, features = ["ring", "std"] }
 cpal = "0.15"
-base64 = "0.22"
-png = "0.17"
+base64 = "0.23"
+png = "0.18"
 mozjpeg = "0.10.13"
 image = { version = "0.25", default-features = false, features = ["jpeg", "png", "gif", "webp"] }
 img-parts = "0.4"
-fast_image_resize = "5"
+fast_image_resize = "6"
 thumbhash = "0.1"
+# The LiveKit crates stay as locked (livekit 0.7.45, livekit-api 0.5.1, livekit-protocol
+# 0.7.8, webrtc-sys 0.3.34): a plain `cargo update` moves them to a set that does not
+# build (livekit-api 0.5.6 against livekit-protocol 0.7.13). Use `cargo update -p <crate>`
+# for other crates until the move to livekit 0.10.
 livekit = { version = "0.7", features = ["rustls-tls-webpki-roots"] }
 tokio = { version = "1.52.3", features = ["rt-multi-thread", "sync", "macros", "net", "time", "io-util"] }
 # The Workshop's port sharing talks to the server's relay over QUIC. Same versions livekit already
 # builds; roots are the webpki ones, so the relay needs a publicly trusted certificate.
 quinn = { version = "0.11", default-features = false, features = ["runtime-tokio", "rustls-ring"] }
 webpki-roots = "1"
-ringbuf = "0.4"
 futures-util = { version = "0.3", features = ["io", "sink"] }
 # Port sharing's WebSocket route (plan 02): yamux streams over one WebSocket with TLS.
-tokio-tungstenite = { version = "0.29", default-features = false, features = ["connect", "rustls-tls-webpki-roots"] }
-yamux = "0.13"
+tokio-tungstenite = { version = "0.30", default-features = false, features = ["connect", "rustls-tls-webpki-roots"] }
+yamux = "0.14"
 tokio-util = { version = "0.7", features = ["compat"] }
-sonora = "0.1"
+sonora = "0.3"
 # The voice detector inside sonora's gain control, used on its own to tell speech from
 # keyboards. Same versions sonora already depends on.
-sonora-agc2 = "0.1"
-sonora-simd = "0.1"
+sonora-agc2 = "0.3"
+sonora-simd = "0.3"
 # RNNoise in pure Rust: the "Strong" noise suppression mode.
 nnnoiseless = { version = "0.5", default-features = false }
 # DeepFilterNet 3: the "Studio" mode. Vendored and trimmed to the inference path; see
@@ -86,7 +89,7 @@ tauri-plugin-global-shortcut = "2"
 # Opt-in "Launch at Startup", which starts it in the tray. Only where the
 # tray exists.
 [target.'cfg(any(windows, target_os = "macos"))'.dependencies]
-tauri-plugin-autostart = "~2.5.1"
+tauri-plugin-autostart = "2"
 
 [target.'cfg(windows)'.dependencies]
 # The tray's one-time "still running" notice, and one Raven per desktop session.
@@ -119,8 +122,8 @@ windows = { version = "0.58", features = [
 windows-core = "0.58"
 # The main window's WebView2, to notice when its renderer dies (see diagnostics.rs). The
 # same versions tauri's WebView2 backend already builds.
-webview2-com = "0.38"
-windows-core-webview2 = { package = "windows-core", version = "0.61" }
+webview2-com = "0.39"
+windows-core-webview2 = { package = "windows-core", version = "0.62" }
 # Windows.Graphics.Capture (WGC) wrapper for monitor + window screen capture.
 windows-capture = "1.4"
 
