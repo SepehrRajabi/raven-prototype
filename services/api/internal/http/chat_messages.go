@@ -108,6 +108,9 @@ func (s *Server) queryChatMessages(q chatQuerier, viewerID string, floor int64, 
 	if err := withChatAttachments(q, messages); err != nil {
 		return nil, err
 	}
+	if err := withChatPolls(q, viewerID, messages); err != nil {
+		return nil, err
+	}
 	if err := withChatReactions(q, messages); err != nil {
 		return nil, err
 	}
@@ -132,6 +135,9 @@ func (s *Server) loadChatMessage(q chatQuerier, conversationID, messageID, viewe
 	}
 	messages := []ChatMessage{message}
 	if err = withChatAttachments(q, messages); err != nil {
+		return ChatMessage{}, err
+	}
+	if err = withChatPolls(q, viewerID, messages); err != nil {
 		return ChatMessage{}, err
 	}
 	if err = withChatReactions(q, messages); err != nil {
@@ -326,6 +332,8 @@ func (s *Server) sendChatMessage(c *fiber.Ctx) error {
 		AttachmentIDs    []string `json:"attachmentIds"`
 		// LibraryItemID sends a GIF or sticker from a library. It goes on its own.
 		LibraryItemID string `json:"libraryItemId"`
+		// Poll sends a poll. It goes on its own too, and its question becomes the body.
+		Poll *chatPollInput `json:"poll"`
 	}
 	if err := c.BodyParser(&input); err != nil {
 		s.metrics.chatSends.inc("invalid")
@@ -349,6 +357,17 @@ func (s *Server) sendChatMessage(c *fiber.Ctx) error {
 		s.metrics.chatSends.inc("invalid")
 		return fiber.NewError(400, "A GIF or sticker is sent on its own.")
 	}
+	if input.Poll != nil {
+		if body != "" || len(input.AttachmentIDs) > 0 || input.LibraryItemID != "" {
+			s.metrics.chatSends.inc("invalid")
+			return fiber.NewError(400, "A poll is sent on its own.")
+		}
+		if err := input.Poll.normalize(); err != nil {
+			s.metrics.chatSends.inc("invalid")
+			return err
+		}
+		body = input.Poll.Question
+	}
 	if body == "" && len(input.AttachmentIDs) == 0 && input.LibraryItemID == "" {
 		s.metrics.chatSends.inc("invalid")
 		return fiber.NewError(400, "Write a message first.")
@@ -359,7 +378,7 @@ func (s *Server) sendChatMessage(c *fiber.Ctx) error {
 	unlock := s.chatLocks.lock(conversationID)
 	defer unlock()
 
-	sent, err := s.storeChatMessage(user, conversationID, input.ClientMessageID, body, input.ReplyToMessageID, input.LibraryItemID, input.AttachmentIDs...)
+	sent, err := s.storeChatMessage(user, conversationID, input.ClientMessageID, body, input.ReplyToMessageID, input.LibraryItemID, input.Poll, input.AttachmentIDs...)
 	if err != nil {
 		s.metrics.chatSends.inc(chatSendOutcome(err))
 		return err
@@ -372,7 +391,9 @@ func (s *Server) sendChatMessage(c *fiber.Ctx) error {
 	event := sent.message
 	event.ReplyTo = nil
 	s.publishChatMessage("message.created", event, sent.message.Seq, sent.reply, sent.recipients, sent.committedAt)
-	s.queueChatLinkPreview(user.ID, conversationID, sent.message.ID, linkpreview.FirstLink(sent.message.Body))
+	if sent.message.Poll == nil {
+		s.queueChatLinkPreview(user.ID, conversationID, sent.message.ID, linkpreview.FirstLink(sent.message.Body))
+	}
 	s.metrics.chatSends.inc("ok")
 	s.metrics.sendDuration.observeSince(started)
 	return c.Status(fiber.StatusCreated).JSON(fiber.Map{"message": sent.message})
@@ -402,7 +423,7 @@ type chatStored struct {
 }
 
 // storeChatMessage commits one message, or finds the one an earlier attempt committed.
-func (s *Server) storeChatMessage(sender User, conversationID, clientMessageID, body, replyToID, libraryItemID string, attachmentIDs ...string) (chatStored, error) {
+func (s *Server) storeChatMessage(sender User, conversationID, clientMessageID, body, replyToID, libraryItemID string, poll *chatPollInput, attachmentIDs ...string) (chatStored, error) {
 	tx, err := s.db.Begin()
 	if err != nil {
 		return chatStored{}, err
@@ -485,8 +506,16 @@ func (s *Server) storeChatMessage(sender User, conversationID, clientMessageID, 
 			return chatStored{}, err
 		}
 	}
-	attachments := []ChatMessage{{ID: messageID}}
+	if poll != nil {
+		if err := chatStorePollTx(tx, access, messageID, poll, now); err != nil {
+			return chatStored{}, err
+		}
+	}
+	attachments := []ChatMessage{{ID: messageID, SenderID: sender.ID}}
 	if err := withChatAttachments(tx, attachments); err != nil {
+		return chatStored{}, err
+	}
+	if err := withChatPolls(tx, sender.ID, attachments); err != nil {
 		return chatStored{}, err
 	}
 
@@ -505,6 +534,7 @@ func (s *Server) storeChatMessage(sender User, conversationID, clientMessageID, 
 
 	message := ChatMessage{
 		Attachments:     attachments[0].Attachments,
+		Poll:            attachments[0].Poll,
 		ID:              messageID,
 		ConversationID:  conversationID,
 		Seq:             seq,
@@ -639,6 +669,12 @@ func (s *Server) editChatMessage(c *fiber.Ctx) error {
 		return err
 	}
 	if fromLibrary > 0 {
+		return errChatCannotEdit
+	}
+	// A poll's question stays as it was asked: people may already have answered it.
+	if isPoll, err := chatIsPoll(tx, messageID); err != nil {
+		return err
+	} else if isPoll {
 		return errChatCannotEdit
 	}
 	if body == "" {
@@ -807,6 +843,9 @@ func (s *Server) deleteChatMessageForEveryone(c *fiber.Ctx) error {
 // is to be told. Only access.ConversationID, Kind and TreeID are read.
 func (s *Server) chatEraseMessageTx(tx *database.Tx, access chatAccess, messageID, actorID string, seq int64, now string) ([]chatRecipient, error) {
 	if _, err := tx.Exec(`DELETE FROM chat_reactions WHERE message_id = ?`, messageID); err != nil {
+		return nil, err
+	}
+	if err := chatDeletePollsTx(tx, `message_id = ?`, messageID); err != nil {
 		return nil, err
 	}
 	if err := chatQueuePurgesTx(tx, `message_id = ?`, messageID); err != nil {

@@ -428,7 +428,13 @@ func (s *Server) chatCopyMessagesTx(tx *database.Tx, caller User, sourceIDs []st
 		if err := chatCopyAttachmentsTx(tx, source.id, copyID, target, caller.ID, now); err != nil {
 			return result, err
 		}
-		if fetch, err := chatCopyLinkPreviewTx(tx, source.id, copyID, targetID, now); err != nil {
+		isPoll, err := chatCopyPollTx(tx, source.id, copyID, target, now)
+		if err != nil {
+			return result, err
+		}
+		if isPoll {
+			// A poll has no card: its question is not a message with a link.
+		} else if fetch, err := chatCopyLinkPreviewTx(tx, source.id, copyID, targetID, now); err != nil {
 			return result, err
 		} else if fetch {
 			result.LinkPreviews = append(result.LinkPreviews, chatLinkPreviewJob{caller.ID, targetID, copyID, linkpreview.FirstLink(body)})

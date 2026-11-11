@@ -413,6 +413,7 @@ func (s *Server) getServerProperties(c *fiber.Ctx) error {
 	chat := map[string]any{"version": chatProtocolVersion, "maxMessageLength": chatMaxBodyRunes, "editWindowSeconds": int(chatEditWindow.Seconds()), "maxGroupMembers": chatMaxGroupMembers}
 	chat["notifications"] = true
 	chat["reactions"] = map[string]any{"maxPerPerson": chatMaxReactionsPerPerson, "maxKinds": chatMaxReactionKinds}
+	chat["polls"] = chatPollCapabilities()
 	if attachments := s.chatAttachmentCapabilities(); attachments != nil {
 		chat["attachments"] = attachments
 	}

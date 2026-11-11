@@ -565,6 +565,14 @@ func chatAttachmentSummaryMap(q chatQuerier, ids []any) (map[string][]ChatAttach
 	if len(ids) == 0 {
 		return out, nil
 	}
+	// A poll reads as one, ahead of anything else.
+	polls, err := stringColumnTx(q, `SELECT message_id FROM chat_polls WHERE message_id IN (`+chatPlaceholders(len(ids))+`)`, ids...)
+	if err != nil {
+		return nil, err
+	}
+	for _, id := range polls {
+		out[id] = append(out[id], ChatAttachmentSummary{Kind: "poll"})
+	}
 	rows, err := q.Query(`SELECT message_id, kind FROM chat_attachments WHERE message_id IN (`+strings.TrimSuffix(strings.Repeat("?,", len(ids)), ",")+`) ORDER BY message_id, position`, ids...)
 	if err != nil {
 		return nil, err

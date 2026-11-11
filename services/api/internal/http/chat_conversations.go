@@ -858,6 +858,9 @@ func chatDeleteConversationTx(tx *database.Tx, conversationID string) error {
 	if err := chatQueueLinkPreviewPurgesTx(tx, `conversation_id = ?`, conversationID); err != nil {
 		return err
 	}
+	if err := chatDeletePollsTx(tx, `conversation_id = ?`, conversationID); err != nil {
+		return err
+	}
 	for _, statement := range []string{
 		`DELETE FROM chat_reactions WHERE conversation_id = ?`,
 		`DELETE FROM chat_message_hides WHERE conversation_id = ?`,
@@ -896,6 +899,9 @@ func deleteChatForTreeTx(tx *database.Tx, treeID string) error {
 		return err
 	}
 	if err := chatQueueLinkPreviewPurgesTx(tx, `conversation_id IN `+nests, treeID); err != nil {
+		return err
+	}
+	if err := chatDeletePollsTx(tx, `conversation_id IN `+nests, treeID); err != nil {
 		return err
 	}
 	for _, statement := range []string{

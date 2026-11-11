@@ -17,6 +17,34 @@ export function normalizeApiServerUrl(value: string) {
 }
 
 /**
+ * One address per server, in order. The same host and path over http and https is the
+ * same server, and is shown as one: the https address is kept, unless the http one comes
+ * first (the server in use). An older Raven saved public names typed without a scheme
+ * over http, which macOS refuses anyway.
+ */
+export function uniqueServerUrls(urls: string[]): string[] {
+  const out: string[] = [];
+  const at = new Map<string, number>();
+  for (const url of urls) {
+    let key = url;
+    try {
+      const parsed = new URL(url);
+      key = `${parsed.host.toLowerCase()}${parsed.pathname.replace(/\/+$/, "")}`;
+    } catch {
+      // Not an address; it can only match itself.
+    }
+    const index = at.get(key);
+    if (index === undefined) {
+      at.set(key, out.length);
+      out.push(url);
+    } else if (index > 0 && out[index].startsWith("http:") && url.startsWith("https:")) {
+      out[index] = url;
+    }
+  }
+  return out;
+}
+
+/**
  * The scheme for an address typed without one. A public name ("raven.example.org") is a
  * deployed server behind TLS: macOS's WebView refuses plain HTTP to it outright (App
  * Transport Security), and it should not be spoken to in the clear anywhere. A local

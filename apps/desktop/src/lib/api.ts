@@ -8,7 +8,7 @@ import {
 } from "@/lib/accounts";
 import { avatarVersion, noteAvatarRoute } from "@/lib/avatarVersions";
 import { parseCallVote, type CallVote } from "@/lib/callVote";
-import { normalizeApiServerUrl } from "@/lib/apiServerUrl";
+import { normalizeApiServerUrl, uniqueServerUrls } from "@/lib/apiServerUrl";
 import type { WorkshopConfig, WorkshopPlaceKind, WorkshopProtocol, WorkshopShare } from "@/lib/workshopState";
 
 const DEFAULT_API_BASE_URL = normalizeApiServerUrl(import.meta.env.VITE_RAVEN_API_URL ?? "http://127.0.0.1:6977");
@@ -1598,7 +1598,7 @@ function readApiServerHistory() {
         return [];
       }
     });
-    return [...new Set([readStoredApiServerUrl(), ...urls])].slice(0, 8);
+    return uniqueServerUrls([readStoredApiServerUrl(), ...urls]).slice(0, 8);
   } catch {
     return [readStoredApiServerUrl()];
   }
@@ -1606,6 +1606,6 @@ function readApiServerHistory() {
 
 function rememberApiServerUrl(value: string) {
   const url = normalizeApiServerUrl(value);
-  const next = [...new Set([url, ...readApiServerHistory()])].slice(0, 8);
+  const next = uniqueServerUrls([url, ...readApiServerHistory()]).slice(0, 8);
   localStorage.setItem(API_SERVER_HISTORY_KEY, JSON.stringify(next));
 }
