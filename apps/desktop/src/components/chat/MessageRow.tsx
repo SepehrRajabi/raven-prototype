@@ -1,18 +1,18 @@
 import { memo, useState, type ReactNode } from "react";
-import { AlertCircle, Bookmark, CalendarClock, Check, CheckCheck, CheckCircle2, Clock, ChevronDown, Copy, CornerUpLeft, Download, EyeOff, Forward, MoreHorizontal, Pencil, SmilePlus, Trash2, Users } from "lucide-react";
+import { AlertCircle, Bookmark, CalendarClock, Check, CheckCheck, CheckCircle2, CircleStop, Clock, ChevronDown, Copy, CornerUpLeft, Download, EyeOff, Forward, MoreHorizontal, Pencil, SmilePlus, Trash2, Users } from "lucide-react";
 import { Avatar } from "@/components/ui/avatar";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { toast } from "@/components/ui/toast";
 import { Tooltip } from "@/components/ui/tooltip";
 import { api } from "@/lib/api";
-import { canShow, messageExcerpt, onlyPictures } from "@/lib/chat/attachments";
+import { canShow, messageExcerpt, onlyPictures, summaryOf } from "@/lib/chat/attachments";
 import type { ReactionLimits } from "@/lib/chat/attachments";
 import { QUICK_REACTIONS } from "@/lib/chat/reactions";
 import { failureText } from "@/lib/chat/errors";
 import { libraryApi } from "@/lib/library/libraryApi";
 import { saveAttachment } from "@/lib/chat/imageActions";
-import { excerptOf, summarize } from "@/lib/chat/reducer";
+import { excerptOf } from "@/lib/chat/reducer";
 import { emojiOnlyCount } from "@/lib/chat/format";
 import { eventCancelledLine, eventInviteLine, systemLine, UNKNOWN_RAVEN_MESSAGE } from "@/lib/chat/text";
 import { repeatText } from "@/lib/events";
@@ -27,6 +27,7 @@ import { LibraryMedia } from "@/components/library/LibraryMedia";
 import { libraryBox } from "@/lib/library/types";
 import { RavenAvatar, SystemBadge } from "./ConversationRow";
 import { LinkPreviewCard } from "./LinkPreview";
+import { PollCard } from "./Poll";
 import { EmojiPicker } from "./EmojiPicker";
 import { Reactions } from "./Reactions";
 import { MessageText, type MentionContext } from "./MessageText";
@@ -142,6 +143,10 @@ export interface MessageRowProps {
   onEdit: (message: ChatMessage) => void;
   /** Takes the link preview off this message for everyone. Set on your own messages. */
   onRemoveLinkPreview?: () => Promise<void>;
+  /** Sets my choices in this message's poll. */
+  onVote?: (options: number[]) => Promise<void>;
+  /** Ends this message's poll. Set on your own polls. */
+  onClosePoll?: () => Promise<void>;
   onRemoveForMe: (message: ChatMessage) => void;
   onDeleteForEveryone: (message: ChatMessage) => void;
   onOpenReply: (seq: number) => void;
@@ -292,13 +297,14 @@ export const MessageRow = memo(function MessageRow(props: MessageRowProps) {
   // A reply shows the original as it is now when that is on screen, and otherwise as it
   // was when this message was fetched.
   const reply: ChatReplyRef | undefined = message.replyTo && parent
-    ? { id: parent.id, seq: parent.seq, senderId: parent.senderId, senderName: parent.senderName, deleted: Boolean(parent.deletedAt), excerpt: parent.deletedAt ? undefined : excerptOf(parent.body), attachments: parent.deletedAt ? undefined : summarize(parent.attachments) }
+    ? { id: parent.id, seq: parent.seq, senderId: parent.senderId, senderName: parent.senderName, deleted: Boolean(parent.deletedAt), excerpt: parent.deletedAt ? undefined : excerptOf(parent.body), attachments: parent.deletedAt ? undefined : summaryOf(parent) }
     : message.replyTo;
   const attachments = !deleted ? message.attachments ?? [] : [];
   const hasText = message.body.trim() !== "";
   // Pictures with nothing to say about them stand on their own, without a bubble.
   const origin = !deleted ? message.origin : undefined;
-  const bareEmoji = !deleted && !origin && attachments.length === 0 && !reply && emojiOnlyCount(message.body) > 0;
+  const poll = !deleted ? message.poll : undefined;
+  const bareEmoji = !deleted && !poll && !origin && attachments.length === 0 && !reply && emojiOnlyCount(message.body) > 0;
   const bare = bareEmoji || (!origin && attachments.length > 0 && !hasText && !reply && onlyPictures(attachments));
   const shown = attachments.filter(canShow);
   const savable = shown.length === 1 && shown[0].kind === "image" ? shown[0] : null;
@@ -321,6 +327,10 @@ export const MessageRow = memo(function MessageRow(props: MessageRowProps) {
       },
       () => toast({ title: "Couldn’t save the image", description: "Try again in a moment.", tone: "error" }),
     );
+  };
+
+  const closePoll = () => {
+    void props.onClosePoll?.().catch((failure: unknown) => toast({ title: failureText(failure, "Couldn’t end the poll."), tone: "error" }));
   };
 
   const removeLinkPreview = () => {
@@ -447,6 +457,12 @@ export const MessageRow = memo(function MessageRow(props: MessageRowProps) {
               Copy text
             </DropdownMenuItem>
           ) : null}
+          {poll && !poll.closedAt && props.onClosePoll ? (
+            <DropdownMenuItem onSelect={closePoll}>
+              <CircleStop className="text-muted-foreground" />
+              {poll.quiz ? "End quiz" : "End poll"}
+            </DropdownMenuItem>
+          ) : null}
           {props.canEdit && !deleted ? (
             <DropdownMenuItem onSelect={() => props.onEdit(message)}>
               <Pencil className="text-muted-foreground" />
@@ -559,6 +575,8 @@ export const MessageRow = memo(function MessageRow(props: MessageRowProps) {
             ) : null}
             {deleted ? (
               <p className="text-body italic text-subtle">Message deleted</p>
+            ) : poll ? (
+              <PollCard poll={poll} question={message.body} mine={mine} canVote={props.canReply && Boolean(props.onVote) && !props.selecting} nameOf={props.nameOf} onVote={props.onVote ?? (() => Promise.resolve())} />
             ) : hasText ? (
               <MessageText body={message.body} mentions={props.mentions} />
             ) : null}

@@ -124,6 +124,48 @@ export interface ChatLinkPreview {
   image?: { version?: string; contentType: string; width: number; height: number };
 }
 
+/** One answer of a poll. */
+export interface ChatPollOption {
+  text: string;
+  votes: number;
+  /** Who chose it, in the order they did. Never sent for an anonymous poll. */
+  voterIds?: string[];
+  /** Set on every answer of a quiz once this viewer may know: never before. */
+  correct?: boolean;
+  /**
+   * What the asker wrote for whoever picks this answer. Sent only to people who picked
+   * it, to the asker, and to everyone once the poll ended.
+   */
+  feedback?: string;
+}
+
+/**
+ * A poll. Its question is the message's body. The server shapes it for each viewer:
+ * `myVotes` are their own choices, and a quiz's answers show only once they answered,
+ * asked it themselves, or it ended.
+ */
+export interface ChatPoll {
+  multiple: boolean;
+  anonymous: boolean;
+  /** Some answers are correct. Which ones is in `options`, once `revealed`. */
+  quiz: boolean;
+  revealed: boolean;
+  closedAt?: string;
+  options: ChatPollOption[];
+  /** How many people voted. */
+  voters: number;
+  /** The viewer's choices, by position. */
+  myVotes: number[];
+}
+
+/** A poll as it is written, before it is sent. */
+export interface ChatPollDraft {
+  question: string;
+  options: Array<{ text: string; correct: boolean; feedback?: string }>;
+  multiple: boolean;
+  anonymous: boolean;
+}
+
 export interface ChatMessage {
   id: string;
   conversationId: string;
@@ -139,6 +181,8 @@ export interface ChatMessage {
   body: string;
   attachments?: ChatAttachment[];
   linkPreview?: ChatLinkPreview;
+  /** Set on a poll; `body` is its question. */
+  poll?: ChatPoll;
   reactions?: ChatReaction[];
   replyTo?: ChatReplyRef;
   system?: ChatSystemPayload;

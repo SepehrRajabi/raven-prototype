@@ -3,6 +3,7 @@ import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { Archive, ArchiveRestore, Bell, BellOff, Eraser, Hand, ImagePlus, LogIn, LogOut, MoreHorizontal, Pencil, Trash2, Users } from "lucide-react";
 import { GroupPeopleDialog, RenameDialog } from "@/components/chat/ChatDialogs";
 import { ForwardDialog } from "@/components/chat/ForwardDialog";
+import { PollDialog } from "@/components/chat/PollDialog";
 import { SelectionBar } from "@/components/chat/SelectionBar";
 import { ImageViewer } from "@/components/chat/ImageViewer";
 import { Composer } from "@/components/chat/Composer";
@@ -15,14 +16,14 @@ import { toast } from "@/components/ui/toast";
 import { failureText } from "@/lib/chat/errors";
 import { notifies } from "@/lib/chat/notify";
 import { canSelect, clickSelection, selectionAfterKey, startSelection, type MessageSelection } from "@/lib/chat/selection";
-import { canShow, isLibraryMessage, reactionLimits } from "@/lib/chat/attachments";
+import { canShow, isLibraryMessage, pollLimits, reactionLimits, summaryOf } from "@/lib/chat/attachments";
 import { addToTray } from "@/lib/chat/composerTray";
 import { dropsClaimed } from "@/lib/library/dropTarget";
 import { libraryCapabilities, type LibraryItem } from "@/lib/library/types";
-import { excerptOf, summarize, textNestsOfTree } from "@/lib/chat/reducer";
+import { excerptOf, textNestsOfTree } from "@/lib/chat/reducer";
 import type { MentionCandidate, MentionResolver, MentionTarget } from "@/lib/chat/mentions";
 import type { ChatStore } from "@/lib/chat/store";
-import type { ChatAttachment, ChatMember, ChatMessage, ConversationState, PreparedAttachment } from "@/lib/chat/types";
+import type { ChatAttachment, ChatMember, ChatMessage, ChatPollDraft, ConversationState, PreparedAttachment } from "@/lib/chat/types";
 import { EmptyState, PersonAvatar } from "../atoms";
 import { personNestAction, personStatus } from "../people";
 import { displayNameFor, PRESENCE, type RavenShellData, type RavenView, type ShellPerson } from "../state";
@@ -143,6 +144,7 @@ function OpenConversation({
   // keyed by conversation, so opening another one clears it.
   const [selection, setSelection] = useState<MessageSelection | null>(null);
   const [forwarding, setForwarding] = useState<string[] | null>(null);
+  const [writingPoll, setWritingPoll] = useState(false);
   const [dropping, setDropping] = useState(false);
   const imageLimits = useImageLimits(data);
   // Images can come in only where something can be sent, and not while editing a message.
@@ -306,7 +308,7 @@ function OpenConversation({
 
   const send = (body: string, attachments: PreparedAttachment[]) => {
     const reply = replyingTo;
-    chat.send(id, body, reply ? { id: reply.id, seq: reply.seq, senderId: reply.senderId, senderName: reply.senderName, excerpt: excerptOf(reply.body), attachments: summarize(reply.attachments) } : undefined, attachments);
+    chat.send(id, body, reply ? { id: reply.id, seq: reply.seq, senderId: reply.senderId, senderName: reply.senderName, excerpt: excerptOf(reply.body), attachments: summaryOf(reply) } : undefined, attachments);
     setReplyingTo(null);
     list.current?.scrollToLatest();
   };
@@ -316,8 +318,17 @@ function OpenConversation({
     chat.sendLibrary(
       id,
       { itemId: item.id, kind: item.kind, format: item.format, assetId: item.assetId, variants: item.variants, width: item.width, height: item.height, title: item.title || undefined },
-      reply ? { id: reply.id, seq: reply.seq, senderId: reply.senderId, senderName: reply.senderName, excerpt: excerptOf(reply.body), attachments: summarize(reply.attachments) } : undefined,
+      reply ? { id: reply.id, seq: reply.seq, senderId: reply.senderId, senderName: reply.senderName, excerpt: excerptOf(reply.body), attachments: summaryOf(reply) } : undefined,
     );
+    setReplyingTo(null);
+    list.current?.scrollToLatest();
+  };
+
+  // Polls, when the server has them; not in Saved messages, where nobody else would answer.
+  const polls = useMemo(() => (summary.kind === "saved" ? null : pollLimits(data.serverProperties.properties)), [summary.kind, data.serverProperties.properties]);
+  const sendPoll = async (poll: ChatPollDraft) => {
+    const reply = replyingTo;
+    await chat.sendPoll(id, poll, reply ? { id: reply.id, seq: reply.seq, senderId: reply.senderId, senderName: reply.senderName, excerpt: excerptOf(reply.body), attachments: summaryOf(reply) } : undefined);
     setReplyingTo(null);
     list.current?.scrollToLatest();
   };
@@ -526,6 +537,7 @@ function OpenConversation({
             imageLimits={imageLimits}
             library={library}
             onSendLibrary={sendLibrary}
+            onCreatePoll={polls ? () => setWritingPoll(true) : undefined}
             mentionCandidates={mentionCandidates}
             mentionResolver={mentionResolver}
             nestHeading={data.labels.nestPlural}
@@ -544,6 +556,10 @@ function OpenConversation({
           </div>
         ) : null}
       </div>
+
+      {polls ? (
+        <PollDialog open={writingPoll} onOpenChange={setWritingPoll} limits={polls} allowAnonymous={summary.kind !== "dm"} replyingTo={replyingTo?.senderName} onSend={sendPoll} />
+      ) : null}
 
       {forwarding ? (
         <ForwardDialog

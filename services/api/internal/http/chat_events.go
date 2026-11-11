@@ -102,13 +102,18 @@ func (s *Server) publishChatMessage(eventType string, message ChatMessage, seq i
 	s.metrics.publishDelay.observeSince(committedAt)
 }
 
-// publishChatMessageViews sends a message to people who may see it. A copy's source differs
-// from person to person, so each group that sees it alike gets its own payload.
+// publishChatMessageViews sends a message to people who may see it. A copy's source and a
+// poll differ from person to person, so each group that sees it alike gets its own payload.
 func (s *Server) publishChatMessageViews(eventType string, message ChatMessage, seq int64, userIDs []string) {
 	for _, view := range s.chatOriginViews(message, userIDs) {
-		shown := message
-		shown.Origin = view.origin
-		s.publishChatEvent(ChatEvent{Type: eventType, ConversationID: message.ConversationID, Seq: seq, Message: &shown}, view.userIDs)
+		// A poll also differs by person: their own vote, and a quiz's answers once they
+		// may know them.
+		for _, pollView := range chatPollViews(message.Poll, view.userIDs) {
+			shown := message
+			shown.Origin = view.origin
+			shown.Poll = pollView.poll
+			s.publishChatEvent(ChatEvent{Type: eventType, ConversationID: message.ConversationID, Seq: seq, Message: &shown}, pollView.userIDs)
+		}
 	}
 }
 

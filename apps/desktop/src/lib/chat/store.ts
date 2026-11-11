@@ -56,6 +56,7 @@ import type {
   ChatEvent,
   ChatMember,
   ChatMessage,
+  ChatPollDraft,
   ChatReplyRef,
   ChatState,
   ChatUser,
@@ -782,6 +783,27 @@ export class ChatStore {
       }
       throw failure;
     }
+  }
+
+  /**
+   * Sends a poll. It skips the outbox: the dialog it is written in stays open until the
+   * server has it, and shows the reason when it is refused.
+   */
+  async sendPoll(conversationId: string, poll: ChatPollDraft, replyTo?: ChatReplyRef) {
+    const { message } = await this.api.send(conversationId, { clientMessageId: newClientMessageId(), body: "", replyToMessageId: replyTo?.id, poll });
+    this.apply(applyOwnMessage(this.state, message, true));
+  }
+
+  /** Sets my choices in a poll; none takes my vote back. */
+  async votePoll(conversationId: string, messageId: string, options: number[]) {
+    const { message } = await this.api.votePoll(conversationId, messageId, options);
+    this.apply(applyOwnMessage(this.state, message, this.atBottom.get(conversationId) ?? true));
+  }
+
+  /** Ends a poll I asked. */
+  async closePoll(conversationId: string, messageId: string) {
+    const { message } = await this.api.closePoll(conversationId, messageId);
+    this.apply(applyOwnMessage(this.state, message, this.atBottom.get(conversationId) ?? true));
   }
 
   async edit(conversationId: string, messageId: string, body: string) {
