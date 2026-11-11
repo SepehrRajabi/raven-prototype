@@ -5,7 +5,7 @@
 // can show an attachment at all. A newer Raven will send kinds and sources this one does
 // not know, and those must still show as something.
 
-import type { ChatAttachment, ChatAttachmentSummary } from "./types";
+import type { ChatAttachment, ChatAttachmentSummary, ChatMessage } from "./types";
 
 export interface AttachmentKindLimits {
   /** The largest each variant may be, in bytes. */
@@ -53,6 +53,24 @@ export function attachmentLimits(properties: Record<string, unknown> | undefined
   return { kinds, sources, maxPerMessage: Math.floor(raw.maxPerMessage) };
 }
 
+/** How big a poll can be, from `chat.polls` in the server's properties. */
+export interface PollLimits {
+  maxQuestionLength: number;
+  minOptions: number;
+  maxOptions: number;
+  maxOptionLength: number;
+}
+
+/** Null when the server has no polls, and then nothing offers to make one. */
+export function pollLimits(properties: Record<string, unknown> | undefined): PollLimits | null {
+  const chat = properties?.chat;
+  const raw = isRecord(chat) ? chat.polls : undefined;
+  if (!isRecord(raw)) return null;
+  const { maxQuestionLength, minOptions, maxOptions, maxOptionLength } = raw;
+  if (!isPositive(maxQuestionLength) || !isPositive(minOptions) || !isPositive(maxOptions) || !isPositive(maxOptionLength) || minOptions > maxOptions) return null;
+  return { maxQuestionLength, minOptions, maxOptions, maxOptionLength };
+}
+
 export interface ReactionLimits {
   maxPerPerson: number;
   maxKinds: number;
@@ -80,14 +98,23 @@ export function canShow(attachment: Pick<ChatAttachment, "kind" | "source">): bo
 export function attachmentsExcerpt(attachments: ChatAttachmentSummary[] | undefined): string {
   if (!attachments || attachments.length === 0) return "";
   const count = attachments.length;
+  if (attachments[0].kind === "poll") return "Poll";
   if (attachments.every((attachment) => attachment.kind === "image")) return count === 1 ? "Photo" : `${count} photos`;
   if (count === 1 && attachments[0].kind === "gif") return "GIF";
   if (count === 1 && attachments[0].kind === "sticker") return "Sticker";
   return count === 1 ? "Attachment" : `${count} attachments`;
 }
 
+/** What a message holds, for a list or a quote: a poll first, as the server sends it, then its attachments. */
+export function summaryOf(message: Pick<ChatMessage, "attachments" | "poll">): ChatAttachmentSummary[] | undefined {
+  const kinds: ChatAttachmentSummary[] = [...(message.poll ? [{ kind: "poll" }] : []), ...(message.attachments ?? []).map((attachment) => ({ kind: attachment.kind }))];
+  return kinds.length ? kinds : undefined;
+}
+
 /** The line that stands for a message in a list or a quote: its caption, or what it holds. */
 export function messageExcerpt(excerpt: string | undefined, attachments: ChatAttachmentSummary[] | undefined): string {
+  // A poll's caption is its question.
+  if (attachments?.[0]?.kind === "poll") return excerpt ? `Poll: ${excerpt}` : "Poll";
   return excerpt || attachmentsExcerpt(attachments);
 }
 

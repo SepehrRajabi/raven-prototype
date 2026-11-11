@@ -291,7 +291,7 @@ export const MessageList = forwardRef<MessageListHandle, MessageListProps>(funct
             ? message.seq <= (summary.kind === "dm" ? (summary.peerReadSeq ?? 0) : (conversation.seen?.readSeq ?? 0)) ? "read" : "sent"
             : undefined;
           // A copy stays as it was saved; your own notes in Saved messages have no time limit.
-          const editable = mine && summary.canSend && !message.origin && !isLibraryMessage(message) && (inSaved || Date.now() - Date.parse(message.createdAt) < EDIT_WINDOW_MS);
+          const editable = mine && summary.canSend && !message.origin && !message.poll && !isLibraryMessage(message) && (inSaved || Date.now() - Date.parse(message.createdAt) < EDIT_WINDOW_MS);
           return (
             <div className="mx-auto w-full max-w-3xl px-6">
               <MessageRow
@@ -307,6 +307,8 @@ export const MessageList = forwardRef<MessageListHandle, MessageListProps>(funct
                 nameOf={nameOf}
                 onReact={(emoji) => store.react(id, message.id, emoji)}
                 onRemoveLinkPreview={mine && summary.canSend ? () => store.removeLinkPreview(id, message.id) : undefined}
+                onVote={(options) => store.votePoll(id, message.id, options)}
+                onClosePoll={mine && summary.canSend ? () => store.closePoll(id, message.id) : undefined}
                 canReply={summary.canSend}
                 canEdit={editable}
                 canDeleteForEveryone={mine || summary.canManage}
