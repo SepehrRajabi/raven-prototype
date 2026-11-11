@@ -132,6 +132,7 @@ type ChatMessage struct {
 	Body            string           `json:"body"`
 	Attachments     []ChatAttachment `json:"attachments,omitempty"`
 	LinkPreview     *ChatLinkPreview `json:"linkPreview,omitempty"`
+	Poll            *ChatPoll        `json:"poll,omitempty"`
 	ReplyTo         *ChatReplyRef    `json:"replyTo,omitempty"`
 	System          json.RawMessage  `json:"system,omitempty"`
 	CreatedAt       string           `json:"createdAt"`
@@ -242,6 +243,8 @@ func (s *Server) registerChatRoutes(service fiber.Router) {
 	conversation.Get("/changes", s.chatRoute("changes", s.listChatChanges))
 	conversation.Post("/messages", s.chatLimiter("send", 20, 10*time.Second), s.chatRoute("send", s.sendChatMessage))
 	conversation.Post("/messages/:messageId/reactions", s.chatLimiter("react", 60, time.Minute), s.chatRoute("react", s.reactToChatMessage))
+	conversation.Post("/messages/:messageId/poll/vote", s.chatLimiter("react", 60, time.Minute), s.chatRoute("vote", s.voteInChatPoll))
+	conversation.Post("/messages/:messageId/poll/close", s.chatLimiter("edit", 30, time.Minute), s.chatRoute("close poll", s.closeChatPoll))
 	conversation.Post("/messages/:messageId/edit", s.chatLimiter("edit", 30, time.Minute), s.chatRoute("edit", s.editChatMessage))
 	conversation.Delete("/messages/:messageId", s.chatLimiter("delete", 60, time.Minute), s.chatRoute("delete message", s.deleteChatMessage))
 	conversation.Get("/messages/:messageId/link-preview/image", s.chatRoute("fetch link preview image", s.fetchChatLinkPreviewImage))
