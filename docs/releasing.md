@@ -145,6 +145,42 @@ docker run --rm -v "$PWD:/src" -w /src fedora:44 sh -c \
   'infra/release/linux/install-build-deps.sh && infra/release/linux/build-package.sh rpm out fedora'
 ```
 
+## macOS builds
+
+GitHub Actions (`.github/workflows/macos-builds.yml`) builds the app for both kinds of
+Mac, each natively on a runner of that kind:
+
+| Build | For | Built on |
+| --- | --- | --- |
+| `Raven_X.Y.Z_aarch64.dmg` | Apple silicon (M1 and later), macOS 13+ | `macos-15` |
+| `Raven_X.Y.Z_x64.dmg` | Intel, macOS 13+ | `macos-15-intel` |
+
+Each build is checked before it is kept: the binary is for that processor only, needs no
+macOS newer than 13.0, its signature verifies, and it loads nothing from outside macOS
+and the app (no Homebrew libraries).
+
+It runs when the same things change as for the Linux packages, on every `v*` tag, and by
+hand. The DMGs are kept as workflow artifacts, and go on the GitHub release only when you
+ask, after `release.ps1 github` has created it:
+
+```sh
+gh workflow run macos-builds.yml --ref vX.Y.Z -f attach_to_release=true
+```
+
+That adds both DMGs and `SHA256SUMS-macos`. They are signed ad hoc, not with an Apple
+Developer ID, and not notarized, so macOS refuses the first launch of a downloaded copy:
+open **System Settings › Privacy & Security** and choose **Open Anyway** under the message
+about Raven, once. There are no macOS updater artifacts either (`latest.json` has no
+macOS entry), so people update by installing the new DMG.
+
+To build one locally, on a Mac, from `apps/desktop`:
+
+```sh
+bun run tauri build --target aarch64-apple-darwin --bundles app,dmg   # or x86_64-apple-darwin
+```
+
+An Intel build needs `nasm` (`brew install nasm`) for mozjpeg's SIMD code.
+
 ## What a friend sees
 
 Raven checks about ten seconds after it starts and every six hours. When a newer version
