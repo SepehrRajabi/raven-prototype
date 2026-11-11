@@ -19,7 +19,7 @@ Above both lenses sits what is live right now.
 1. The server/Home row and the collapse button. Unchanged.
 2. **Reaching you.** `PendingList compact`. Unchanged.
 3. **Live.** Present only when something is live. One card per live nest, plus temporary nests. See "Live cards" below.
-4. **Lens switch:** Places | People.
+4. **Lens switch:** Places | People. The Places button reads `data.labels.treePlural` ("Trees" or "Spaces"; changed 2026-11-12).
    - A segmented control.
    - The lens that isn't showing gets a dot when it holds unread.
 5. The lens itself:
@@ -95,6 +95,7 @@ Above both lenses sits what is live right now.
   2. Rooms with a friend inside.
   3. The rest, by start time (`createdAt`).
 - Three cards show, then an "N more live" disclosure (local state, not stored).
+- The "Live" label folds the whole section to "Live · N", stored under `raven.sidebar.liveCollapsed` (added 2026-11-12).
 - **Clicks:**
   - Clicking a tile opens that person (`{ kind: "user", id }`).
   - Clicking the rest of the card does what `openNest` does today: the threshold, or `waiting` for a temporary nest that isn't active yet.

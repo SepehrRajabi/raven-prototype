@@ -4,7 +4,7 @@ import { Tooltip } from "@/components/ui/tooltip";
 import type { LauncherNest } from "@/lib/api";
 import { speakingGlowStyle } from "@/lib/speakingActivity";
 import { cn } from "@/lib/utils";
-import { LiveDot, PersonAvatar, SectionLabel } from "./atoms";
+import { LiveDot, PersonAvatar } from "./atoms";
 import { SEATS_HERE, SEATS_OTHER, seatsFor, shortNames, type Seat } from "./liveCards";
 import { displayNameFor, type RavenShellData, type RavenView } from "./state";
 import type { RavenMediaAdapterState } from "./useRavenMediaAdapter";
@@ -13,6 +13,16 @@ import { nestView, treeNameFor } from "./views/shared";
 
 /** How many cards show before the rest wait behind "N more live". */
 const CARDS_SHOWN = 3;
+/** Whether the Live section is folded, remembered on this device like collapsed trees. */
+const LIVE_COLLAPSED_KEY = "raven.sidebar.liveCollapsed";
+
+function readCollapsed() {
+  try {
+    return localStorage.getItem(LIVE_COLLAPSED_KEY) === "1";
+  } catch {
+    return false;
+  }
+}
 
 /**
  * What is live right now, above both lenses: one card per live nest with the faces inside.
@@ -35,6 +45,15 @@ export function SidebarLive({
   onNavigate: (view: RavenView) => void;
 }) {
   const [showAll, setShowAll] = useState(false);
+  const [collapsed, setCollapsedState] = useState(readCollapsed);
+  const setCollapsed = (next: boolean) => {
+    setCollapsedState(next);
+    try {
+      localStorage.setItem(LIVE_COLLAPSED_KEY, next ? "1" : "0");
+    } catch {
+      // Without storage the section starts open.
+    }
+  };
   const friendIds = useMemo(() => new Set(data.friends.map((friend) => friend.userId)), [data.friends]);
   const contextIds = useMemo(() => new Set(data.people.filter((person) => person.relationship === "context").map((person) => person.id)), [data.people]);
   if (nests.length === 0) return null;
@@ -45,34 +64,47 @@ export function SidebarLive({
 
   return (
     <section>
-      <SectionLabel className="px-2">Live</SectionLabel>
-      <div className="space-y-1.5">
-        {shown.map((nest) => (
-          <LiveCard
-            key={nest.id}
-            nest={nest}
-            data={data}
-            here={media.activeNestId === nest.id}
-            active={(view.kind === "nest" || view.kind === "waiting") && view.id === nest.id}
-            joinable={canJoin && nest.lifecycleState === "active"}
-            friendIds={friendIds}
-            contextIds={contextIds}
-            activity={media.activeNestId === nest.id ? media.speakingActivity : undefined}
-            onNavigate={onNavigate}
-          />
-        ))}
-      </div>
-      {hidden > 0 ? (
-        <button
-          type="button"
-          aria-expanded={showAll}
-          onClick={() => setShowAll(!showAll)}
-          className="mt-1 flex h-7 w-full items-center gap-1 rounded-control px-2 text-left text-caption font-medium text-subtle transition-colors hover:text-foreground"
-        >
-          {showAll ? <ChevronDown className="h-3 w-3" /> : <ChevronRight className="h-3 w-3" />}
-          {showAll ? "Show fewer" : `${hidden} more live`}
-        </button>
-      ) : null}
+      <button
+        type="button"
+        aria-expanded={!collapsed}
+        onClick={() => setCollapsed(!collapsed)}
+        className="flex min-h-7 w-full items-center gap-1 rounded-control px-2 text-left text-caption font-medium text-subtle transition-colors hover:text-foreground"
+      >
+        {collapsed ? <ChevronRight className="h-3 w-3" /> : <ChevronDown className="h-3 w-3" />}
+        {/* Folded, the count still says something is going on. */}
+        {collapsed ? `Live · ${nests.length}` : "Live"}
+      </button>
+      {collapsed ? null : (
+        <>
+          <div className="space-y-1.5">
+            {shown.map((nest) => (
+              <LiveCard
+                key={nest.id}
+                nest={nest}
+                data={data}
+                here={media.activeNestId === nest.id}
+                active={(view.kind === "nest" || view.kind === "waiting") && view.id === nest.id}
+                joinable={canJoin && nest.lifecycleState === "active"}
+                friendIds={friendIds}
+                contextIds={contextIds}
+                activity={media.activeNestId === nest.id ? media.speakingActivity : undefined}
+                onNavigate={onNavigate}
+              />
+            ))}
+          </div>
+          {hidden > 0 ? (
+            <button
+              type="button"
+              aria-expanded={showAll}
+              onClick={() => setShowAll(!showAll)}
+              className="mt-1 flex h-7 w-full items-center gap-1 rounded-control px-2 text-left text-caption font-medium text-subtle transition-colors hover:text-foreground"
+            >
+              {showAll ? <ChevronDown className="h-3 w-3" /> : <ChevronRight className="h-3 w-3" />}
+              {showAll ? "Show fewer" : `${hidden} more live`}
+            </button>
+          ) : null}
+        </>
+      )}
     </section>
   );
 }

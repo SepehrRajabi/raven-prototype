@@ -157,7 +157,7 @@ export function Sidebar({
             );
           })}
           <div className="my-1 h-px w-6 shrink-0 bg-border" />
-          <RailButton label={[lens === "places" ? "Show people" : "Show places", lensUnread[otherLens] ? "unread" : null].filter(Boolean).join(" · ")} onClick={() => setLens(otherLens)}>
+          <RailButton label={[lens === "places" ? "Show people" : `Show ${data.labels.treePlural.toLowerCase()}`, lensUnread[otherLens] ? "unread" : null].filter(Boolean).join(" · ")} onClick={() => setLens(otherLens)}>
             <span className="relative">
               {lens === "places" ? <Users className="h-4 w-4" /> : <MapPin className="h-4 w-4" />}
               {lensUnread[otherLens] ? <UnreadDot className="absolute -right-1.5 -top-1.5 h-2 w-2 outline outline-2 outline-background" /> : null}
@@ -268,7 +268,7 @@ export function Sidebar({
 
         <SidebarLive nests={liveNests} data={data} media={media} entry={entry} view={view} onNavigate={onNavigate} />
 
-        <LensSwitch lens={lens} unread={lensUnread} onChange={setLens} />
+        <LensSwitch labels={{ places: data.labels.treePlural, people: "People" }} lens={lens} unread={lensUnread} onChange={setLens} />
 
         {lens === "places" ? (
           <section>
@@ -368,10 +368,18 @@ export function Sidebar({
   );
 }
 
-const LENS_LABEL: Record<SidebarLens, string> = { places: "Places", people: "People" };
-
-/** Places | People. The lens that is not showing gets a dot when it holds something unread. */
-function LensSwitch({ lens, unread, onChange }: { lens: SidebarLens; unread: Record<SidebarLens, boolean>; onChange: (lens: SidebarLens) => void }) {
+/** Trees (or Spaces, in the user's words) | People. The lens that is not showing gets a dot when it holds something unread. */
+function LensSwitch({
+  labels,
+  lens,
+  unread,
+  onChange,
+}: {
+  labels: Record<SidebarLens, string>;
+  lens: SidebarLens;
+  unread: Record<SidebarLens, boolean>;
+  onChange: (lens: SidebarLens) => void;
+}) {
   return (
     <div role="group" aria-label="Sidebar view" className="flex rounded-control bg-background/60 p-0.5">
       {(["places", "people"] as const).map((item) => {
@@ -387,7 +395,7 @@ function LensSwitch({ lens, unread, onChange }: { lens: SidebarLens; unread: Rec
               selected ? "bg-accent font-medium text-foreground" : "text-muted-foreground hover:text-foreground",
             )}
           >
-            {LENS_LABEL[item]}
+            {labels[item]}
             {!selected && unread[item] ? <UnreadDot /> : null}
           </button>
         );
