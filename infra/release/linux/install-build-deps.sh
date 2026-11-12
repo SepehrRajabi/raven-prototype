@@ -6,9 +6,11 @@
 #
 # Supported: Debian/Ubuntu (apt), Fedora and RHEL clones (dnf), openSUSE (zypper) and
 # Arch (pacman). The RPM distros are asked for pkg-config names, so one list fits them
-# all. Only the toolchain and -dev packages are installed here; build-package.sh brings
-# Rust and the Tauri CLI.
+# all. Rust comes from rustup, into $CARGO_HOME (~/.cargo by default); build-package.sh
+# brings the Tauri CLI, so CI can restore its build cache in between.
 set -euo pipefail
+
+rust_toolchain=${RUST_TOOLCHAIN:-1.96.0}
 
 # shellcheck disable=SC1091
 . /etc/os-release
@@ -70,3 +72,13 @@ case "$family" in
     exit 2
     ;;
 esac
+
+export CARGO_HOME=${CARGO_HOME:-$HOME/.cargo}
+export RUSTUP_HOME=${RUSTUP_HOME:-$HOME/.rustup}
+export PATH="$CARGO_HOME/bin:$PATH"
+if ! command -v rustup >/dev/null; then
+  curl --proto '=https' --tlsv1.2 --fail --silent --show-error https://sh.rustup.rs |
+    sh -s -- -y --no-modify-path --profile minimal --default-toolchain none
+fi
+rustup toolchain install "$rust_toolchain" --profile minimal
+rustup default "$rust_toolchain"

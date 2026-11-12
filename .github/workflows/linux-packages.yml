@@ -114,21 +114,22 @@ jobs:
             pacman -Syu --noconfirm --needed git tar zstd
           fi
       - uses: actions/checkout@v5
-      - name: Install build dependencies
-        run: infra/release/linux/install-build-deps.sh
+      - name: Install build dependencies and Rust
+        run: |
+          infra/release/linux/install-build-deps.sh
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
       - uses: actions/download-artifact@v4
         with:
           name: frontend-dist
           path: apps/desktop/dist
-      - uses: actions/cache@v4
+      # Downloaded crates, the Tauri CLI and compiled dependencies, one cache per distro,
+      # keyed on Cargo.lock and the compiler; Raven's own crate is always rebuilt. Pull
+      # requests read the cache but don't save to it, so they can't push out main's.
+      - uses: Swatinem/rust-cache@v2
         with:
-          path: |
-            ~/.cargo/registry/index
-            ~/.cargo/registry/cache
-            ~/.cargo/git/db
-            ~/.cargo/bin/cargo-tauri
-          key: cargo-${{ matrix.name }}-${{ hashFiles('apps/desktop/src-tauri/Cargo.lock') }}
-          restore-keys: cargo-${{ matrix.name }}-
+          workspaces: apps/desktop/src-tauri -> target
+          key: ${{ matrix.name }}
+          save-if: ${{ github.event_name != 'pull_request' }}
       - name: Build the package
         run: infra/release/linux/build-package.sh "${{ matrix.format }}" packages "${{ matrix.label }}"
       - uses: actions/upload-artifact@v4
