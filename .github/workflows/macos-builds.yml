@@ -80,14 +80,14 @@ jobs:
       - name: Install NASM
         if: matrix.arch == 'x86_64'
         run: brew install nasm
-      - uses: actions/cache@v4
+      # Downloaded crates and compiled dependencies, one cache per processor, keyed on
+      # Cargo.lock and the compiler; Raven's own crate is always rebuilt. Pull requests
+      # read the cache but don't save to it, so they can't push out the main branch's.
+      - uses: Swatinem/rust-cache@v2
         with:
-          path: |
-            ~/.cargo/registry/index
-            ~/.cargo/registry/cache
-            ~/.cargo/git/db
-          key: cargo-macos-${{ matrix.name }}-${{ hashFiles('apps/desktop/src-tauri/Cargo.lock') }}
-          restore-keys: cargo-macos-${{ matrix.name }}-
+          workspaces: apps/desktop/src-tauri -> target
+          key: ${{ matrix.target }}
+          save-if: ${{ github.event_name != 'pull_request' }}
       - name: Build
         working-directory: apps/desktop
         run: |
