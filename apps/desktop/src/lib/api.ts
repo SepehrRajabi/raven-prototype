@@ -944,9 +944,10 @@ export class ApiClient {
           if (done) break;
           lastActivityAt = Date.now();
           buffer += decoder.decode(value, { stream: true });
-          if (buffer.length > 262_144) buffer = "";
           const events = buffer.split(/\r?\n\r?\n/);
           buffer = events.pop() ?? "";
+          // Only an unfinished frame this large is dropped; complete ones above still go out.
+          if (buffer.length > 262_144) buffer = "";
           for (const event of events) {
             const frame = parseEventStreamFrame(event);
             if (frame) handlers.onFrame(frame);

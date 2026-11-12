@@ -1,6 +1,4 @@
-import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
-import { roomEventCaptions } from "@/lib/events";
-import { useNow } from "./useNow";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { capabilitiesOf } from "@/lib/permissions";
 import { Avatar } from "@/components/ui/avatar";
 import { Tooltip } from "@/components/ui/tooltip";
@@ -72,14 +70,26 @@ export function Sidebar({
 
   // The lens is remembered per device, and follows the open view when that changes.
   const [lens, setLensState] = useState<SidebarLens>(readLens);
-  const setLens = useCallback((next: SidebarLens) => {
+  const applyLens = useCallback((next: SidebarLens) => {
     storeLens(next);
     setLensState(next);
   }, []);
+  // Set when the person flips the lens, cleared when they open another view.
+  const flippedByHand = useRef(false);
+  const setLens = useCallback((next: SidebarLens) => {
+    flippedByHand.current = true;
+    applyLens(next);
+  }, [applyLens]);
   const followed = lensForView(view, activeChatKind);
   const viewChange = viewSignature(view, activeChatKind);
+  const viewOnly = viewSignature(view);
+  const lastViewOnly = useRef(viewOnly);
   useEffect(() => {
-    if (followed) setLens(followed);
+    // A chat's kind can arrive after it opened; by then a flip by hand wins.
+    const sameView = lastViewOnly.current === viewOnly;
+    lastViewOnly.current = viewOnly;
+    if (!sameView) flippedByHand.current = false;
+    if (followed && !(sameView && flippedByHand.current)) applyLens(followed);
     // Only a change of view flips the lens, never the person looking at it.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [viewChange]);
@@ -120,9 +130,6 @@ export function Sidebar({
       return next;
     });
   }, []);
-
-  const now = useNow();
-  const captionsOf = (treeId: string) => roomEventCaptions(data.treeDetails[treeId]?.events, now);
 
   if (collapsed) {
     return (
@@ -299,7 +306,6 @@ export function Sidebar({
                   const expandable = Boolean(chat && (text?.unread || openTextNestTree === tree.id));
                   const open = expandable && !collapsedTrees.has(tree.id);
                   const active = (view.kind === "tree" || view.kind === "tree-settings") && view.id === tree.id;
-                  const captions = open ? captionsOf(tree.id) : undefined;
                   return (
                     <div key={tree.id}>
                       <div className={cn("group flex h-9 items-center rounded-control transition-colors", active ? "bg-secondary" : "hover:bg-secondary/60")}>
@@ -332,7 +338,7 @@ export function Sidebar({
                       </div>
                       {open && chat ? (
                         <div className="space-y-px">
-                          <TreeTextNests chat={chat} treeId={tree.id} view={view} captions={captions} onNavigate={onNavigate} />
+                          <TreeTextNests chat={chat} treeId={tree.id} view={view} events={data.treeDetails[tree.id]?.events} onNavigate={onNavigate} />
                         </div>
                       ) : null}
                     </div>

@@ -1,5 +1,6 @@
 import { memo, useMemo, useState, type MouseEvent, type ReactNode } from "react";
-import { invoke } from "@tauri-apps/api/core";
+import { invoke, isTauri } from "@tauri-apps/api/core";
+import { toast } from "@/components/ui/toast";
 import { api } from "@/lib/api";
 import { emojiOnlyCount, parseMessage, type Inline } from "@/lib/chat/format";
 import { removedNestText, type MentionResolver, type MentionTarget } from "@/lib/chat/mentions";
@@ -9,9 +10,15 @@ import type { Presence } from "@/shells/ravenv1/state";
 
 /** Opens a web address in the person's browser, never inside Raven's own window. */
 export function openAddress(href: string) {
-  void invoke("plugin:opener|open_url", { url: href }).catch(() => {
-    // Not inside the desktop app (a browser preview): fall back to a new tab.
+  // Not inside the desktop app (a browser preview): a new tab is the browser.
+  if (!isTauri()) {
     window.open(href, "_blank", "noopener,noreferrer");
+    return;
+  }
+  // Inside Raven a page must never open in one of its own windows, where it could pass
+  // for Raven itself.
+  void invoke("plugin:opener|open_url", { url: href }).catch(() => {
+    toast({ title: "Couldn’t open the link", description: "Your browser didn’t respond. Copy the address and open it there.", tone: "error" });
   });
 }
 
@@ -22,7 +29,7 @@ function onLinkClick(event: MouseEvent<HTMLAnchorElement>) {
 
 export interface MentionContext {
   resolve: MentionResolver;
-  /** The reader, whose own name takes the accent. */
+  /** The reader, whose own name is set heavier. */
   me: string;
   onOpen?: (target: MentionTarget, id: string) => void;
 }
@@ -56,7 +63,7 @@ function Mention({ node, context }: { node: Extract<Inline, { type: "mention" }>
     const inner = (
       <>
         <Face id={node.id} name={person.name} presence={person.presence} className="translate-y-[2px]" />
-        <bdi className={cn("ml-1 font-medium decoration-subtle underline-offset-2 group-hover/mention:underline", isMe ? "text-live" : "text-foreground")}>{person.name}</bdi>
+        <bdi className={cn("ml-1 font-medium decoration-subtle underline-offset-2 group-hover/mention:underline", isMe ? "font-semibold text-foreground" : "text-foreground")}>{person.name}</bdi>
       </>
     );
     return context.onOpen ? (

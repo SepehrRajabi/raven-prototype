@@ -1,4 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
+import type { TreeEvent } from "@/lib/api";
+import { roomEventCaptions } from "@/lib/events";
 import { Plus, Search, UserPlus, Users } from "lucide-react";
 import { NewGroupDialog } from "@/components/chat/ChatDialogs";
 import { ConversationAvatar, ConversationRowCompact, MentionDot, MutedIndicator, SavedAvatar, UnreadCount } from "@/components/chat/ConversationRow";
@@ -15,6 +17,7 @@ import { filterPeople, visibleTextNests, type FriendsAndGroupsRow } from "./frie
 import { OFFLINE_RANK, personStatus, reachRank } from "./people";
 import { focusGlobalSearch } from "./searchFocus";
 import { PRESENCE, type RavenShellData, type RavenView } from "./state";
+import { useNow } from "./useNow";
 import { useChatState, useFriendsAndGroups, useOpenPerson, useOpenSaved } from "./useChat";
 
 /**
@@ -334,16 +337,18 @@ export function TreeTextNests({
   chat,
   treeId,
   view,
-  captions,
+  events,
   onNavigate,
 }: {
   chat: ChatStore;
   treeId: string;
   view: RavenView;
-  /** What is on in each room now, by room id. */
-  captions?: ReadonlyMap<string, string>;
+  /** The tree's scheduled events, shown as what is on in each room now. */
+  events?: TreeEvent[];
   onNavigate: (view: RavenView) => void;
 }) {
+  // The clock ticks here, so only these rows re-render with it, not the whole sidebar.
+  const captions = roomEventCaptions(events, useNow());
   const state = useChatState(chat);
   const layout = state?.layouts[treeId];
   const hasLayout = Boolean(layout);
