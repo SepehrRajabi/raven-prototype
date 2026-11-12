@@ -113,6 +113,8 @@ export interface VideoMixerState {
   remoteTracks: RemoteVideoTrackState[];
   /** A video role lost the room for good (not merely reconnecting) and must rejoin. */
   sessionLost?: boolean;
+  /** Rejoining cannot heal the loss (signed in elsewhere, removed, room closed). */
+  sessionLostFatal?: boolean;
 }
 
 export interface VideoPresentationSettings {

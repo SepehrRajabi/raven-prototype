@@ -522,6 +522,8 @@ pub struct VideoMixerState {
     /// True once either video role lost the room for good (not merely reconnecting), until
     /// the next connect. The app uses it to rejoin with fresh tokens.
     pub session_lost: bool,
+    /// The loss can't be healed by rejoining (signed in elsewhere, removed, room closed).
+    pub session_lost_fatal: bool,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]

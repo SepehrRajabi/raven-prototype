@@ -434,6 +434,7 @@ pub async fn video_connect_room(
     {
         let mut guard = state.write().map_err(|_| VideoStateError::StatePoisoned)?;
         guard.mixer.session_lost = false;
+        guard.mixer.session_lost_fatal = false;
     }
     finish_video_mutation(&app, &state, &mut ops).await
 }
@@ -478,6 +479,7 @@ pub async fn disconnect_video_room(
         guard.mixer.remote_tracks.clear();
         guard.mixer.viewer_connected = false;
         guard.mixer.session_lost = false;
+        guard.mixer.session_lost_fatal = false;
         guard.remote_preferences.clear();
     }
     finish_video_mutation(app, state, &mut ops).await

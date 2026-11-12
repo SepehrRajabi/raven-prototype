@@ -53,7 +53,8 @@ const PLAYOUT_MAX_MS: usize = 120;
 const PLAYOUT_TRIM_FADE_MS: usize = 5;
 
 /// How often the worker re-checks the default device / a missing preferred device.
-const DEVICE_PROBE_INTERVAL: Duration = Duration::from_secs(2);
+/// Same pace as the device watcher: ALSA enumeration probes each PCM, so Linux is slower.
+const DEVICE_PROBE_INTERVAL: Duration = crate::audio::devices::POLL_INTERVAL;
 const WORKER_TICK: Duration = Duration::from_millis(50);
 /// Backoff between failed attempts to open a speaker. The last delay repeats forever.
 const OPEN_RETRY_DELAYS: [Duration; 3] = [

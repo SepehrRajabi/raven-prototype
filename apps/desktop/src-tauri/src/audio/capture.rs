@@ -74,7 +74,8 @@ const FADER_SLEW_PER_MS: f32 = 0.25;
 const MAX_RENDER_FRAMES_PER_CAPTURE: usize = 8;
 /// How often a running capture checks whether the default device moved or a missing
 /// preferred device came back.
-const CAPTURE_DEVICE_PROBE_INTERVAL: Duration = Duration::from_secs(2);
+/// Same pace as the device watcher: ALSA enumeration probes each PCM, so Linux is slower.
+const CAPTURE_DEVICE_PROBE_INTERVAL: Duration = crate::audio::devices::POLL_INTERVAL;
 const TEST_TONE_SAMPLE_RATE: u32 = 48_000;
 const TEST_TONE_CHANNELS: u16 = 1;
 const TEST_TONE_BLOCK_FRAMES: usize = 960;

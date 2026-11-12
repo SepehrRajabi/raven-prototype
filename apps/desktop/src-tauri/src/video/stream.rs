@@ -8,7 +8,7 @@
 use std::collections::HashMap;
 use std::io::{self, Read, Write};
 use std::net::{TcpListener, TcpStream};
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::mpsc::{sync_channel, Receiver, RecvTimeoutError, SyncSender, TrySendError};
 use std::sync::{Arc, Mutex, RwLock};
 use std::thread;
@@ -130,6 +130,7 @@ impl VideoFrameService {
         let hub = VideoFrameHub::default();
         let server_hub = hub.clone();
         let server_token = token.clone();
+        let open_connections = Arc::new(AtomicUsize::new(0));
         thread::Builder::new()
             .name("raven-video-frame-server".to_string())
             .spawn(move || {
@@ -137,11 +138,24 @@ impl VideoFrameService {
                     let Ok(stream) = connection else {
                         continue;
                     };
+                    // Each viewer holds a thread; refuse past a bound any local
+                    // process could otherwise push to thread exhaustion.
+                    if open_connections.fetch_add(1, Ordering::AcqRel) >= MAX_CONNECTIONS {
+                        open_connections.fetch_sub(1, Ordering::AcqRel);
+                        continue;
+                    }
                     let hub = server_hub.clone();
                     let token = server_token.clone();
-                    let _ = thread::Builder::new()
+                    let open = Arc::clone(&open_connections);
+                    let spawned = thread::Builder::new()
                         .name("raven-video-frame-client".to_string())
-                        .spawn(move || serve_connection(stream, &token, hub));
+                        .spawn(move || {
+                            serve_connection(stream, &token, hub);
+                            open.fetch_sub(1, Ordering::AcqRel);
+                        });
+                    if spawned.is_err() {
+                        open_connections.fetch_sub(1, Ordering::AcqRel);
+                    }
                 }
             })?;
         Ok(Self {
@@ -160,6 +174,9 @@ impl VideoFrameService {
         self.endpoint.clone()
     }
 }
+
+/// Open viewer connections the frame server serves at once (tiles, PiP windows, previews).
+const MAX_CONNECTIONS: usize = 64;
 
 fn serve_connection(mut stream: TcpStream, token: &str, hub: VideoFrameHub) {
     let _ = stream.set_read_timeout(Some(Duration::from_secs(5)));
@@ -200,7 +217,7 @@ fn serve_connection(mut stream: TcpStream, token: &str, hub: VideoFrameHub) {
     let _ = stream.set_nodelay(true);
     let _ = stream.set_read_timeout(Some(Duration::from_millis(250)));
     let headers = format!(
-        "HTTP/1.1 200 OK\r\nContent-Type: multipart/x-mixed-replace; boundary={BOUNDARY}\r\nCache-Control: no-store, no-cache, must-revalidate\r\nPragma: no-cache\r\nAccess-Control-Allow-Origin: *\r\nConnection: close\r\n\r\n"
+        "HTTP/1.1 200 OK\r\nContent-Type: multipart/x-mixed-replace; boundary={BOUNDARY}\r\nCache-Control: no-store, no-cache, must-revalidate\r\nPragma: no-cache\r\nConnection: close\r\n\r\n"
     );
     if stream.write_all(headers.as_bytes()).is_err() {
         hub.unsubscribe(stream_id, subscriber_id);

@@ -93,6 +93,13 @@ export function mediaReconnectDelayMs(attempt: number) {
 }
 const MEDIA_SETTINGS_KEY = "raven.mediaSettings";
 
+/** What a rejoin still has to bring back; each step clears its flag once it succeeds. */
+interface RejoinRoles {
+  audio: boolean;
+  video: boolean;
+  session: boolean;
+}
+
 /** One run of `joinMediaSession`, so a Cancel only ever ends the join it was meant for. */
 interface JoinAttempt {
   cancelled: boolean;
@@ -316,6 +323,8 @@ export function useRavenMediaAdapter(
   deafenRef.current = { deafened, mode: deafenMode };
   const reconnectLoopRef = useRef<Promise<void> | null>(null);
   const mediaLossRef = useRef(false);
+  const audioLostRef = useRef(false);
+  const videoLostRef = useRef(false);
   /** The microphone whose processing has been restored from the remembered settings. */
   const restoredMicRef = useRef<string | null>(null);
   const joiningRef = useRef<Promise<void> | null>(null);
@@ -777,7 +786,14 @@ export function useRavenMediaAdapter(
       const timeout = window.setTimeout(() => controller.abort(), NEST_HEARTBEAT_TIMEOUT_MS);
       try {
         const result = await api.presenceHeartbeat(controller.signal, true, activeNestId);
-        if (!cancelled && result.nestActive === false && activeNestRef.current === activeNestId) {
+        // The supervisor's rejoin registers the session itself; doing it here at the same
+        // time would race it with different shared state.
+        if (
+          !cancelled &&
+          result.nestActive === false &&
+          activeNestRef.current === activeNestId &&
+          !reconnectLoopRef.current
+        ) {
           // The server timed this client out of the Nest (a stalled network, a sleeping
           // laptop) while its media stayed connected. Put the membership back so the
           // others see who they are talking to.
@@ -810,37 +826,47 @@ export function useRavenMediaAdapter(
    * its session. Used for the first join and for every automatic rejoin; local sources
    * keep their desired state, so whatever was live is published again by the engines.
    */
-  const connectMedia = useCallback(async (nestId: string, attempt?: JoinAttempt) => {
+  const connectMedia = useCallback(async (nestId: string, attempt?: JoinAttempt, pending?: RejoinRoles) => {
     // The native connects cannot be interrupted, so a cancelled join stops at the next gap.
     const checkpoint = () => {
       if (attempt?.cancelled) throw new NestEntryCancelled();
     };
-    const viewerToken = await api.liveKitToken(nestId);
-    const audioToken = await api.liveKitToken(nestId, "audio");
-    checkpoint();
-    let nextAudioState = await audioCommands.connectRoom(rtcServerUrl || audioToken.url, audioToken.token);
-    checkpoint();
-    const deafen = deafenRef.current;
-    nextAudioState = await audioCommands.setRemoteAudioReceiving(!(deafen.deafened && deafen.mode === "bandwidthSaver"));
-    nextAudioState = await audioCommands.setOutputMuted(deafen.deafened);
-    setAudioState(nextAudioState);
+    // A rejoin brings back only the roles that were lost, so a healthy screen share is
+    // not torn down because the audio room dropped.
+    const roles = pending ?? { audio: true, video: true, session: true };
+    if (roles.audio) {
+      const audioToken = await api.liveKitToken(nestId, "audio");
+      checkpoint();
+      let nextAudioState = await audioCommands.connectRoom(rtcServerUrl || audioToken.url, audioToken.token);
+      checkpoint();
+      const deafen = deafenRef.current;
+      nextAudioState = await audioCommands.setRemoteAudioReceiving(!(deafen.deafened && deafen.mode === "bandwidthSaver"));
+      nextAudioState = await audioCommands.setOutputMuted(deafen.deafened);
+      setAudioState(nextAudioState);
+      roles.audio = false;
+    }
 
-    const videoToken = await api.liveKitToken(nestId, "video");
-    checkpoint();
-    let nextVideoState = await videoCommands.connectRoom(
-      rtcServerUrl || videoToken.url || viewerToken.url,
-      videoToken.token,
-      viewerToken.token,
-    );
-    checkpoint();
-    nextVideoState = await videoCommands.setSelfPreviewMode(selfMediaPreviewModeRef.current);
-    setVideoState(nextVideoState);
+    if (roles.video) {
+      const viewerToken = await api.liveKitToken(nestId);
+      const videoToken = await api.liveKitToken(nestId, "video");
+      checkpoint();
+      let nextVideoState = await videoCommands.connectRoom(
+        rtcServerUrl || videoToken.url || viewerToken.url,
+        videoToken.token,
+        viewerToken.token,
+      );
+      checkpoint();
+      nextVideoState = await videoCommands.setSelfPreviewMode(selfMediaPreviewModeRef.current);
+      setVideoState(nextVideoState);
+      roles.video = false;
+    }
 
     await registerSession(nestId);
     checkpoint();
     await api.joinNestPresence(nestId);
     const nextPresence = presenceForActiveNest(presenceRef.current);
     await api.updatePresence(nextPresence.state, nextPresence.reachability, nestId);
+    roles.session = false;
   }, [registerSession, rtcServerUrl]);
 
   const joinMediaSession = useCallback(
@@ -957,7 +983,10 @@ export function useRavenMediaAdapter(
   // while the network is down, and try again the moment it returns.
   const audioLoss = audioState?.session.connectionLost ?? null;
   const videoLost = Boolean(videoState?.sessionLost);
-  mediaLossRef.current = Boolean(audioLoss?.recoverable) || (videoLost && !audioLoss);
+  const videoLossFatal = videoLost && Boolean(videoState?.sessionLostFatal);
+  audioLostRef.current = Boolean(audioLoss?.recoverable);
+  videoLostRef.current = videoLost && !videoLossFatal;
+  mediaLossRef.current = audioLostRef.current || (videoLostRef.current && !audioLoss);
 
   const callVote = useCallVote(activeNestId, options.localUserId, () => {
     void leaveMediaSession().catch(() => undefined);
@@ -966,14 +995,14 @@ export function useRavenMediaAdapter(
 
   useEffect(() => {
     if (phase !== "connected" || !activeNestId) return;
-    if (!audioLoss || audioLoss.recoverable) return;
+    if ((!audioLoss || audioLoss.recoverable) && !videoLossFatal) return;
     // Signed in from another device, removed, or the room closed: rejoining would fight
     // the server. Leave locally and say why.
     const message = audioState?.session.error || `You are no longer in this ${nestLabel}.`;
     void leaveMediaSession().then(() => {
       setNonFatalError(message, "rtc_failure", `Enter the ${nestLabel} again when you are ready.`);
     });
-  }, [activeNestId, audioLoss, audioState?.session.error, leaveMediaSession, nestLabel, phase, setNonFatalError]);
+  }, [activeNestId, audioLoss, audioState?.session.error, leaveMediaSession, nestLabel, phase, setNonFatalError, videoLossFatal]);
 
   useEffect(() => {
     if (phase !== "connected" || !activeNestId) return;
@@ -982,13 +1011,19 @@ export function useRavenMediaAdapter(
     setReconnecting(true);
     reconnectLoopRef.current = (async () => {
       let attempt = 0;
-      while (activeNestRef.current === nestId && mediaLossRef.current) {
+      // Kept across attempts: a partial failure (audio back, video not) must keep retrying
+      // what is left even though the audio state no longer reports a loss.
+      const pending: RejoinRoles = { audio: false, video: false, session: true };
+      while (activeNestRef.current === nestId) {
+        pending.audio ||= audioLostRef.current;
+        pending.video ||= videoLostRef.current;
+        if (!pending.audio && !pending.video && !pending.session) break;
         await waitForDelayOrOnline(mediaReconnectDelayMs(attempt));
         if (activeNestRef.current !== nestId) break;
         try {
           // Membership may have lapsed while the connection was down.
           await api.joinNest(nestId).catch(() => undefined);
-          await connectMedia(nestId);
+          await connectMedia(nestId, undefined, pending);
           if (activeNestRef.current !== nestId) {
             // The user left while this attempt was in flight.
             await cleanupMediaOnly();

@@ -1304,7 +1304,7 @@ impl VideoEngine {
                         }
                         clear_viewer_state(&app, &shared_state);
                         if reason != DisconnectReason::ClientInitiated {
-                            mark_session_lost(&app, &shared_state);
+                            mark_session_lost(&app, &shared_state, reason);
                         }
                         break;
                     }
@@ -1350,7 +1350,7 @@ impl VideoEngine {
                         connected.store(false, Ordering::Release);
                         if reason != DisconnectReason::ClientInitiated {
                             if let Some(shared) = shared.upgrade() {
-                                mark_session_lost(&app, &shared);
+                                mark_session_lost(&app, &shared, reason);
                             }
                         }
                         break;
@@ -1378,12 +1378,14 @@ fn share_paused_attribute(sources: &[VideoSourceState]) -> String {
 }
 
 /// Record that a video role lost the room for good, so the app can rejoin.
-fn mark_session_lost(app: &AppHandle, shared: &SharedVideoEngineState) {
+fn mark_session_lost(app: &AppHandle, shared: &SharedVideoEngineState, reason: DisconnectReason) {
+    let (_, _, recoverable) = crate::audio::engine::describe_disconnect(reason);
     let snapshot = {
         let Ok(mut state) = shared.write() else {
             return;
         };
         state.mixer.session_lost = true;
+        state.mixer.session_lost_fatal |= !recoverable;
         state.snapshot()
     };
     let _ = app.emit(VIDEO_STATE_CHANGED_EVENT, snapshot);
