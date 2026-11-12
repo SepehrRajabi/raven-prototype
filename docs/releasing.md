@@ -108,6 +108,44 @@ A release that already exists is left alone and compared with this build. It dow
 the release back and stops if a file differs: bump the version instead. If an upload died
 half way, the command names the draft to delete before running it again.
 
+## macOS builds
+
+GitHub Actions (`.github/workflows/macos-builds.yml`) builds the app for both kinds of
+Mac, each natively on a runner of that kind:
+
+| Build | For | Built on |
+| --- | --- | --- |
+| `Raven_X.Y.Z_aarch64.dmg` | Apple silicon (M1 and later), macOS 13+ | `macos-26` |
+| `Raven_X.Y.Z_x64.dmg` | Intel, macOS 13+ | `macos-26-intel` |
+
+Each build is checked before it is kept: the binary is for that processor only, needs no
+macOS newer than 13.0, its signature verifies, and it loads nothing from outside macOS
+and the app (no Homebrew libraries). The runners are macOS 26 because screencapturekit's
+Metal bridge needs its SDK; what the app runs on is set by the deployment target, not the
+runner.
+
+It runs on pushes and pull requests that touch the desktop's Rust side or its packages,
+on every `v*` tag, and by hand. The DMGs are kept as workflow artifacts, and go on the GitHub release only when you
+ask, after `release.ps1 github` has created it:
+
+```sh
+gh workflow run macos-builds.yml --ref vX.Y.Z -f attach_to_release=true
+```
+
+That adds both DMGs and `SHA256SUMS-macos`. They are signed ad hoc, not with an Apple
+Developer ID, and not notarized, so macOS refuses the first launch of a downloaded copy:
+open **System Settings › Privacy & Security** and choose **Open Anyway** under the message
+about Raven, once. There are no macOS updater artifacts either (`latest.json` has no
+macOS entry), so people update by installing the new DMG.
+
+To build one locally, on a Mac, from `apps/desktop`:
+
+```sh
+bun run tauri build --target aarch64-apple-darwin --bundles app,dmg   # or x86_64-apple-darwin
+```
+
+An Intel build needs `nasm` (`brew install nasm`) for mozjpeg's SIMD code.
+
 ## What a friend sees
 
 Raven checks about ten seconds after it starts and every six hours. When a newer version
