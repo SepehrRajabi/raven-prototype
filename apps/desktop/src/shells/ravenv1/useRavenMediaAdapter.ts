@@ -826,15 +826,17 @@ export function useRavenMediaAdapter(
    * its session. Used for the first join and for every automatic rejoin; local sources
    * keep their desired state, so whatever was live is published again by the engines.
    */
-  const connectMedia = useCallback(async (nestId: string, attempt?: JoinAttempt, pending?: RejoinRoles) => {
+  const connectMedia = useCallback(async (nestId: string, attempt?: Pick<JoinAttempt, "cancelled">, pending?: RejoinRoles) => {
     // The native connects cannot be interrupted, so a cancelled join stops at the next gap.
     const checkpoint = () => {
       if (attempt?.cancelled) throw new NestEntryCancelled();
     };
     // A rejoin brings back only the roles that were lost, so a healthy screen share is
     // not torn down because the audio room dropped.
+    const rejoin = pending !== undefined;
     const roles = pending ?? { audio: true, video: true, session: true };
-    if (roles.audio) {
+    const connectAudio = async () => {
+      if (!roles.audio) return;
       const audioToken = await api.liveKitToken(nestId, "audio");
       checkpoint();
       let nextAudioState = await audioCommands.connectRoom(rtcServerUrl || audioToken.url, audioToken.token);
@@ -844,23 +846,33 @@ export function useRavenMediaAdapter(
       nextAudioState = await audioCommands.setOutputMuted(deafen.deafened);
       setAudioState(nextAudioState);
       roles.audio = false;
-    }
-
-    if (roles.video) {
-      const viewerToken = await api.liveKitToken(nestId);
-      const videoToken = await api.liveKitToken(nestId, "video");
+    };
+    const connectVideo = async () => {
+      if (!roles.video) return;
+      const [viewerToken, videoToken] = await Promise.all([
+        api.liveKitToken(nestId),
+        api.liveKitToken(nestId, "video"),
+      ]);
       checkpoint();
       let nextVideoState = await videoCommands.connectRoom(
         rtcServerUrl || videoToken.url || viewerToken.url,
         videoToken.token,
         viewerToken.token,
+        rejoin,
       );
       checkpoint();
       nextVideoState = await videoCommands.setSelfPreviewMode(selfMediaPreviewModeRef.current);
       setVideoState(nextVideoState);
       roles.video = false;
+    };
+    // The rooms are independent: connecting them side by side halves the wait. Both run to
+    // the end before a failure is reported, so each role's flag is accurate for a retry.
+    const results = await Promise.allSettled([connectAudio(), connectVideo()]);
+    for (const result of results) {
+      if (result.status === "rejected") throw result.reason;
     }
 
+    checkpoint();
     await registerSession(nestId);
     checkpoint();
     await api.joinNestPresence(nestId);
@@ -1014,6 +1026,9 @@ export function useRavenMediaAdapter(
       // Kept across attempts: a partial failure (audio back, video not) must keep retrying
       // what is left even though the audio state no longer reports a loss.
       const pending: RejoinRoles = { audio: false, video: false, session: true };
+      // A leave during an attempt stops it at the next checkpoint, before the session is
+      // registered again for a call the user already left.
+      const left = { get cancelled() { return activeNestRef.current !== nestId; } };
       while (activeNestRef.current === nestId) {
         pending.audio ||= audioLostRef.current;
         pending.video ||= videoLostRef.current;
@@ -1023,7 +1038,7 @@ export function useRavenMediaAdapter(
         try {
           // Membership may have lapsed while the connection was down.
           await api.joinNest(nestId).catch(() => undefined);
-          await connectMedia(nestId, undefined, pending);
+          await connectMedia(nestId, left, pending);
           if (activeNestRef.current !== nestId) {
             // The user left while this attempt was in flight.
             await cleanupMediaOnly();
@@ -1033,6 +1048,11 @@ export function useRavenMediaAdapter(
           await Promise.resolve(onStateChangedRef.current?.()).catch(() => undefined);
           break;
         } catch {
+          if (activeNestRef.current !== nestId) {
+            // Cancelled by a leave: undo whatever this attempt connected.
+            await cleanupMediaOnly();
+            break;
+          }
           attempt += 1;
         }
       }

@@ -33,7 +33,7 @@ use livekit::webrtc::audio_source::native::NativeAudioSource;
 use livekit::webrtc::audio_source::{AudioSourceOptions, RtcAudioSource};
 use livekit::webrtc::audio_stream::native::NativeAudioStream;
 use livekit::webrtc::stats::{IceCandidatePairState, RtcStats};
-use livekit::DisconnectReason;
+use livekit::{ConnectionState, DisconnectReason};
 use tauri::{AppHandle, Emitter};
 use tokio::runtime::{Handle, Runtime};
 use tokio::sync::mpsc;
@@ -55,7 +55,7 @@ use crate::audio::processor::{
 use crate::audio::publisher::stable_webrtc_track_id;
 use crate::audio::resample::StereoResampler;
 use crate::audio::state::{
-    save_remembered_volumes, SharedAudioEngineState, AUDIO_METER_CHANGED_EVENT,
+    save_remembered_volumes, AudioEngineState, SharedAudioEngineState, AUDIO_METER_CHANGED_EVENT,
     AUDIO_STATE_CHANGED_EVENT,
 };
 use crate::audio::suppression::{new_suppressor, SuppressorStage};
@@ -542,17 +542,29 @@ impl PublishFramer {
         }
     }
 
-    /// Append a capture block and return every complete 10 ms frame now available.
-    fn push(&mut self, samples: &[f32], channels: usize, sample_rate: u32) -> Vec<Vec<i16>> {
+    /// Append a capture block and hand every complete 10 ms frame now available to `emit`.
+    fn push_each(
+        &mut self,
+        samples: &[f32],
+        channels: usize,
+        sample_rate: u32,
+        mut emit: impl FnMut(Vec<i16>),
+    ) {
         self.resampler
             .process(samples, channels, sample_rate, &mut self.pending);
         let complete = self.pending.len() / PUBLISH_FRAME_SAMPLES;
-        let mut frames = Vec::with_capacity(complete);
-        for index in 0..complete {
-            let start = index * PUBLISH_FRAME_SAMPLES;
-            frames.push(self.pending[start..start + PUBLISH_FRAME_SAMPLES].to_vec());
+        for frame in
+            self.pending[..complete * PUBLISH_FRAME_SAMPLES].chunks_exact(PUBLISH_FRAME_SAMPLES)
+        {
+            emit(frame.to_vec());
         }
         self.pending.drain(..complete * PUBLISH_FRAME_SAMPLES);
+    }
+
+    #[cfg(test)]
+    fn push(&mut self, samples: &[f32], channels: usize, sample_rate: u32) -> Vec<Vec<i16>> {
+        let mut frames = Vec::new();
+        self.push_each(samples, channels, sample_rate, |frame| frames.push(frame));
         frames
     }
 }
@@ -574,20 +586,20 @@ impl std::fmt::Debug for PublishSink {
 
 impl ProcessedSampleSink for PublishSink {
     fn push_samples(&self, samples: &[f32], channels: usize, sample_rate: u32) {
-        let frames = match self.framer.lock() {
-            Ok(mut framer) => framer.push(samples, channels, sample_rate),
+        // Drop on backpressure rather than block the audio thread; bounds latency.
+        let send = |frame| {
+            let _ = self.sender.try_send(frame);
+        };
+        match self.framer.lock() {
+            Ok(mut framer) => framer.push_each(samples, channels, sample_rate, send),
             // A panic mid-push (caught by capture) left the framer half-updated: start it
             // over rather than dropping this track's audio for the rest of the call.
             Err(poisoned) => {
                 self.framer.clear_poison();
                 let mut framer = poisoned.into_inner();
                 *framer = PublishFramer::new();
-                framer.push(samples, channels, sample_rate)
+                framer.push_each(samples, channels, sample_rate, send);
             }
-        };
-        for frame in frames {
-            // Drop on backpressure rather than block the audio thread; bounds latency.
-            let _ = self.sender.try_send(frame);
         }
     }
 }
@@ -660,6 +672,8 @@ struct ReaderEnded {
     participant_id: ParticipantId,
     track_id: PublishedTrackId,
     key: String,
+    /// The async reader's task, to tell its report from a newer reader's under the same key.
+    reader: Option<tokio::task::Id>,
 }
 
 /// The audio media engine. Stored inside `AudioEngineState` next to the capture manager.
@@ -922,6 +936,11 @@ impl AudioEngine {
             return Ok(());
         };
         let room = Arc::clone(&connection.room);
+        if room.connection_state() != ConnectionState::Connected {
+            // LiveKit is resuming the session and republishes our tracks itself; a track
+            // looks lost until it has. The resync after `Reconnected` reconciles the rest.
+            return Ok(());
+        }
         let handle = self.handle();
 
         let desired: HashMap<AudioSourceId, &AudioSourceState> = sources
@@ -1148,6 +1167,7 @@ impl AudioEngine {
                                 &app,
                                 &shared,
                                 &room,
+                                &output,
                                 &readers,
                                 &retrying_subscriptions,
                                 &receive_remote_audio,
@@ -1329,6 +1349,10 @@ impl AudioEngine {
                         );
 
                         let key = reader_key(&base, &track_id.to_string());
+                        // The listener's settings for this track (mute, gain, chain) apply
+                        // from the first frame: a muted peer must not play until the first
+                        // refresh. Read with a wait here, on the event loop, not on the DSP.
+                        let initial_controls = receiver_snapshot(&shared, participant_id, track_id);
                         output.ensure_track(&key);
                         let rtc_track = audio_track.rtc_track();
                         let mut rate = output.sample_rate();
@@ -1349,15 +1373,21 @@ impl AudioEngine {
                             std::sync::mpsc::sync_channel::<ReceivedFrame>(RECEIVE_QUEUE_FRAMES);
                         let reader_state = Arc::new(AtomicU8::new(READER_RUNNING));
                         let dsp_state = Arc::clone(&reader_state);
+                        let reader_task = Arc::new(std::sync::OnceLock::new());
+                        let dsp_reader_task = Arc::clone(&reader_task);
                         let dsp_spawned = std::thread::Builder::new()
                             .name(format!("raven-audio-rx-{key}"))
                             .spawn(move || {
                                 let mut meter_accum: Vec<f32> = Vec::new();
                                 let mut input_level = LevelAccumulator::default();
                                 let mut last_meter = Instant::now();
-                                let mut receiver_controls = ReceiverControls::default();
-                                let mut last_control_refresh =
-                                    Instant::now() - RECEIVER_CONTROL_REFRESH_INTERVAL;
+                                let seeded = initial_controls.is_some();
+                                let mut receiver_controls = initial_controls.unwrap_or_default();
+                                let mut last_control_refresh = if seeded {
+                                    Instant::now()
+                                } else {
+                                    Instant::now() - RECEIVER_CONTROL_REFRESH_INTERVAL
+                                };
                                 // This peer's own processor chain for the incoming track. Setting
                                 // edits are applied in place; only a different set of processors
                                 // rebuilds it. Applied locally — it never affects other peers.
@@ -1365,7 +1395,7 @@ impl AudioEngine {
                                 let mut chain_def = ProcessorChainState::default();
                                 // Set when a fresh snapshot arrives: the only time the chain
                                 // definition can change, so it is not compared every frame.
-                                let mut controls_refreshed = false;
+                                let mut controls_refreshed = seeded;
                                 // Reused for every frame instead of a new allocation.
                                 let mut samples: Vec<f32> = Vec::new();
                                 // Receiver gain actually applied to the previous sample.
@@ -1548,15 +1578,25 @@ impl AudioEngine {
                                 if dsp_state.load(Ordering::Acquire) != READER_ENDED {
                                     return;
                                 }
-                                reader_output.remove_track(&reader_key_str);
                                 let _ = reader_ended_sender.send(ReaderEnded {
                                     participant_id,
                                     track_id,
                                     key: reader_key_str,
+                                    reader: dsp_reader_task.get().copied(),
                                 });
                             });
                         if let Err(error) = dsp_spawned {
                             eprintln!("[audio-engine] receive thread could not start: {error}");
+                            output.remove_track(&key);
+                            update_remote_subscription_status(
+                                &app,
+                                &shared,
+                                participant_id,
+                                track_id,
+                                AudioSubscriptionStatus::Failed,
+                                Some(format!("Raven could not play this audio: {error}")),
+                            );
+                            continue;
                         }
                         let stream_output = Arc::clone(&output);
                         let reader = runtime_handle.spawn(async move {
@@ -1590,6 +1630,7 @@ impl AudioEngine {
                             }
                             reader_state.store(READER_ENDED, Ordering::Release);
                         });
+                        let _ = reader_task.set(reader.id());
                         if let Some(existing) = readers.lock().unwrap().insert(key.clone(), reader)
                         {
                             existing.abort();
@@ -2069,6 +2110,7 @@ fn handle_reader_ended(
     app: &AppHandle,
     shared: &SharedAudioEngineState,
     room: &Room,
+    output: &OutputMixer,
     readers: &Arc<Mutex<HashMap<String, JoinHandle<()>>>>,
     retrying: &Arc<Mutex<HashSet<String>>>,
     receive_remote_audio: &Arc<AtomicBool>,
@@ -2076,7 +2118,21 @@ fn handle_reader_ended(
     local_identity: &str,
     ended: ReaderEnded,
 ) {
-    readers.lock().unwrap().remove(&ended.key);
+    {
+        let mut readers = readers.lock().unwrap();
+        // A resubscribe can start a new reader under the same key before this report from
+        // the old one arrives. The live reader keeps its track and its status.
+        let stale = match (readers.get(&ended.key), ended.reader) {
+            (Some(current), Some(reader)) => current.id() != reader,
+            (Some(current), None) => !current.is_finished(),
+            (None, _) => false,
+        };
+        if stale {
+            return;
+        }
+        readers.remove(&ended.key);
+    }
+    output.remove_track(&ended.key);
     if !active.load(Ordering::SeqCst) || !receive_remote_audio.load(Ordering::SeqCst) {
         return;
     }
@@ -2318,9 +2374,23 @@ fn try_receiver_snapshot(
     participant_id: ParticipantId,
     track_id: PublishedTrackId,
 ) -> Option<ReceiverControls> {
-    let Ok(guard) = shared.try_read() else {
-        return None;
-    };
+    receiver_controls_in(&*shared.try_read().ok()?, participant_id, track_id)
+}
+
+/// [`try_receiver_snapshot`], waiting for the lock. Not for the audio path.
+fn receiver_snapshot(
+    shared: &SharedAudioEngineState,
+    participant_id: ParticipantId,
+    track_id: PublishedTrackId,
+) -> Option<ReceiverControls> {
+    receiver_controls_in(&*shared.read().ok()?, participant_id, track_id)
+}
+
+fn receiver_controls_in(
+    guard: &AudioEngineState,
+    participant_id: ParticipantId,
+    track_id: PublishedTrackId,
+) -> Option<ReceiverControls> {
     for track in &guard.mixer.remote_tracks {
         if track.track.participant_id == participant_id && track.track.track_id == track_id {
             let strip = &track.receiver_channel_strip;

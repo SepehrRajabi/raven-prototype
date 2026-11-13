@@ -413,6 +413,7 @@ pub async fn video_connect_room(
     url: String,
     token: String,
     viewer_token: String,
+    rejoin: Option<bool>,
 ) -> Result<VideoMixerState, VideoStateError> {
     let runtime = video_runtime(&state)?;
     let mut ops = runtime.ops.lock().await;
@@ -428,6 +429,7 @@ pub async fn video_connect_room(
             &token,
             &viewer_token,
             &preferences,
+            rejoin.unwrap_or(false),
         )
         .await
         .map_err(|message| VideoStateError::EngineFailed { message })?;

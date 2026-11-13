@@ -1694,6 +1694,12 @@ struct WebRtcApmRuntime {
     channel_count: usize,
     frame_samples_per_channel: usize,
     pending: Vec<f32>,
+    // Scratch reused every 10 ms frame, so the capture path does not allocate.
+    render_out_left: Vec<f32>,
+    render_out_right: Vec<f32>,
+    capture_in: Vec<Vec<f32>>,
+    capture_out: Vec<Vec<f32>>,
+    processed: Vec<f32>,
 }
 
 impl std::fmt::Debug for WebRtcApmRuntime {
@@ -1782,6 +1788,11 @@ impl WebRtcApmRuntime {
             channel_count,
             frame_samples_per_channel,
             pending: Vec::new(),
+            render_out_left: Vec::new(),
+            render_out_right: Vec::new(),
+            capture_in: vec![vec![0.0; frame_samples_per_channel]; channel_count.max(1)],
+            capture_out: vec![vec![0.0; frame_samples_per_channel]; channel_count.max(1)],
+            processed: Vec::new(),
         })
     }
 
@@ -1801,14 +1812,17 @@ impl WebRtcApmRuntime {
                 break;
             };
             let config = StreamConfig::new(rate as _, 2);
-            let mut out_left = vec![0.0_f32; self.render_left.len()];
-            let mut out_right = vec![0.0_f32; self.render_right.len()];
+            self.render_out_left.resize(self.render_left.len(), 0.0);
+            self.render_out_right.resize(self.render_right.len(), 0.0);
             self.processor
                 .process_render_f32_with_config(
                     &[self.render_left.as_slice(), self.render_right.as_slice()],
                     &config,
                     &config,
-                    &mut [out_left.as_mut_slice(), out_right.as_mut_slice()],
+                    &mut [
+                        self.render_out_left.as_mut_slice(),
+                        self.render_out_right.as_mut_slice(),
+                    ],
                 )
                 .map_err(|error| CaptureError::ProcessorFailed {
                     message: format!("WebRTC APM render processing failed: {error}"),
@@ -1829,34 +1843,44 @@ impl WebRtcApmRuntime {
             return Ok(());
         }
 
-        let mut processed =
-            Vec::with_capacity((self.pending.len() / frame_samples) * frame_samples);
-        while self.pending.len() >= frame_samples {
-            let frame: Vec<f32> = self.pending.drain(0..frame_samples).collect();
-            let capture_in =
-                deinterleave_frame(&frame, self.channel_count, self.frame_samples_per_channel);
+        self.processed.clear();
+        let mut offset = 0;
+        while self.pending.len() - offset >= frame_samples {
+            deinterleave_into(
+                &self.pending[offset..offset + frame_samples],
+                &mut self.capture_in,
+            );
+            offset += frame_samples;
 
             // Feed the render (far-end) reference so AEC can subtract it.
             self.feed_render()?;
 
-            // Process the capture (near-end) frame in place.
-            let mut capture_out =
-                vec![vec![0.0_f32; self.frame_samples_per_channel]; self.channel_count];
-            {
-                let capture_src: Vec<&[f32]> = capture_in.iter().map(Vec::as_slice).collect();
-                let mut capture_dst: Vec<&mut [f32]> =
-                    capture_out.iter_mut().map(Vec::as_mut_slice).collect();
-                self.processor
-                    .process_capture_f32(&capture_src, &mut capture_dst)
-                    .map_err(|error| CaptureError::ProcessorFailed {
-                        message: format!("WebRTC APM capture processing failed: {error}"),
-                    })?;
-            }
+            // Process the capture (near-end) frame.
+            let result = match (self.capture_in.as_slice(), self.capture_out.as_mut_slice()) {
+                ([input], [output]) => self
+                    .processor
+                    .process_capture_f32(&[input.as_slice()], &mut [output.as_mut_slice()]),
+                ([left, right], [out_left, out_right]) => self.processor.process_capture_f32(
+                    &[left.as_slice(), right.as_slice()],
+                    &mut [out_left.as_mut_slice(), out_right.as_mut_slice()],
+                ),
+                (inputs, outputs) => {
+                    let sources: Vec<&[f32]> = inputs.iter().map(Vec::as_slice).collect();
+                    let mut targets: Vec<&mut [f32]> =
+                        outputs.iter_mut().map(Vec::as_mut_slice).collect();
+                    self.processor.process_capture_f32(&sources, &mut targets)
+                }
+            };
+            result.map_err(|error| CaptureError::ProcessorFailed {
+                message: format!("WebRTC APM capture processing failed: {error}"),
+            })?;
 
-            interleave_frame(&capture_out, &mut processed);
+            interleave_frame(&self.capture_out, &mut self.processed);
         }
+        self.pending.drain(..offset);
 
-        *samples = processed;
+        // `samples` was emptied into `pending`; it becomes the next call's scratch.
+        std::mem::swap(samples, &mut self.processed);
         Ok(())
     }
 }
@@ -1911,18 +1935,17 @@ fn back_config() -> ApmConfig {
     }
 }
 
-fn deinterleave_frame(interleaved: &[f32], channels: usize, frames: usize) -> Vec<Vec<f32>> {
-    let channels = channels.max(1);
-    let mut out = vec![vec![0.0; frames]; channels];
-    for frame in 0..frames {
-        for (channel, channel_out) in out.iter_mut().enumerate() {
-            let index = frame * channels + channel;
-            if let Some(sample) = interleaved.get(index) {
-                channel_out[frame] = *sample;
-            }
+/// Split one interleaved frame into `out`, one buffer per channel, each already sized.
+fn deinterleave_into(interleaved: &[f32], out: &mut [Vec<f32>]) {
+    let channels = out.len().max(1);
+    for (channel, channel_out) in out.iter_mut().enumerate() {
+        for (sample_out, sample) in channel_out
+            .iter_mut()
+            .zip(interleaved.iter().skip(channel).step_by(channels))
+        {
+            *sample_out = *sample;
         }
     }
-    out
 }
 
 fn interleave_frame(channels: &[Vec<f32>], out: &mut Vec<f32>) {

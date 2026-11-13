@@ -26,7 +26,7 @@ use livekit::webrtc::video_frame::{I420Buffer, VideoFrame, VideoRotation};
 use livekit::webrtc::video_source::native::NativeVideoSource;
 use livekit::webrtc::video_source::{RtcVideoSource, VideoResolution};
 use livekit::webrtc::video_stream::native::NativeVideoStream;
-use livekit::DisconnectReason;
+use livekit::{ConnectionState, DisconnectReason};
 use serde::Serialize;
 use tauri::{AppHandle, Emitter};
 use tokio::runtime::{Handle, Runtime};
@@ -36,10 +36,10 @@ use tokio::task::JoinHandle;
 use crate::video::capture::{VideoCaptureCounters, VideoFrameSink};
 use crate::video::convert::I420Frame;
 use crate::video::domain::{
-    PublishedVideoTrackId, RemoteVideoTrackState, SelfPreviewMode, VideoConnectionQuality,
-    VideoParticipantState, VideoPauseReason, VideoPresentationSettings, VideoQualityProfile,
-    VideoSourceId, VideoSourceRuntimeStatus, VideoSourceState, VideoTrackSource,
-    decode_watching, encode_watching, SHARE_PAUSED_ATTRIBUTE, WATCHING_ATTRIBUTE,
+    decode_watching, encode_watching, PublishedVideoTrackId, RemoteVideoTrackState,
+    SelfPreviewMode, VideoConnectionQuality, VideoParticipantState, VideoPauseReason,
+    VideoPresentationSettings, VideoQualityProfile, VideoSourceId, VideoSourceRuntimeStatus,
+    VideoSourceState, VideoTrackSource, SHARE_PAUSED_ATTRIBUTE, WATCHING_ATTRIBUTE,
 };
 use crate::video::state::{SharedVideoEngineState, VIDEO_STATE_CHANGED_EVENT};
 use crate::video::stream::{PresentationCounters, VideoFrameHub, VideoFramePublisher};
@@ -117,6 +117,12 @@ impl VideoFrameSink for VideoPublishSink {
 
 /// Copy a tightly-packed source plane into a (possibly padded) destination plane.
 fn copy_plane(src: &[u8], src_width: usize, dst: &mut [u8], dst_stride: usize, rows: usize) {
+    // Unpadded destination (the usual case): one copy for the whole plane.
+    let total = src_width * rows;
+    if dst_stride == src_width && total <= src.len() && total <= dst.len() {
+        dst[..total].copy_from_slice(&src[..total]);
+        return;
+    }
     for row in 0..rows {
         let s = row * src_width;
         let d = row * dst_stride;
@@ -158,12 +164,16 @@ struct ViewerConnection {
 /// A new connection starts without attributes, which is the same as "".
 struct WatchingSync {
     sent: tokio::sync::Mutex<Option<String>>,
+    /// Set by the event loop when `sent` stopped being true (a reconnect) without waiting
+    /// for the lock a send in flight holds; the next sync clears it and forces a send.
+    invalidated: AtomicBool,
 }
 
 impl WatchingSync {
     fn new() -> Arc<Self> {
         Arc::new(Self {
             sent: tokio::sync::Mutex::new(Some(String::new())),
+            invalidated: AtomicBool::new(false),
         })
     }
 }
@@ -196,15 +206,20 @@ fn resend_lost_subscriptions(handle: &Handle, room: &Room) {
 /// leaves others without the avatar until the next event.
 fn sync_watching(handle: &Handle, room: &Arc<Room>, watching: &Arc<WatchingSync>) {
     let desired = encode_watching(&watched_share_owners(room));
-    if let Ok(sent) = watching.sent.try_lock() {
-        if sent.as_deref() == Some(desired.as_str()) {
-            return;
+    if !watching.invalidated.load(Ordering::Acquire) {
+        if let Ok(sent) = watching.sent.try_lock() {
+            if sent.as_deref() == Some(desired.as_str()) {
+                return;
+            }
         }
     }
     let room = Arc::clone(room);
     let watching = Arc::clone(watching);
     handle.spawn(async move {
         let mut sent = watching.sent.lock().await;
+        if watching.invalidated.swap(false, Ordering::AcqRel) {
+            *sent = None;
+        }
         let desired = encode_watching(&watched_share_owners(&room));
         if sent.as_deref() == Some(desired.as_str()) {
             return;
@@ -226,11 +241,15 @@ fn watched_share_owners(room: &Room) -> Vec<String> {
     watched_owners(
         &local,
         room.remote_participants().values().map(|participant| {
-            let watching_share = participant.track_publications().values().any(|publication| {
-                publication.kind() == TrackKind::Video
-                    && video_track_source(publication.source()) == Some(VideoTrackSource::Screenshare)
-                    && publication.is_desired()
-            });
+            let watching_share = participant
+                .track_publications()
+                .values()
+                .any(|publication| {
+                    publication.kind() == TrackKind::Video
+                        && video_track_source(publication.source())
+                            == Some(VideoTrackSource::Screenshare)
+                        && publication.is_desired()
+                });
             (participant.identity().0, watching_share)
         }),
     )
@@ -238,7 +257,10 @@ fn watched_share_owners(room: &Room) -> Vec<String> {
 
 /// The pure half of [`watched_share_owners`]: `(identity, has a watched share)` pairs to
 /// the sorted, unique base ids of the owners, minus the local user.
-fn watched_owners(local_identity: &str, shares: impl Iterator<Item = (String, bool)>) -> Vec<String> {
+fn watched_owners(
+    local_identity: &str,
+    shares: impl Iterator<Item = (String, bool)>,
+) -> Vec<String> {
     let local = base_participant_identity(local_identity);
     let mut owners: Vec<String> = shares
         .filter(|(_, watched)| *watched)
@@ -861,6 +883,7 @@ impl VideoEngine {
 
     /// Connect the video sidecar to a LiveKit room. Awaits both network handshakes;
     /// callers must not hold the video state lock across this call.
+    #[allow(clippy::too_many_arguments)]
     pub async fn connect(
         &mut self,
         app: &AppHandle,
@@ -869,12 +892,56 @@ impl VideoEngine {
         publisher_token: &str,
         viewer_token: &str,
         remote_preferences: &HashMap<String, bool>,
+        rejoin: bool,
     ) -> Result<(), String> {
-        if self.connection.is_some() || self.viewer.is_some() {
-            self.disconnect().await;
+        // A rejoin keeps a role whose room is still up, so a lost viewer does not restart
+        // a healthy screen share (and the reverse). A fresh join starts both over.
+        let healthy = |room: &Room, event_loop: &JoinHandle<()>| {
+            rejoin
+                && room.connection_state() == ConnectionState::Connected
+                && !event_loop.is_finished()
+        };
+        let keep_publisher = self
+            .connection
+            .as_ref()
+            .is_some_and(|connection| healthy(&connection.room, &connection.event_loop));
+        let keep_viewer = self
+            .viewer
+            .as_ref()
+            .is_some_and(|viewer| healthy(&viewer.room, &viewer.event_loop));
+        if !keep_publisher {
+            self.disconnect_publisher().await;
         }
-        let handle = self.handle();
+        if !keep_viewer {
+            self.disconnect_viewer().await;
+        }
+        if !keep_publisher {
+            self.connect_publisher(app, shared, url, publisher_token)
+                .await?;
+        }
+        if !keep_viewer {
+            if let Err(error) = self
+                .connect_viewer(app, shared, url, viewer_token, remote_preferences)
+                .await
+            {
+                // A fresh join is all or nothing; a rejoin keeps what did come back.
+                if !rejoin {
+                    self.disconnect().await;
+                }
+                return Err(error);
+            }
+        }
+        Ok(())
+    }
 
+    async fn connect_publisher(
+        &mut self,
+        app: &AppHandle,
+        shared: &SharedVideoEngineState,
+        url: &str,
+        publisher_token: &str,
+    ) -> Result<(), String> {
+        let handle = self.handle();
         let mut options = RoomOptions::default();
         // The publisher role never subscribes; the separate native viewer below owns receive.
         options.auto_subscribe = false;
@@ -890,7 +957,18 @@ impl VideoEngine {
         self.connection = Some(RoomConnection { room, event_loop });
         self.share_paused_attribute.clear();
         self.link.connected.store(true, Ordering::Release);
+        Ok(())
+    }
 
+    async fn connect_viewer(
+        &mut self,
+        app: &AppHandle,
+        shared: &SharedVideoEngineState,
+        url: &str,
+        viewer_token: &str,
+        remote_preferences: &HashMap<String, bool>,
+    ) -> Result<(), String> {
+        let handle = self.handle();
         let mut viewer_options = RoomOptions::default();
         viewer_options.auto_subscribe = false;
         let (viewer_url, viewer_token) = (url.to_string(), viewer_token.to_string());
@@ -899,13 +977,7 @@ impl VideoEngine {
             .await
             .map_err(|error| error.to_string())
             .and_then(|result| result.map_err(|error| error.to_string()));
-        let (viewer_room, viewer_events) = match viewer {
-            Ok(viewer) => viewer,
-            Err(error) => {
-                self.disconnect().await;
-                return Err(error);
-            }
-        };
+        let (viewer_room, viewer_events) = viewer?;
         let viewer_room = Arc::new(viewer_room);
         let readers = Arc::new(Mutex::new(HashMap::new()));
         let viewer_connected = Arc::clone(&self.link.viewer_connected);
@@ -931,16 +1003,25 @@ impl VideoEngine {
     }
 
     pub async fn disconnect(&mut self) {
+        self.disconnect_publisher().await;
+        self.disconnect_viewer().await;
+    }
+
+    async fn disconnect_publisher(&mut self) {
         self.publications.clear();
         self.share_paused_attribute.clear();
         self.link.connected.store(false, Ordering::Release);
-        self.link.viewer_connected.store(false, Ordering::Release);
         let handle = self.handle();
         if let Some(connection) = self.connection.take() {
             connection.event_loop.abort();
             let room = connection.room.clone();
             let _ = handle.spawn(async move { room.close().await }).await;
         }
+    }
+
+    async fn disconnect_viewer(&mut self) {
+        self.link.viewer_connected.store(false, Ordering::Release);
+        let handle = self.handle();
         if let Some(viewer) = self.viewer.take() {
             viewer.event_loop.abort();
             for (stream_id, reader) in viewer.readers.lock().unwrap().drain() {
@@ -1027,6 +1108,11 @@ impl VideoEngine {
             return Ok(());
         };
         let room = Arc::clone(&connection.room);
+        if room.connection_state() != ConnectionState::Connected {
+            // LiveKit is resuming the session and republishes our tracks itself; a track
+            // looks lost until it has. The resync after `Reconnected` reconciles the rest.
+            return Ok(());
+        }
         let handle = self.handle();
 
         let desired: HashMap<VideoSourceId, &VideoSourceState> = sources
@@ -1292,8 +1378,9 @@ impl VideoEngine {
                     }
                     RoomEvent::Reconnected => {
                         connected.store(true, Ordering::Release);
-                        // A full reconnect is a new participant with no attributes.
-                        *watching.sent.lock().await = None;
+                        // A full reconnect is a new participant with no attributes. Flagged,
+                        // not locked: a send stuck on the dead connection holds the lock.
+                        watching.invalidated.store(true, Ordering::Release);
                         resend_lost_subscriptions(&runtime, &room);
                     }
                     RoomEvent::Disconnected { reason } => {
@@ -1545,11 +1632,20 @@ fn reflect_viewer_state(app: &AppHandle, shared: &SharedVideoEngineState, room: 
             .then_with(|| format!("{:?}", left.source).cmp(&format!("{:?}", right.source)))
     });
     let snapshot = {
+        let participants: Vec<_> = participants.into_values().collect();
         let Ok(mut state) = shared.write() else {
             return;
         };
+        // Runs after every room event (speaking changes many times a second): an unchanged
+        // view is neither written nor sent to the WebView.
+        if state.mixer.viewer_connected
+            && state.mixer.participants == participants
+            && state.mixer.remote_tracks == tracks
+        {
+            return;
+        }
         state.mixer.viewer_connected = true;
-        state.mixer.participants = participants.into_values().collect();
+        state.mixer.participants = participants;
         state.mixer.remote_tracks = tracks;
         state.snapshot()
     };
