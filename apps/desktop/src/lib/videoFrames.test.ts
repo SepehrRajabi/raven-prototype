@@ -24,7 +24,16 @@ describe("raw video frames", () => {
     expect(parseFrameHeader(header(1280, 720))).toEqual({ width: 1280, height: 720, payload: 1382400 });
   });
 
-  test("rejects bad magic, odd sizes and wrong lengths", () => {
+  test("accepts odd sizes with chroma rounded up", () => {
+    // 427x241: chroma planes are 214x121.
+    expect(parseFrameHeader(header(427, 241, 427 * 241 + 2 * 214 * 121))).toEqual({
+      width: 427,
+      height: 241,
+      payload: 427 * 241 + 2 * 214 * 121,
+    });
+  });
+
+  test("rejects bad magic and wrong lengths", () => {
     const badMagic = header(4, 2);
     badMagic[0] = 0;
     expect(parseFrameHeader(badMagic)).toBeNull();

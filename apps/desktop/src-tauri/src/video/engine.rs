@@ -115,6 +115,16 @@ impl VideoFrameSink for VideoPublishSink {
     }
 }
 
+/// A black I420 picture (limited range: Y 16, U and V 128), padding included.
+fn black_i420(width: u32, height: u32) -> I420Buffer {
+    let mut buffer = I420Buffer::new(width, height);
+    let (y, u, v) = buffer.data_mut();
+    y.fill(16);
+    u.fill(128);
+    v.fill(128);
+    buffer
+}
+
 /// Copy a tightly-packed source plane into a (possibly padded) destination plane.
 fn copy_plane(src: &[u8], src_width: usize, dst: &mut [u8], dst_stride: usize, rows: usize) {
     // Unpadded destination (the usual case): one copy for the whole plane.
@@ -1233,13 +1243,21 @@ impl VideoEngine {
 
         // `NativeVideoSource::new` spawns an internal keep-alive task via the LiveKit
         // runtime, so the source is created inside the engine runtime alongside the
-        // publish handshake.
+        // publish handshake. Until the source has captured a frame, that task sends an
+        // uninitialised buffer ten times a second, which viewers see as a green (or green
+        // and striped) picture. A black frame stops it, normally before its first tick.
         let publish_room = Arc::clone(room);
         let (native, local_track) = self
             .handle()
             .spawn(async move {
                 let native =
                     NativeVideoSource::new(VideoResolution { width, height }, is_screencast);
+                native.capture_frame(&VideoFrame {
+                    rotation: VideoRotation::VideoRotation0,
+                    timestamp_us: 0,
+                    frame_metadata: None,
+                    buffer: black_i420(width, height),
+                });
                 let track = LocalVideoTrack::create_video_track(
                     &webrtc_track_id,
                     RtcVideoSource::Native(native.clone()),

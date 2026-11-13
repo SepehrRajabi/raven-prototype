@@ -7,6 +7,11 @@ export const RAW_HEADER_BYTES = 16;
 /** Chromium drops the oldest WebGL context past 16 on a page; stay well under it. */
 export const MAX_VIDEO_CONTEXTS = 12;
 
+/** Chroma planes are half size, rounded up, as the native side packs them. */
+export function chromaSize(lumaSize: number): number {
+  return Math.ceil(lumaSize / 2);
+}
+
 export type RawFrameHeader = { width: number; height: number; payload: number };
 
 export function rawStreamUrl(mjpegUrl: string): string {
@@ -21,8 +26,8 @@ export function parseFrameHeader(bytes: Uint8Array): RawFrameHeader | null {
   const width = view.getUint32(4, true);
   const height = view.getUint32(8, true);
   const payload = view.getUint32(12, true);
-  if (width === 0 || height === 0 || width % 2 !== 0 || height % 2 !== 0) return null;
-  if (payload !== (width * height * 3) / 2) return null;
+  if (width === 0 || height === 0) return null;
+  if (payload !== width * height + 2 * chromaSize(width) * chromaSize(height)) return null;
   return { width, height, payload };
 }
 

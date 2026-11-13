@@ -90,6 +90,8 @@ export function MediaTile({
 }) {
   const rootRef = useRef<HTMLDivElement | null>(null);
   const [playbackWaiting, setPlaybackWaiting] = useState(false);
+  /** The stream whose first frame is on screen; until then the tile says it is loading. */
+  const [shownStream, setShownStream] = useState<string | null>(null);
   const [fullscreen, setFullscreen] = useState(false);
   const [infoOpen, setInfoOpen] = useState(false);
   const moreRef = useRef<HTMLButtonElement | null>(null);
@@ -137,6 +139,12 @@ export function MediaTile({
   const hiddenCompact = !prominent && (inPictureInPicture || (!receiving && Boolean(receiveAction)));
   const playing = Boolean(tile.streamUrl) && receiving && !inPictureInPicture;
   const paused = isShare && tile.sharePaused ? sharePausedText(tile) : null;
+  // A new or re-watched stream takes a few seconds to bring its first picture; say so
+  // instead of showing an empty tile.
+  const pictureLoading = playing && shownStream !== tile.streamUrl && !playbackWaiting;
+  useEffect(() => {
+    if (!playing) setShownStream(null);
+  }, [playing]);
   const weak = tile.connectionQuality === "poor";
   const lost = tile.connectionQuality === "lost";
 
@@ -167,7 +175,10 @@ export function MediaTile({
       {playing ? (
         <VideoSurface
           src={tile.streamUrl!}
-          onFirstFrame={() => setPlaybackWaiting(false)}
+          onFirstFrame={() => {
+            setPlaybackWaiting(false);
+            setShownStream(tile.streamUrl ?? null);
+          }}
           onStreamError={() => setPlaybackWaiting(true)}
           className={cn(
             "absolute inset-0 h-full w-full transition-[filter] duration-200",
@@ -217,6 +228,21 @@ export function MediaTile({
           </div>
         </div>
       )}
+      {pictureLoading ? (
+        <div role="status" className="pointer-events-none absolute inset-0 flex animate-fade-in items-center justify-center px-5 text-center">
+          <div>
+            <Loader2 className="mx-auto h-6 w-6 animate-spin text-subtle" />
+            <div className="mt-3 text-small text-muted-foreground">
+              {tile.isLocal
+                ? isShare
+                  ? "Loading your screen…"
+                  : "Loading your camera…"
+                : `Loading ${tile.displayName}’s ${isShare ? "screen" : "camera"}…`}
+            </div>
+            {prominent ? <div className="mt-0.5 text-caption text-subtle">The picture takes a few seconds to arrive</div> : null}
+          </div>
+        </div>
+      ) : null}
       {playbackWaiting && playing ? (
         <div className="absolute inset-0 flex items-center justify-center bg-black/40">
           <span className="inline-flex items-center gap-2 rounded-full bg-black/70 px-3 py-1.5 text-caption text-white">

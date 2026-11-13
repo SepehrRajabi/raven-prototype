@@ -615,12 +615,10 @@ export function useRavenMediaAdapter(
     for (const cue of cues) void audioCommands.playSoundCue(cue).catch(() => undefined);
   }, [activeNestId, videoState]);
 
-  const setSafeError = useCallback((message: string, kind: MediaErrorKind = "capture_failure", action = "Check the selected source and try again.") => {
-    setError(message);
-    setLastError({ message, kind, action });
-    setPhase("error");
-  }, []);
-
+  // A device or source failure (a camera that will not start, a share that fails to
+  // publish) is reported on its own and never changes the call's phase: the call is still
+  // connected, and the supervisor that rejoins a lost room only runs while it says so.
+  // Only a failed join or leave puts the phase into "error".
   const setNonFatalError = useCallback((message: string, kind: MediaErrorKind = "capture_failure", action = "Check the selected source and try again.") => {
     setError(message);
     setLastError({ message, kind, action });
@@ -734,7 +732,8 @@ export function useRavenMediaAdapter(
         await refreshNativeState();
         await Promise.resolve(onStateChanged?.()).catch(() => undefined);
       } catch (err) {
-        setSafeError(messageFromError(err, `Could not leave the ${nestLabel} cleanly`));
+        setNonFatalError(messageFromError(err, `Could not leave the ${nestLabel} cleanly`));
+        setPhase("error");
       }
     })();
     leavingRef.current = operation;
@@ -743,7 +742,7 @@ export function useRavenMediaAdapter(
     };
     void operation.then(clearLeave, clearLeave);
     return operation;
-  }, [cleanupMediaOnly, nestLabel, onStateChanged, refreshNativeState, resetSharedCallState, setSafeError]);
+  }, [cleanupMediaOnly, nestLabel, onStateChanged, refreshNativeState, resetSharedCallState, setNonFatalError]);
 
   useEffect(() => {
     const disconnectActiveNest = () => {
@@ -961,11 +960,12 @@ export function useRavenMediaAdapter(
             setLastError(null);
             setPhase("error");
           } else {
-            setSafeError(
+            setNonFatalError(
               messageFromError(err, `Could not join media for this ${nestLabel}`),
               "rtc_failure",
               "Check the realtime server connection, then try joining media again.",
             );
+            setPhase("error");
           }
           await onStateChanged?.();
           throw err;
@@ -977,7 +977,7 @@ export function useRavenMediaAdapter(
       work.catch(() => undefined);
       return Promise.race([work, aborted]);
     },
-    [applyVideoJoinDefaults, cleanupMediaOnly, connectMedia, leaveMediaSession, muteLocalMicrophones, nestLabel, onStateChanged, refreshMediaDevices, refreshNativeState, resetSharedCallState, setSafeError],
+    [applyVideoJoinDefaults, cleanupMediaOnly, connectMedia, leaveMediaSession, muteLocalMicrophones, nestLabel, onStateChanged, refreshMediaDevices, refreshNativeState, resetSharedCallState, setNonFatalError],
   );
 
   const cancelMediaJoin = useCallback(() => {
@@ -1114,7 +1114,7 @@ export function useRavenMediaAdapter(
   const publishMic = useCallback(async () => {
     setError("");
     if (!audioCapabilities?.supportsMicrophone) {
-      setSafeError("Microphone capture is not supported on this system.", "unsupported", "Use a supported OS/audio backend or add another audio source in the mixer.");
+      setNonFatalError("Microphone capture is not supported on this system.", "unsupported", "Use a supported OS/audio backend or add another audio source in the mixer.");
       return;
     }
     try {
@@ -1127,9 +1127,9 @@ export function useRavenMediaAdapter(
       }
       if (state) setAudioState(state);
     } catch (err) {
-      setSafeError(classifyMediaError(err, "Microphone could not be published").message, classifyMediaError(err).kind, "Check microphone permission or pick another input device.");
+      setNonFatalError(classifyMediaError(err, "Microphone could not be published").message, classifyMediaError(err).kind, "Check microphone permission or pick another input device.");
     }
-  }, [audioCapabilities?.supportsMicrophone, ensureDefaultMic, micSources, setSafeError]);
+  }, [audioCapabilities?.supportsMicrophone, ensureDefaultMic, micSources, setNonFatalError]);
 
   const unpublishMic = useCallback(async () => {
     setError("");
@@ -1142,9 +1142,9 @@ export function useRavenMediaAdapter(
       }
       if (state) setAudioState(state);
     } catch (err) {
-      setSafeError(messageFromError(err, "Microphone could not be unpublished"), "publish_failure", "Try muting again or leave the media session.");
+      setNonFatalError(messageFromError(err, "Microphone could not be unpublished"), "publish_failure", "Try muting again or leave the media session.");
     }
-  }, [micSources, setSafeError]);
+  }, [micSources, setNonFatalError]);
 
   /** Mute without unpublishing: the track stays up, so unmuting is instant. */
   const muteMic = useCallback(async () => {
@@ -1156,9 +1156,9 @@ export function useRavenMediaAdapter(
       }
       if (state) setAudioState(state);
     } catch (err) {
-      setSafeError(messageFromError(err, "Microphone could not be muted"), "publish_failure", "Try muting again or leave the media session.");
+      setNonFatalError(messageFromError(err, "Microphone could not be muted"), "publish_failure", "Try muting again or leave the media session.");
     }
-  }, [micSources, setSafeError]);
+  }, [micSources, setNonFatalError]);
 
   const serverMuted = audioState?.session.publishRevoked === true;
   const serverDeafened = audioState?.session.subscribeRevoked === true;
@@ -1187,16 +1187,16 @@ export function useRavenMediaAdapter(
       setSelectedMicPreference(deviceId);
       saveMediaSettings({ selectedMic: deviceId });
     } catch (err) {
-      setSafeError(messageFromError(err, "Microphone input could not be changed"), "capture_failure", "Pick another input device or check OS microphone access.");
+      setNonFatalError(messageFromError(err, "Microphone input could not be changed"), "capture_failure", "Pick another input device or check OS microphone access.");
     }
-  }, [ensureDefaultMic, saveMediaSettings, setSafeError]);
+  }, [ensureDefaultMic, saveMediaSettings, setNonFatalError]);
 
   const startCamera = useCallback(async (camera: CameraDevice, profile: VideoQualityProfile = DEFAULT_VIDEO_PROFILE) => {
     setError("");
     setPreferredCameraId(camera.id);
     setPreferredCameraProfile(profile);
     if (!videoCapabilities?.supportsCamera) {
-      setSafeError("Camera capture is not supported on this system.", "unsupported", "Use a supported camera backend or continue audio-only.");
+      setNonFatalError("Camera capture is not supported on this system.", "unsupported", "Use a supported camera backend or continue audio-only.");
       return;
     }
     try {
@@ -1204,9 +1204,9 @@ export function useRavenMediaAdapter(
       setVideoState(await videoCommands.startCamera(camera.id, camera.name || "Camera", profile));
     } catch (err) {
       const classified = classifyMediaError(err, "Camera could not be started");
-      setSafeError(classified.message, classified.kind, "Check camera permission or choose another camera.");
+      setNonFatalError(classified.message, classified.kind, "Check camera permission or choose another camera.");
     }
-  }, [cameraSource, setSafeError, videoCapabilities?.supportsCamera]);
+  }, [cameraSource, setNonFatalError, videoCapabilities?.supportsCamera]);
 
   const setCameraDevice = useCallback(async (deviceId: string | null) => {
     setError("");
@@ -1214,11 +1214,11 @@ export function useRavenMediaAdapter(
     if (!deviceId || !cameraSource) return;
     const camera = cameras.find((candidate) => candidate.id === deviceId) ?? (await videoCommands.listCameras()).find((candidate) => candidate.id === deviceId);
     if (!camera) {
-      setSafeError("Camera device is not available.", "missing_device", "Pick another camera or reconnect the device.");
+      setNonFatalError("Camera device is not available.", "missing_device", "Pick another camera or reconnect the device.");
       return;
     }
     await startCamera(camera, cameraSource.profile ?? preferredCameraProfile);
-  }, [cameraSource, cameras, preferredCameraProfile, setSafeError, startCamera]);
+  }, [cameraSource, cameras, preferredCameraProfile, setNonFatalError, startCamera]);
 
   const setCameraProfile = useCallback(async (profile: VideoQualityProfile) => {
     setError("");
@@ -1227,9 +1227,9 @@ export function useRavenMediaAdapter(
     try {
       setVideoState(await videoCommands.setSourceProfile(cameraSource.id, profile));
     } catch (err) {
-      setSafeError(messageFromError(err, "Camera quality could not be changed"), "capture_failure", "Try another quality setting or restart the camera.");
+      setNonFatalError(messageFromError(err, "Camera quality could not be changed"), "capture_failure", "Try another quality setting or restart the camera.");
     }
-  }, [cameraSource, setSafeError]);
+  }, [cameraSource, setNonFatalError]);
 
   const stopCamera = useCallback(async () => {
     setError("");
@@ -1245,9 +1245,9 @@ export function useRavenMediaAdapter(
         setVideoState(refreshed);
         if (!refreshed.localSources.some((source) => source.kind === "camera")) return;
       }
-      setSafeError(messageFromError(err, "Camera could not be stopped"), "capture_failure", "Try stopping camera again or leave the media session.");
+      setNonFatalError(messageFromError(err, "Camera could not be stopped"), "capture_failure", "Try stopping camera again or leave the media session.");
     }
-  }, [cameraSource, setSafeError]);
+  }, [cameraSource, setNonFatalError]);
 
   const toggleCamera = useCallback(async () => {
     if (localCameraEnabled) {
@@ -1257,11 +1257,11 @@ export function useRavenMediaAdapter(
     const listedCameras = cameras.length ? cameras : await videoCommands.listCameras();
     const camera = listedCameras.find((candidate) => candidate.id === preferredCameraId) ?? listedCameras[0];
     if (!camera) {
-      setSafeError("No camera device is available.", "missing_device", "Connect a camera or continue audio-only.");
+      setNonFatalError("No camera device is available.", "missing_device", "Connect a camera or continue audio-only.");
       return;
     }
     await startCamera(camera, preferredCameraProfile);
-  }, [cameras, localCameraEnabled, preferredCameraId, preferredCameraProfile, setSafeError, startCamera, stopCamera]);
+  }, [cameras, localCameraEnabled, preferredCameraId, preferredCameraProfile, setNonFatalError, startCamera, stopCamera]);
 
   const setRemoteAudioReceiving = useCallback(async (enabled: boolean) => {
     try {
@@ -1359,18 +1359,18 @@ export function useRavenMediaAdapter(
       saveMediaSettings({ selectedOutput: next });
       await refreshMediaDevices();
     } catch (err) {
-      setSafeError(messageFromError(err, "Speaker could not be changed"), "unsupported", "Pick another speaker or use the system default.");
+      setNonFatalError(messageFromError(err, "Speaker could not be changed"), "unsupported", "Pick another speaker or use the system default.");
     }
-  }, [refreshMediaDevices, saveMediaSettings, setSafeError]);
+  }, [refreshMediaDevices, saveMediaSettings, setNonFatalError]);
 
   const testOutputDevice = useCallback(async () => {
     setError("");
     try {
       await audioCommands.testOutputDevice(selectedOutputPreference);
     } catch (err) {
-      setSafeError(messageFromError(err, "Test sound could not play"), "unsupported", "Pick another speaker or check the device connection.");
+      setNonFatalError(messageFromError(err, "Test sound could not play"), "unsupported", "Pick another speaker or check the device connection.");
     }
-  }, [selectedOutputPreference, setSafeError]);
+  }, [selectedOutputPreference, setNonFatalError]);
 
   const setDeafenMode = useCallback(async (mode: DeafenMode) => {
     setError("");
@@ -1415,7 +1415,7 @@ export function useRavenMediaAdapter(
   ) => {
     setError("");
     if (!videoCapabilities || (!videoCapabilities.supportsDisplayCapture && !videoCapabilities.supportsWindowCapture)) {
-      setSafeError("Screen sharing is not supported on this system.", "unsupported", "Use a supported OS screen capture backend.");
+      setNonFatalError("Screen sharing is not supported on this system.", "unsupported", "Use a supported OS screen capture backend.");
       return;
     }
     try {
@@ -1430,9 +1430,9 @@ export function useRavenMediaAdapter(
       ));
     } catch (err) {
       const classified = classifyMediaError(err, "Display sharing could not be started");
-      setSafeError(classified.message, classified.kind, "Check screen recording permission or choose another source.");
+      setNonFatalError(classified.message, classified.kind, "Check screen recording permission or choose another source.");
     }
-  }, [screenSource, setSafeError, videoCapabilities]);
+  }, [screenSource, setNonFatalError, videoCapabilities]);
 
   const startWindowShare = useCallback(async (
     windowTarget: WindowTarget,
@@ -1441,7 +1441,7 @@ export function useRavenMediaAdapter(
   ) => {
     setError("");
     if (!videoCapabilities?.supportsWindowCapture) {
-      setSafeError("Window capture is not supported on this system.", "unsupported", "Use display sharing if available.");
+      setNonFatalError("Window capture is not supported on this system.", "unsupported", "Use display sharing if available.");
       return;
     }
     try {
@@ -1459,27 +1459,27 @@ export function useRavenMediaAdapter(
       ));
     } catch (err) {
       const classified = classifyMediaError(err, "Window sharing could not be started");
-      setSafeError(classified.message, classified.kind, "Check capture permission or choose another window.");
+      setNonFatalError(classified.message, classified.kind, "Check capture permission or choose another window.");
     }
-  }, [screenSource, setSafeError, videoCapabilities]);
+  }, [screenSource, setNonFatalError, videoCapabilities]);
 
   const startScreenShare = useCallback(async () => {
     const display = displays[0] ?? (await videoCommands.listDisplays())[0];
     if (!display) {
-      setSafeError("No shareable display is available.", "missing_device", "Open the source picker or check OS screen capture permission.");
+      setNonFatalError("No shareable display is available.", "missing_device", "Open the source picker or check OS screen capture permission.");
       return;
     }
     await startDisplayShare(display, false);
-  }, [displays, setSafeError, startDisplayShare]);
+  }, [displays, setNonFatalError, startDisplayShare]);
 
   const stopScreenShare = useCallback(async () => {
     setError("");
     try {
       if (screenSource) setVideoState(await videoCommands.stopSource(screenSource.id));
     } catch (err) {
-      setSafeError(messageFromError(err, "Screen sharing could not be stopped"), "capture_failure", "Try stopping share again or leave the media session.");
+      setNonFatalError(messageFromError(err, "Screen sharing could not be stopped"), "capture_failure", "Try stopping share again or leave the media session.");
     }
-  }, [screenSource, setSafeError]);
+  }, [screenSource, setNonFatalError]);
 
   const setMicProcessing = useCallback(async (processing: WebRtcAudioProcessingSettings) => {
     setError("");
@@ -1487,9 +1487,9 @@ export function useRavenMediaAdapter(
       const mic = await ensureDefaultMic();
       setAudioState(await audioCommands.setLocalWebRtcProcessing(mic.id, processing));
     } catch (err) {
-      setSafeError(messageFromError(err, "Microphone processing could not be changed"), "publish_failure", "Try again from the mixer or leave and rejoin media.");
+      setNonFatalError(messageFromError(err, "Microphone processing could not be changed"), "publish_failure", "Try again from the mixer or leave and rejoin media.");
     }
-  }, [ensureDefaultMic, setSafeError]);
+  }, [ensureDefaultMic, setNonFatalError]);
 
   const retryIncomingAudio = useCallback(async () => {
     setError("");

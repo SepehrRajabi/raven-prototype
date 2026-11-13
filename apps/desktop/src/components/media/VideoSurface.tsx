@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import {
   acquireVideoContext,
+  chromaSize,
   ExactReader,
   parseFrameHeader,
   RAW_HEADER_BYTES,
@@ -99,8 +100,8 @@ function createRenderer(canvas: HTMLCanvasElement): Renderer | null {
         canvas.height = height;
       }
       gl.viewport(0, 0, width, height);
-      const cw = width / 2;
-      const ch = height / 2;
+      const cw = chromaSize(width);
+      const ch = chromaSize(height);
       const key = `${width}x${height}`;
       const ySize = width * height;
       const cSize = cw * ch;
