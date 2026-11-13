@@ -79,7 +79,7 @@ export function EmojiPicker({ onPick, autoFocus = false }: { onPick: (emoji: str
   let index = 0;
   return (
     // 8 columns of 40px, 12px in front and room on the other side for the scrollbar.
-    <div className="relative flex w-[356px] flex-col">
+    <div className="relative flex max-h-[var(--radix-popover-content-available-height,100vh)] w-[356px] flex-col">
       <div className="flex items-center gap-1.5 px-3 pt-3">
         <div className="relative flex-1">
           <Search className="pointer-events-none absolute left-2.5 top-1/2 h-4 w-4 -translate-y-1/2 text-subtle" aria-hidden />
@@ -110,7 +110,7 @@ export function EmojiPicker({ onPick, autoFocus = false }: { onPick: (emoji: str
           </Tooltip>;
         })}
       </div>
-      <div ref={grid} className="relative mt-1 h-[312px] overflow-y-auto pb-1 pl-3 pr-1 [scrollbar-gutter:stable] [scrollbar-width:thin]" onScroll={() => {
+      <div ref={grid} className="relative mt-1 h-[312px] min-h-[96px] overflow-y-auto pb-1 pl-3 pr-1 [scrollbar-gutter:stable] [scrollbar-width:thin]" onScroll={() => {
         if (searching || !grid.current) return;
         const scrolled = grid.current.scrollTop + 8;
         const all = Array.from(grid.current.querySelectorAll<HTMLElement>("section"));
