@@ -96,6 +96,15 @@
   box-sizing: border-box;
 }
 
+/* The app is a fixed shell: only inner panes scroll. Without this, a hard
+   touchpad flick chains from an inner scroller to the document and moves
+   the whole layout. */
+html,
+body {
+  overflow: hidden;
+  overscroll-behavior: none;
+}
+
 body {
   min-width: 980px;
   min-height: 700px;
