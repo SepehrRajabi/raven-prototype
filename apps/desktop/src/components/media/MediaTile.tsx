@@ -28,6 +28,7 @@ import { api } from "@/lib/api";
 import { speakingGlowStyle } from "@/lib/speakingActivity";
 import { sharePausedText } from "./stageState";
 import { StreamInfo } from "./StreamInfo";
+import { VideoSurface } from "./VideoSurface";
 import { stripSidecarIdentity } from "@/lib/mediaIdentity";
 import { ServerVoiceMark, VoiceModerationItems, type VoiceModeration } from "./VoiceModeration";
 import { WatcherStack, WatchingMark } from "./WatcherStack";
@@ -164,12 +165,10 @@ export function MediaTile({
       )}
     >
       {playing ? (
-        <img
-          src={tile.streamUrl}
-          alt=""
-          draggable={false}
-          onLoad={() => setPlaybackWaiting(false)}
-          onError={() => setPlaybackWaiting(true)}
+        <VideoSurface
+          src={tile.streamUrl!}
+          onFirstFrame={() => setPlaybackWaiting(false)}
+          onStreamError={() => setPlaybackWaiting(true)}
           className={cn(
             "absolute inset-0 h-full w-full transition-[filter] duration-200",
             fit === "fill" ? "object-cover" : "object-contain",
