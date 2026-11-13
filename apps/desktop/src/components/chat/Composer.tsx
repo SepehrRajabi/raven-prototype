@@ -1,5 +1,5 @@
 import { useEffect, useId, useLayoutEffect, useRef, useState, useSyncExternalStore, type ClipboardEvent, type KeyboardEvent } from "react";
-import { ArrowUp, CornerUpLeft, ImagePlus, Pencil, Smile, X } from "lucide-react";
+import { ArrowUp, BarChart3, CornerUpLeft, ImagePlus, Pencil, Smile, X } from "lucide-react";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { EmojiPicker } from "./EmojiPicker";
 import { ComposerLibraryButton, useKeywordMatches, type ComposerLibraryContext } from "@/components/library/ComposerLibrary";
@@ -14,9 +14,9 @@ import { shortcodeQuery, completedShortcode } from "@/lib/emoji/shortcodes";
 import { Button } from "@/components/ui/button";
 import { fieldClassName } from "@/components/ui/input";
 import { Tooltip } from "@/components/ui/tooltip";
-import { messageExcerpt, type AttachmentLimits } from "@/lib/chat/attachments";
+import { messageExcerpt, summaryOf, type AttachmentLimits } from "@/lib/chat/attachments";
 import { addToTray, chatTray } from "@/lib/chat/composerTray";
-import { excerptOf, summarize } from "@/lib/chat/reducer";
+import { excerptOf } from "@/lib/chat/reducer";
 import { trayReady, type TraySource } from "@/lib/chat/tray";
 import type { ChatMessage, PreparedAttachment } from "@/lib/chat/types";
 import { cn } from "@/lib/utils";
@@ -61,6 +61,8 @@ export interface ComposerProps {
   library?: ComposerLibraryContext | null;
   /** Sends a GIF or sticker as its own message, replying when a reply is being written. */
   onSendLibrary?: (item: LibraryItem) => void;
+  /** Opens the poll writer. Without it, when the server has no polls, there is no button. */
+  onCreatePoll?: () => void;
 }
 
 async function filesToSources(files: File[]): Promise<TraySource[]> {
@@ -70,7 +72,7 @@ async function filesToSources(files: File[]): Promise<TraySource[]> {
 const NO_CANDIDATES: MentionCandidate[] = [];
 
 /** Where a message is written. Enter sends it; Shift+Enter starts a new line. */
-export function Composer({ conversationId, name, replyingTo, editing, onCancelReply, onCancelEdit, onSend, onSaveEdit, onTyping, onEditLast, imageLimits, mentionCandidates = NO_CANDIDATES, mentionResolver, nestHeading = "", library = null, onSendLibrary }: ComposerProps) {
+export function Composer({ conversationId, name, replyingTo, editing, onCancelReply, onCancelEdit, onSend, onSaveEdit, onTyping, onEditLast, imageLimits, mentionCandidates = NO_CANDIDATES, mentionResolver, nestHeading = "", library = null, onSendLibrary, onCreatePoll }: ComposerProps) {
   const [text, setText] = useState(() => drafts.get(conversationId) ?? "");
   const picked = useRef<PickedMention[]>(draftMentions.get(conversationId) ?? []);
   const pickedBeforeEdit = useRef<PickedMention[]>([]);
@@ -295,7 +297,7 @@ export function Composer({ conversationId, name, replyingTo, editing, onCancelRe
   const context = editing
     ? { icon: <Pencil className="h-4 w-4" />, title: "Editing message", text: excerptOf(editing.body), cancel: onCancelEdit, label: "Stop editing" }
     : replyingTo
-      ? { icon: <CornerUpLeft className="h-4 w-4" />, title: `Replying to ${replyingTo.senderName}`, text: messageExcerpt(excerptOf(replyingTo.body), summarize(replyingTo.attachments)), cancel: onCancelReply, label: "Cancel reply" }
+      ? { icon: <CornerUpLeft className="h-4 w-4" />, title: `Replying to ${replyingTo.senderName}`, text: messageExcerpt(excerptOf(replyingTo.body), summaryOf(replyingTo)), cancel: onCancelReply, label: "Cancel reply" }
       : null;
 
   return (
@@ -371,6 +373,13 @@ export function Composer({ conversationId, name, replyingTo, editing, onCancelRe
               }}
             />
           </>
+        ) : null}
+        {onCreatePoll && !editing ? (
+          <Tooltip label="Create a poll">
+            <Button size="icon" variant="ghost" title="" aria-label="Create a poll" onClick={onCreatePoll}>
+              <BarChart3 className="h-4 w-4" />
+            </Button>
+          </Tooltip>
         ) : null}
         <textarea
           ref={field}

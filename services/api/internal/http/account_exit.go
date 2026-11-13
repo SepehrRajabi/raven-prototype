@@ -199,8 +199,9 @@ func (s *Server) accountConversationIDs(userID string, erase bool) ([]string, er
 	if erase {
 		query += ` UNION SELECT conversation_id FROM chat_messages WHERE sender_id = ? AND kind = 'text' AND deleted_at IS NULL
 		 UNION SELECT conversation_id FROM chat_messages WHERE origin_sender_id = ? AND deleted_at IS NULL
-		 UNION SELECT conversation_id FROM chat_reactions WHERE user_id = ?`
-		args = append(args, userID, userID, userID)
+		 UNION SELECT conversation_id FROM chat_reactions WHERE user_id = ?
+		 UNION SELECT conversation_id FROM chat_poll_votes WHERE user_id = ?`
+		args = append(args, userID, userID, userID, userID)
 	}
 	ids, err := s.stringColumn(query+`)`, args...)
 	sort.Strings(ids)
@@ -385,6 +386,9 @@ func (s *Server) deleteAccountCore(user User, erase bool) error {
 		if _, err := tx.Exec(`DELETE FROM chat_reactions WHERE user_id = ?`, user.ID); err != nil {
 			return err
 		}
+		if _, err := tx.Exec(`DELETE FROM chat_poll_votes WHERE user_id = ?`, user.ID); err != nil {
+			return err
+		}
 	}
 	// Uploads that no message claimed are never anyone else's to see.
 	if err := chatQueuePurgesTx(tx, `uploader_id = ? AND message_id IS NULL`, user.ID); err != nil {
@@ -473,9 +477,11 @@ func (s *Server) eraseAccountMessagesTx(tx *database.Tx, access chatAccess, user
 	}
 
 	reacted, err := stringColumnTx(tx,
-		`SELECT DISTINCT r.message_id FROM chat_reactions r JOIN chat_messages m ON m.id = r.message_id
-		 WHERE r.conversation_id = ? AND r.user_id = ? AND m.deleted_at IS NULL ORDER BY r.message_id`,
-		conversationID, userID)
+		`SELECT r.message_id FROM chat_reactions r JOIN chat_messages m ON m.id = r.message_id
+		 WHERE r.conversation_id = ? AND r.user_id = ? AND m.deleted_at IS NULL
+		 UNION SELECT v.message_id FROM chat_poll_votes v JOIN chat_messages m ON m.id = v.message_id
+		 WHERE v.conversation_id = ? AND v.user_id = ? AND m.deleted_at IS NULL ORDER BY 1`,
+		conversationID, userID, conversationID, userID)
 	if err != nil {
 		return nil, err
 	}
@@ -485,6 +491,9 @@ func (s *Server) eraseAccountMessagesTx(tx *database.Tx, access chatAccess, user
 			return nil, err
 		}
 		if _, err := tx.Exec(`DELETE FROM chat_reactions WHERE message_id = ? AND user_id = ?`, messageID, userID); err != nil {
+			return nil, err
+		}
+		if _, err := tx.Exec(`DELETE FROM chat_poll_votes WHERE message_id = ? AND user_id = ?`, messageID, userID); err != nil {
 			return nil, err
 		}
 		var replyToID sql.NullString

@@ -27,6 +27,8 @@ release-admin-password.dpapi
 # Build output: the API sidecar binary (scripts/build-sidecars.ps1) and stray logs.
 apps/desktop/src-tauri/bin/
 *.log
+# Finder folder settings on macOS.
+.DS_Store
 
 # LLM-written plans never enter the repo (see CLAUDE.md).
 docs/plans/

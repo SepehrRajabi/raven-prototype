@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { normalizeApiServerUrl } from "./apiServerUrl";
+import { normalizeApiServerUrl, uniqueServerUrls } from "./apiServerUrl";
 
 describe("normalizeApiServerUrl", () => {
   test("a public name typed without a scheme uses https", () => {
@@ -24,5 +24,27 @@ describe("normalizeApiServerUrl", () => {
   test("an explicit scheme is kept", () => {
     expect(normalizeApiServerUrl("http://raven.example.org")).toBe("http://raven.example.org");
     expect(normalizeApiServerUrl("HTTPS://raven.example.org:8443")).toBe("https://raven.example.org:8443");
+  });
+});
+
+describe("uniqueServerUrls", () => {
+  test("keeps one address per server, preferring https", () => {
+    expect(uniqueServerUrls(["http://127.0.0.1:6977", "https://mimir.rvn.bluehour.cloud", "http://mimir.rvn.bluehour.cloud"])).toEqual([
+      "http://127.0.0.1:6977",
+      "https://mimir.rvn.bluehour.cloud",
+    ]);
+    expect(uniqueServerUrls(["http://127.0.0.1:6977", "http://mimir.rvn.bluehour.cloud", "https://mimir.rvn.bluehour.cloud"])).toEqual([
+      "http://127.0.0.1:6977",
+      "https://mimir.rvn.bluehour.cloud",
+    ]);
+  });
+
+  test("leaves the server in use as it is", () => {
+    expect(uniqueServerUrls(["http://raven.lan", "https://raven.lan"])).toEqual(["http://raven.lan"]);
+  });
+
+  test("tells servers apart by port and path", () => {
+    const urls = ["http://127.0.0.1:6977", "http://127.0.0.1:7000", "https://example.org/raven", "https://example.org"];
+    expect(uniqueServerUrls(urls)).toEqual(urls);
   });
 });

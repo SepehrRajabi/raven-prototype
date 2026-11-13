@@ -15,6 +15,7 @@
 // message arriving twice, or an old copy arriving late, does no harm. Nothing here
 // performs a request; functions return the state and the work that follows from it.
 
+import { summaryOf } from "./attachments";
 import { mentionsUser } from "./mentions";
 import {
   UNREAD_CAP,
@@ -99,7 +100,7 @@ function previewOf(message: ChatMessage): ChatMessagePreview {
     senderName: message.senderName,
     kind: message.kind,
     excerpt: message.deletedAt ? "" : excerptOf(message.body),
-    ...(message.attachments?.length && !message.deletedAt ? { attachments: summarize(message.attachments) } : {}),
+    ...((message.attachments?.length || message.poll) && !message.deletedAt ? { attachments: summaryOf(message) } : {}),
     system: message.system,
     deleted: Boolean(message.deletedAt),
     createdAt: message.createdAt,
