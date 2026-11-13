@@ -54,7 +54,7 @@ Before planning a feature or a change people will notice, read the sections that
 
 ## 6. Working in this codebase
 
-- Load the matching skill before starting: `raven-ui` for anything a user sees, clicks or reads (also `RAVEN_UI_RULES.md`); `raven-media-engine` for audio, video, devices and calls. Both live in `.claude/skills/`. `raven-releases` (versions, builds, updates) exists only on the maintainer's machine.
+- Load the matching skill before starting: `raven-ui` for anything a user sees, clicks or reads; `raven-media-engine` for audio, video, devices and calls. Both live in `.claude/skills/`. `raven-releases` (versions, builds, updates) exists only on the maintainer's machine.
 - `docs/development.md` explains how to run the API and the desktop app; `docs/architecture.md` explains how the parts fit.
 - No telemetry, analytics, tracking or third-party calls that reveal who talks to whom, when or for how long. A feature that sends data to another host is off by default or clearly opt-in, and its documentation says what is sent (link previews are the model).
 - Server changes must keep working in the self-host bundle (`docs/self-hosting.md`) without any hosted service.
