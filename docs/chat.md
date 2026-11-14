@@ -50,7 +50,10 @@ Defaults chosen during the build. Each is one constant or one check to change:
   conversation up the list.
 - A new incoming message brings an archived conversation back.
 - Messages are up to 4096 characters. Formatting is `**bold**`, `*italic*`, `~~struck~~`,
-  `` `code` `` and fenced code blocks. A web address written out in full becomes a link.
+  `` `code` `` and fenced code blocks. A fence that names a language (` ```go `) is
+  coloured by the desktop's highlighter (lowlight with highlight.js's common languages,
+  loaded the first time it is needed); without a known language the block stays plain,
+  since guessing is slow and often wrong. A web address written out in full becomes a link.
   There is no `[label](address)` form, because a link whose words differ from where it goes
   is how people are tricked.
 
