@@ -1111,6 +1111,20 @@ export function useRavenMediaAdapter(
   }, [audioCapabilities?.supportsMicrophone, ensureDefaultMic]);
   prepareMicrophoneRef.current = prepareMicrophone;
 
+  // Prepare the signal before entering (design §6.3): the microphone source exists from
+  // the start, carrying the chosen device and remembered processing, so the dock, the
+  // Mixer and the switches show it outside a call. Nothing is captured or published until
+  // a call or the Mixer asks for it, and joining finds the source already configured.
+  const micReadyRef = useRef(false);
+  const supportsMicrophone = audioCapabilities?.supportsMicrophone === true;
+  useEffect(() => {
+    if (!supportsMicrophone || micReadyRef.current) return;
+    micReadyRef.current = true;
+    void ensureDefaultMic().catch(() => {
+      micReadyRef.current = false;
+    });
+  }, [ensureDefaultMic, supportsMicrophone]);
+
   const publishMic = useCallback(async () => {
     setError("");
     if (!audioCapabilities?.supportsMicrophone) {

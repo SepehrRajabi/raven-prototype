@@ -74,7 +74,7 @@ export function useSettingsSearch({
   const activeId = searching && results.length ? `${listId}-${Math.min(activeIndex, results.length - 1)}` : undefined;
 
   const field = (
-    <div className="flex h-8 items-center gap-2 rounded-control bg-card px-2.5 text-muted-foreground transition-colors focus-within:outline focus-within:outline-2 focus-within:outline-offset-0 focus-within:outline-ring/50 hover:bg-secondary/60">
+    <div className="flex h-8 items-center gap-2 rounded-control bg-card px-2.5 text-muted-foreground transition-colors focus-within:outline focus-within:outline-2 focus-within:outline-offset-0 focus-within:outline-ring hover:bg-secondary/60">
       <Search className="h-3.5 w-3.5 shrink-0" />
       <input
         ref={inputRef}
@@ -104,7 +104,7 @@ export function useSettingsSearch({
           <X className="h-3.5 w-3.5" />
         </button>
       ) : (
-        <kbd className="rounded-chip bg-background/60 px-1.5 text-caption text-subtle">{isMac ? "⌘F" : "Ctrl F"}</kbd>
+        <kbd className="rounded-chip bg-secondary px-1.5 text-caption text-subtle">{isMac ? "⌘F" : "Ctrl F"}</kbd>
       )}
     </div>
   );

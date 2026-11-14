@@ -776,11 +776,12 @@ export function DeviceDock({
               aria-pressed={mixerOpen}
               onClick={onToggleMixer}
               className={cn(
-                "flex h-9 w-9 shrink-0 items-center justify-center rounded-control transition-colors",
+                "flex h-9 w-9 shrink-0 items-center justify-center gap-2 rounded-control transition-colors min-[1100px]:w-auto min-[1100px]:px-2.5",
                 mixerOpen ? "bg-secondary text-foreground" : "text-muted-foreground hover:bg-secondary hover:text-foreground",
               )}
             >
               <SlidersHorizontal className="h-[18px] w-[18px]" />
+              <span className="hidden text-small min-[1100px]:inline">Mixer</span>
             </button>
           </Tooltip>
         </div>
@@ -1421,7 +1422,7 @@ function MicMenu({ media }: { media: RavenMediaAdapterState }) {
       />
       <SwitchRow label="Echo cancellation" hint="Keeps speaker sound out of your mic." checked={Boolean(processing?.echoCancellation)} disabled={!processing} onChange={(checked) => updateProcessing({ echoCancellation: checked })} />
       <SwitchRow label="Automatic gain" hint="Evens out how loud you are." checked={Boolean(processing?.autoGainControl)} disabled={!processing} onChange={(checked) => updateProcessing({ autoGainControl: checked })} />
-      {processing ? null : <p className="px-2 pb-1 pt-1.5 text-caption text-subtle">These unlock once your microphone has been turned on.</p>}
+      {processing ? null : <p className="px-2 pb-1 pt-1.5 text-caption text-subtle">These are available once Raven finds a microphone.</p>}
     </div>
   );
 }

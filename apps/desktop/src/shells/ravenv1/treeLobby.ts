@@ -32,6 +32,11 @@ export function liveTreeNests(details: Pick<TreeDetails, "activeNests">, launche
   return details.activeNests.map((nest) => launcher.find((candidate) => candidate.id === nest.id) ?? nest);
 }
 
+/** All the tree's voice nests: live ones first (with who is inside), then the quiet ones. */
+export function treeVoiceNests(details: Pick<TreeDetails, "activeNests" | "inactiveNests">, launcher: readonly LauncherNest[]): (Nest | LauncherNest)[] {
+  return [...liveTreeNests(details, launcher), ...details.inactiveNests];
+}
+
 export type SummaryPerson = { id: string; name: string };
 export type SummaryNest = { id: string; name: string; people: SummaryPerson[] };
 export type LobbySummary = { kind: "live" | "here" | "around" | "quiet"; text: string; nestId?: string };
