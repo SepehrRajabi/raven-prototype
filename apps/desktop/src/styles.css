@@ -337,6 +337,19 @@ textarea {
   text-align: start;
 }
 
+/* Colours for code in a fenced chat block that names its language. Like the colours that
+   report something, they don't follow the theme: code reads the same in every theme, and
+   every theme's card stays dark enough for them. Comments use the theme's quiet text. */
+.rv-code-keyword { color: hsl(282 38% 76%); }
+.rv-code-string { color: hsl(95 30% 68%); }
+.rv-code-number { color: hsl(28 62% 72%); }
+.rv-code-comment { color: hsl(var(--subtle-foreground)); font-style: italic; }
+.rv-code-title { color: hsl(212 58% 76%); }
+.rv-code-attr { color: hsl(42 58% 72%); }
+.rv-code-meta { color: hsl(var(--muted-foreground)); }
+.rv-code-addition { color: hsl(130 36% 66%); }
+.rv-code-deletion { color: hsl(0 55% 74%); }
+
 /* Monospace is for hotkeys, addresses and numeric readouts only. */
 .rv-mono {
   font-family: "Geist Mono Variable", "Cascadia Mono", "Consolas", "Twemoji", ui-monospace, monospace, "Segoe UI Emoji", "Noto Color Emoji";

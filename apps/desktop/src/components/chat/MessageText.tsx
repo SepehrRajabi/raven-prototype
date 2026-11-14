@@ -3,6 +3,7 @@ import { invoke, isTauri } from "@tauri-apps/api/core";
 import { toast } from "@/components/ui/toast";
 import { api } from "@/lib/api";
 import { emojiOnlyCount, parseMessage, type Inline } from "@/lib/chat/format";
+import { useHighlightedCode } from "@/lib/chat/highlight";
 import { removedNestText, type MentionResolver, type MentionTarget } from "@/lib/chat/mentions";
 import { cn } from "@/lib/utils";
 import { NestGlyph, PresenceDot } from "@/shells/ravenv1/atoms";
@@ -125,6 +126,16 @@ function renderInline(nodes: Inline[], keyPrefix = "", context?: MentionContext)
   });
 }
 
+/** A fenced block, coloured when its fence names a language the highlighter knows. */
+function CodeBlock({ text, language }: { text: string; language?: string }) {
+  const runs = useHighlightedCode(language, text);
+  return (
+    <pre dir="ltr" className="rv-mono my-1 overflow-x-auto whitespace-pre rounded-control bg-card px-2.5 py-2 text-small">
+      {runs ? runs.map((run, index) => (run.className ? <span key={index} className={run.className}>{run.text}</span> : run.text)) : text}
+    </pre>
+  );
+}
+
 /**
  * The words of a message. Formatting is drawn from a parsed tree, so nothing a person
  * types is ever interpreted as markup.
@@ -136,9 +147,7 @@ export const MessageText = memo(function MessageText({ body, className, mentions
     <div className={cn("raven-chat-text", ["text-body", "text-emoji-1", "text-emoji-2", "text-emoji-3"][jumbo], className)}>
       {blocks.map((block, index) =>
         block.type === "code" ? (
-          <pre key={index} dir="ltr" className="rv-mono my-1 overflow-x-auto whitespace-pre rounded-control bg-card px-2.5 py-2 text-small">
-            {block.text}
-          </pre>
+          <CodeBlock key={index} text={block.text} language={block.language} />
         ) : (
           <p key={index} dir="auto">{renderInline(block.children, "", mentions)}</p>
         ),
