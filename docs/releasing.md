@@ -169,11 +169,42 @@ ask, after `release.ps1 github` has created it:
 gh workflow run macos-builds.yml --ref vX.Y.Z -f attach_to_release=true
 ```
 
-That adds both DMGs and `SHA256SUMS-macos`. They are signed ad hoc, not with an Apple
-Developer ID, and not notarized, so macOS refuses the first launch of a downloaded copy:
-open **System Settings › Privacy & Security** and choose **Open Anyway** under the message
-about Raven, once. There are no macOS updater artifacts either (`latest.json` has no
-macOS entry), so people update by installing the new DMG.
+That adds both DMGs and `SHA256SUMS-macos`. Neither is signed with an Apple Developer ID
+or notarized, so macOS refuses the first launch of a downloaded copy: open **System
+Settings › Privacy & Security** and choose **Open Anyway** under the message about Raven,
+once. There are no macOS updater artifacts either (`latest.json` has no macOS entry), so
+people update by installing the new DMG.
+
+### The release signing certificate
+
+Builds of a `v*` tag are signed with Raven's own self-signed certificate, "Raven Release
+Signing", when the repository has it; every other build is signed ad hoc. macOS keeps a
+permission (microphone, camera, screen recording) for the certificate an app is signed
+with, so a new version signed with the same one keeps the permissions people gave the last.
+An ad hoc build is identified by the hash of its own code, so each version is asked again.
+The certificate does not make Raven trusted: the first launch still needs **Open Anyway**.
+
+Make it once, on a Mac, and keep it:
+
+```sh
+apps/desktop/scripts/macos-release-signing-certificate.sh ~/raven-release-signing
+base64 -i ~/raven-release-signing/raven-release-signing.p12 | gh secret set MACOS_SIGNING_CERTIFICATE
+gh secret set MACOS_SIGNING_CERTIFICATE_PASSWORD < ~/raven-release-signing/password.txt
+```
+
+- Keep the folder offline and backed up. Do not make a second one: a new certificate is a
+  new identity, so everyone is asked for the permissions again.
+- The certificate lasts ten years (`certificate.txt` has its expiry and fingerprint).
+- The workflow imports it into a keychain of its own and gives Tauri only the identity's
+  name. Do not set `APPLE_CERTIFICATE` instead: Tauri then imports the certificate itself
+  and fails to find the identity, because it skips certificates macOS doesn't trust.
+- Only release tags get the secret, so branch and pull request runs never see it. The
+  workflow fails a tag build that is not signed by the certificate, but only when the
+  secret is set: without it a tag build is signed ad hoc and passes.
+- It is not in the login keychain. Local builds use "Raven Local Code Signing"
+  (`scripts/macos-signing-identity.sh`), so an app built on a developer's Mac never
+  inherits the permissions people gave a release.
+- Switching to an Apple Developer ID later is also a new identity, and asks everyone once.
 
 To build one locally, on a Mac, from `apps/desktop`:
 

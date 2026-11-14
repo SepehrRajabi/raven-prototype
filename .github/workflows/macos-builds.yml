@@ -9,7 +9,10 @@
 # checked: the binary is for the right processor and macOS version, its signature holds,
 # and it loads nothing from outside macOS and the app itself.
 #
-# The builds are signed ad hoc, not with a Developer ID, and are not notarized, so
+# Release tags (v*) are signed with Raven's own certificate, "Raven Release Signing", when
+# the repository has it (scripts/macos-release-signing-certificate.sh), so an update keeps
+# the microphone, camera and screen recording permissions people gave the last version.
+# Everything else is signed ad hoc. Neither is a Developer ID and nothing is notarized, so
 # Gatekeeper asks before the first launch (see docs/releasing.md). They are attached to a
 # GitHub release only when asked: run this workflow by hand on the release tag with
 # "attach to release" ticked.
@@ -47,8 +50,6 @@ concurrency:
 env:
   # The server a fresh install signs in to, as in release.ps1.
   VITE_RAVEN_API_URL: ${{ vars.RAVEN_API_URL || 'https://mimir.rvn.bluehour.cloud' }}
-  # Ad hoc: every part of the bundle signed consistently, with no identity behind it.
-  APPLE_SIGNING_IDENTITY: "-"
 
 jobs:
   build:
@@ -88,8 +89,38 @@ jobs:
           workspaces: apps/desktop/src-tauri -> target
           key: ${{ matrix.target }}
           save-if: ${{ github.event_name != 'pull_request' }}
+      # Only release tags get the certificate, so a branch or pull request run never sees
+      # it. It goes into a keychain of its own, and Tauri is given just the identity's
+      # name: handed the certificate itself (APPLE_CERTIFICATE), Tauri imports it and then
+      # looks the identity up in a way that skips certificates macOS doesn't trust, and
+      # fails. No notarization variables are set: Apple notarizes Developer ID builds only.
+      - name: Choose the signature
+        env:
+          CERTIFICATE: ${{ startsWith(github.ref, 'refs/tags/v') && secrets.MACOS_SIGNING_CERTIFICATE || '' }}
+          CERTIFICATE_PASSWORD: ${{ startsWith(github.ref, 'refs/tags/v') && secrets.MACOS_SIGNING_CERTIFICATE_PASSWORD || '' }}
+        run: |
+          set -euo pipefail
+          if [ -z "$CERTIFICATE" ]; then
+            # Ad hoc: every part of the bundle signed consistently, with no identity behind it.
+            echo "RAVEN_SIGNED_BY=-" >> "$GITHUB_ENV"
+            exit 0
+          fi
+          keychain="$RUNNER_TEMP/raven-signing.keychain-db"
+          keychain_password=$(openssl rand -hex 24)
+          security create-keychain -p "$keychain_password" "$keychain"
+          security set-keychain-settings -lut 21600 "$keychain"
+          security unlock-keychain -p "$keychain_password" "$keychain"
+          printf '%s' "$CERTIFICATE" | base64 --decode > "$RUNNER_TEMP/signing.p12"
+          security import "$RUNNER_TEMP/signing.p12" -k "$keychain" -P "$CERTIFICATE_PASSWORD" -T /usr/bin/codesign
+          rm -f "$RUNNER_TEMP/signing.p12"
+          # Lets codesign use the key without a prompt nobody is there to answer.
+          security set-key-partition-list -S apple-tool:,apple: -s -k "$keychain_password" "$keychain" > /dev/null
+          security list-keychains -d user -s "$keychain" $(security list-keychains -d user | tr -d '"')
+          echo "RAVEN_SIGNED_BY=Raven Release Signing" >> "$GITHUB_ENV"
       - name: Build
         working-directory: apps/desktop
+        env:
+          APPLE_SIGNING_IDENTITY: ${{ env.RAVEN_SIGNED_BY }}
         run: |
           bun install --frozen-lockfile
           bun run tauri build --target ${{ matrix.target }} --bundles app,dmg
@@ -116,6 +147,16 @@ jobs:
 
           codesign --verify --deep --strict --verbose=2 "$app"
 
+          # A release must carry the certificate, or every update asks for permissions again.
+          signature=$(codesign -dvv "$app" 2>&1)
+          if [ "$RAVEN_SIGNED_BY" = "-" ]; then
+            echo "$signature" | grep -q "^Signature=adhoc" || { echo "Expected an ad hoc signature." >&2; exit 1; }
+            echo "Signed ad hoc."
+          else
+            echo "$signature" | grep -qx "Authority=$RAVEN_SIGNED_BY" || { echo "Not signed by $RAVEN_SIGNED_BY." >&2; echo "$signature" >&2; exit 1; }
+            echo "Signed by $RAVEN_SIGNED_BY."
+          fi
+
           # Everything the binary loads must come with macOS or with the app.
           missing=0
           for library in $(otool -L "$binary" | tail -n +2 | awk '{ print $1 }'); do
@@ -141,6 +182,11 @@ jobs:
 
           dmg=$(ls dmg/*.dmg)
           hdiutil verify "$dmg"
+      - name: Remove the signing keychain
+        if: always()
+        run: |
+          keychain="$RUNNER_TEMP/raven-signing.keychain-db"
+          if [ -f "$keychain" ]; then security delete-keychain "$keychain"; fi
       - uses: actions/upload-artifact@v4
         with:
           name: macos-${{ matrix.name }}
