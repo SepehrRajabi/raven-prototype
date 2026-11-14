@@ -96,6 +96,15 @@
   box-sizing: border-box;
 }
 
+/* The app is a fixed shell: only inner panes scroll. Without this, a hard
+   touchpad flick chains from an inner scroller to the document and moves
+   the whole layout. */
+html,
+body {
+  overflow: hidden;
+  overscroll-behavior: none;
+}
+
 body {
   min-width: 980px;
   min-height: 700px;
@@ -328,6 +337,19 @@ textarea {
   text-align: start;
 }
 
+/* Colours for code in a fenced chat block that names its language. Like the colours that
+   report something, they don't follow the theme: code reads the same in every theme, and
+   every theme's card stays dark enough for them. Comments use the theme's quiet text. */
+.rv-code-keyword { color: hsl(282 38% 76%); }
+.rv-code-string { color: hsl(95 30% 68%); }
+.rv-code-number { color: hsl(28 62% 72%); }
+.rv-code-comment { color: hsl(var(--subtle-foreground)); font-style: italic; }
+.rv-code-title { color: hsl(212 58% 76%); }
+.rv-code-attr { color: hsl(42 58% 72%); }
+.rv-code-meta { color: hsl(var(--muted-foreground)); }
+.rv-code-addition { color: hsl(130 36% 66%); }
+.rv-code-deletion { color: hsl(0 55% 74%); }
+
 /* Monospace is for hotkeys, addresses and numeric readouts only. */
 .rv-mono {
   font-family: "Geist Mono Variable", "Cascadia Mono", "Consolas", "Twemoji", ui-monospace, monospace, "Segoe UI Emoji", "Noto Color Emoji";
@@ -470,6 +492,51 @@ textarea {
   from {
     opacity: 0;
     transform: translateY(4px) scale(0.98);
+  }
+}
+
+/* A setting found by Settings search: outlined for a moment where it sits. */
+.raven-settings-revealed {
+  animation: raven-settings-revealed 1.6s ease-out;
+}
+
+section.raven-settings-revealed {
+  border-radius: 12px;
+  outline: 2px solid transparent;
+  outline-offset: 8px;
+  animation-name: raven-settings-revealed-section;
+}
+
+@keyframes raven-settings-revealed {
+  0%,
+  55% {
+    box-shadow: inset 0 0 0 2px hsl(var(--ring) / 0.8), inset 0 0 0 999px hsl(var(--accent) / 0.45);
+  }
+  100% {
+    box-shadow: inset 0 0 0 2px hsl(var(--ring) / 0), inset 0 0 0 999px hsl(var(--accent) / 0);
+  }
+}
+
+@keyframes raven-settings-revealed-section {
+  0%,
+  55% {
+    outline-color: hsl(var(--ring) / 0.8);
+  }
+  100% {
+    outline-color: hsl(var(--ring) / 0);
+  }
+}
+
+/* Without motion the highlight holds still until it is taken away. */
+@media (prefers-reduced-motion: reduce) {
+  .raven-settings-revealed {
+    animation: none;
+    box-shadow: inset 0 0 0 2px hsl(var(--ring) / 0.8), inset 0 0 0 999px hsl(var(--accent) / 0.45);
+  }
+
+  section.raven-settings-revealed {
+    box-shadow: none;
+    outline-color: hsl(var(--ring) / 0.8);
   }
 }
 

@@ -1,4 +1,4 @@
-// Release notes are small markdown files (release-notes-X.Y.Z.md): headings, paragraphs,
+// Release notes are small markdown files (docs/release-notes/X.Y.Z.md): headings, paragraphs,
 // bullet lists, and inline `code`, **bold** and [links](https://…). Nothing else is parsed.
 
 export type NotesBlock =

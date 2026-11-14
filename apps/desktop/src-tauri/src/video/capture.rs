@@ -19,7 +19,7 @@ use std::time::{Duration, Instant};
 use serde::Serialize;
 use thiserror::Error;
 
-use crate::video::convert::{resize_i420_filtered, I420Frame};
+use crate::video::convert::{letterbox_i420, resize_i420_filtered, I420Frame};
 use crate::video::domain::{
     CameraDevice, DisplayTarget, VideoQualityProfile, VideoSourceId, VideoSourceKind,
     VideoSourceRuntimeState, VideoSourceRuntimeStatus, VideoSourceState, WindowTarget,
@@ -86,6 +86,9 @@ struct ProfiledVideoFrameSink {
     counters: Arc<VideoCaptureCounters>,
     /// A recent sent frame, kept for window shares so a pause can go on showing it.
     held: Option<Arc<HeldFrame>>,
+    /// Keep the picture's shape when it no longer matches the profile (a resized window,
+    /// a display that changed resolution) instead of stretching it. Shares only.
+    letterbox: bool,
 }
 
 impl ProfiledVideoFrameSink {
@@ -101,7 +104,13 @@ impl ProfiledVideoFrameSink {
             admitted: AtomicBool::new(false),
             counters,
             held: None,
+            letterbox: false,
         }
+    }
+
+    fn letterboxed(mut self) -> Self {
+        self.letterbox = true;
+        self
     }
 
     fn holding(mut self, held: Arc<HeldFrame>) -> Self {
@@ -138,7 +147,7 @@ impl VideoFrameSink for ProfiledVideoFrameSink {
         if !self.admitted.swap(false, Ordering::AcqRel) && !self.admit(Instant::now()) {
             return;
         }
-        let frame = scale_frame_to_profile(frame, &self.profile);
+        let frame = scale_frame_to_profile(frame, &self.profile, self.letterbox);
         if let Some(held) = &self.held {
             held.offer(&frame, Instant::now());
         }
@@ -394,13 +403,19 @@ mod profiled_sink_tests {
     }
 }
 
-fn scale_frame_to_profile(frame: I420Frame, profile: &VideoQualityProfile) -> I420Frame {
+fn scale_frame_to_profile(
+    frame: I420Frame,
+    profile: &VideoQualityProfile,
+    letterbox: bool,
+) -> I420Frame {
     let target_width = profile.width.max(2);
     let target_height = profile.height.max(2);
     if frame.width == target_width && frame.height == target_height {
         return frame;
     }
-
+    if letterbox {
+        return letterbox_i420(&frame, target_width, target_height);
+    }
     resize_i420_filtered(&frame, target_width, target_height)
 }
 
@@ -624,6 +639,11 @@ fn start_capture(
         });
     };
     let profiled = ProfiledVideoFrameSink::new(Arc::clone(&sink), source.profile.clone(), counters);
+    let profiled = if source.kind == VideoSourceKind::Camera {
+        profiled
+    } else {
+        profiled.letterboxed()
+    };
     match source.kind {
         VideoSourceKind::Camera => camera::start(source, signature, Arc::new(profiled)),
         VideoSourceKind::Display => screen::start(
@@ -710,7 +730,7 @@ mod camera {
     use std::sync::mpsc::sync_channel;
     use std::sync::Arc;
     use std::thread::{self, JoinHandle};
-    use std::time::Duration;
+    use std::time::{Duration, Instant};
 
     use nokhwa::pixel_format::{FormatDecoder, RgbFormat};
     use nokhwa::utils::{
@@ -921,6 +941,12 @@ mod camera {
             })
     }
 
+    /// How long an opened camera may go without a usable frame before it is reported as
+    /// failed.
+    const FIRST_FRAME_TIMEOUT: Duration = Duration::from_millis(4000);
+    /// How long `start` waits for the worker to open the camera and see its first frame.
+    const STARTUP_TIMEOUT: Duration = Duration::from_secs(8);
+
     pub(super) fn start(
         source: &VideoSourceState,
         signature: VideoCaptureSignature,
@@ -970,32 +996,69 @@ mod camera {
                 let _ = startup_sender.send(Err(format!("Camera stream could not start: {error}")));
                 return;
             }
-            let _ = startup_sender.send(Ok(()));
+            eprintln!(
+                "[video-capture] camera opened as {:?}",
+                camera.camera_format()
+            );
+            // Started means a picture arrived, not that the stream opened: a camera that
+            // opens and then sends nothing (or nothing that decodes) is reported as failed
+            // instead of publishing a track with no picture.
+            let opened = Instant::now();
+            let mut startup = Some(startup_sender);
+            let mut last_error = String::new();
             while !thread_stop.load(Ordering::Relaxed) {
-                let frame = match camera.frame() {
-                    Ok(frame) => frame,
-                    Err(_) => continue,
-                };
-                let decoded = match frame.decode_image::<RgbFormat>() {
-                    Ok(decoded) => decoded,
-                    Err(_) => continue,
-                };
-                let width = decoded.width();
-                let height = decoded.height();
-                if let Some(i420) = packed_to_i420(
-                    decoded.as_raw(),
-                    width,
-                    height,
-                    (width as usize) * 3,
-                    PackedFormat::Rgb,
-                ) {
-                    sink.push_frame(i420);
+                let i420 = camera
+                    .frame()
+                    .map_err(|error| format!("Camera stopped sending frames: {error}"))
+                    .and_then(|frame| {
+                        frame.decode_image::<RgbFormat>().map_err(|error| {
+                            format!(
+                                "Camera frames could not be decoded ({:?}): {error}",
+                                frame.source_frame_format()
+                            )
+                        })
+                    })
+                    .and_then(|decoded| {
+                        let (width, height) = (decoded.width(), decoded.height());
+                        packed_to_i420(
+                            decoded.as_raw(),
+                            width,
+                            height,
+                            (width as usize) * 3,
+                            PackedFormat::Rgb,
+                        )
+                        .ok_or_else(|| {
+                            format!("Camera frame has no usable size ({width}x{height})")
+                        })
+                    });
+                match i420 {
+                    Ok(i420) => {
+                        if let Some(sender) = startup.take() {
+                            let _ = sender.send(Ok(()));
+                        }
+                        sink.push_frame(i420);
+                    }
+                    Err(error) => {
+                        if error != last_error {
+                            eprintln!("[video-capture] {error}");
+                            last_error = error;
+                        }
+                        if startup.is_some() && opened.elapsed() > FIRST_FRAME_TIMEOUT {
+                            if let Some(sender) = startup.take() {
+                                let _ = sender.send(Err(last_error.clone()));
+                            }
+                            break;
+                        }
+                        // Failing reads return at once; do not spin a core on them.
+                        thread::sleep(Duration::from_millis(20));
+                    }
                 }
             }
             let _ = camera.stop_stream();
         });
 
-        match startup_receiver.recv_timeout(Duration::from_secs(5)) {
+        // Opening can take a few seconds on its own; the first frame then has its own limit.
+        match startup_receiver.recv_timeout(STARTUP_TIMEOUT) {
             Ok(Ok(())) => {}
             Ok(Err(message)) => {
                 stop.store(true, Ordering::Relaxed);
@@ -1005,7 +1068,10 @@ mod camera {
             Err(_) => {
                 stop.store(true, Ordering::Relaxed);
                 return Err(VideoCaptureError::StreamFailed {
-                    message: "camera backend did not finish starting within 5 seconds".to_string(),
+                    message: format!(
+                        "The camera did not send a picture within {} seconds",
+                        STARTUP_TIMEOUT.as_secs()
+                    ),
                 });
             }
         }
@@ -1028,6 +1094,112 @@ mod camera {
             assert!(prefers_directshow("OBS Virtual Camera"));
             assert!(prefers_directshow("OBS-Camera"));
             assert!(!prefers_directshow("Integrated Camera"));
+        }
+
+        #[derive(Debug, Default)]
+        struct StatsSink(std::sync::Mutex<(usize, String)>);
+
+        impl VideoFrameSink for StatsSink {
+            fn push_frame(&self, frame: crate::video::convert::I420Frame) {
+                let mean =
+                    |p: &[u8]| p.iter().map(|&v| v as u64).sum::<u64>() / p.len().max(1) as u64;
+                let mut s = self.0.lock().unwrap();
+                s.0 += 1;
+                s.1 = format!(
+                    "{}x{} y={} u={} v={} (lens {} {} {})",
+                    frame.width,
+                    frame.height,
+                    mean(&frame.y),
+                    mean(&frame.u),
+                    mean(&frame.v),
+                    frame.y.len(),
+                    frame.u.len(),
+                    frame.v.len()
+                );
+            }
+        }
+
+        /// Opens every camera on this machine for three seconds and prints what it delivered.
+        /// Run by hand: `cargo test --lib probe_cameras -- --ignored --nocapture`.
+        #[test]
+        #[ignore]
+        fn probe_cameras() {
+            let devices = list().unwrap();
+            for device in devices {
+                println!("== {} [{}]", device.name, device.id);
+                let sink = Arc::new(StatsSink::default());
+                let stop = Arc::new(AtomicBool::new(false));
+                let thread_sink = Arc::clone(&sink);
+                let thread_stop = Arc::clone(&stop);
+                let id = device.id.clone();
+                let handle = thread::spawn(move || {
+                    let _com = ComGuard::new();
+                    #[cfg(target_os = "windows")]
+                    if let Some(path) = id.strip_prefix("ds:") {
+                        crate::video::directshow::run_capture(
+                            path,
+                            &thread_stop,
+                            thread_sink.as_ref(),
+                            |r| println!("   start: {r:?}"),
+                        );
+                        return;
+                    }
+                    let index = camera_index(id.strip_prefix("mf:").unwrap_or(&id));
+                    let requested = CameraFormat::new_from(1280, 720, FrameFormat::MJPEG, 30);
+                    let mut camera = match open_profile_camera(index, requested) {
+                        Ok(c) => c,
+                        Err(e) => return println!("   open failed: {e}"),
+                    };
+                    println!("   format: {:?}", camera.camera_format());
+                    if let Err(e) = camera.open_stream() {
+                        return println!("   stream failed: {e}");
+                    }
+                    let (mut ok, mut frame_err, mut decode_err) = (0, 0, 0);
+                    while !thread_stop.load(Ordering::Relaxed) {
+                        let frame = match camera.frame() {
+                            Ok(f) => f,
+                            Err(e) => {
+                                if frame_err == 0 {
+                                    println!("   frame error: {e}");
+                                }
+                                frame_err += 1;
+                                continue;
+                            }
+                        };
+                        let raw_len = frame.buffer().len();
+                        match frame.decode_image::<RgbFormat>() {
+                            Ok(d) => {
+                                ok += 1;
+                                if let Some(i420) = packed_to_i420(
+                                    d.as_raw(),
+                                    d.width(),
+                                    d.height(),
+                                    d.width() as usize * 3,
+                                    PackedFormat::Rgb,
+                                ) {
+                                    thread_sink.push_frame(i420);
+                                }
+                            }
+                            Err(e) => {
+                                if decode_err == 0 {
+                                    println!(
+                                        "   decode error ({raw_len} bytes, {:?}): {e}",
+                                        frame.source_frame_format()
+                                    );
+                                }
+                                decode_err += 1;
+                            }
+                        }
+                    }
+                    println!("   frames ok={ok} frame_err={frame_err} decode_err={decode_err}");
+                    let _ = camera.stop_stream();
+                });
+                thread::sleep(Duration::from_secs(3));
+                stop.store(true, Ordering::Relaxed);
+                let _ = handle.join();
+                let s = sink.0.lock().unwrap();
+                println!("   pushed {} frames, last {}", s.0, s.1);
+            }
         }
     }
 }
@@ -1116,11 +1288,12 @@ mod screen {
             let width = frame.width();
             let height = frame.height();
             let mut buffer = frame.buffer()?;
-            // BGRA8, tightly packed (padding removed).
-            let raw = buffer.as_nopadding_buffer()?;
-            if let Some(i420) =
-                packed_to_i420(raw, width, height, (width as usize) * 4, PackedFormat::Bgra)
-            {
+            // BGRA8 as the GPU mapped it: rows are `row_pitch` bytes apart, often padded.
+            // Converting straight from the mapping saves a full-frame copy that removing
+            // the padding first would cost.
+            let row_pitch = buffer.row_pitch() as usize;
+            let raw = buffer.as_raw_buffer();
+            if let Some(i420) = packed_to_i420(raw, width, height, row_pitch, PackedFormat::Bgra) {
                 self.sink.push_frame(i420);
             }
             Ok(())
@@ -1835,7 +2008,7 @@ mod screen {
     use ashpd::desktop::screencast::{CursorMode, Screencast, SourceType, Stream};
     use ashpd::desktop::PersistMode;
 
-    use crate::video::convert::I420Frame;
+    use crate::video::convert::GstI420Layout;
     use crate::video::domain::{
         DisplayTarget, VideoQualityProfile, VideoSourceKind, VideoSourceRuntimeState,
         VideoSourceState, WindowTarget,
@@ -2113,7 +2286,9 @@ mod screen {
         sink: Arc<dyn VideoFrameSink>,
         stop: &AtomicBool,
     ) {
-        let frame_size = i420_frame_size(profile.width, profile.height);
+        // GStreamer pads rows; read whole wire frames and drop the padding.
+        let layout = GstI420Layout::new(profile.width, profile.height);
+        let frame_size = layout.size;
         if frame_size == 0 {
             return;
         }
@@ -2132,34 +2307,11 @@ mod screen {
             pending.extend_from_slice(&chunk[..read]);
             while pending.len() >= frame_size {
                 let raw: Vec<u8> = pending.drain(..frame_size).collect();
-                if let Some(frame) = i420_from_bytes(profile.width, profile.height, &raw) {
+                if let Some(frame) = layout.to_i420(profile.width, profile.height, &raw) {
                     sink.push_frame(frame);
                 }
             }
         }
-    }
-
-    fn i420_frame_size(width: u32, height: u32) -> usize {
-        let y = width as usize * height as usize;
-        let chroma = ((width + 1) / 2) as usize * ((height + 1) / 2) as usize;
-        y + chroma * 2
-    }
-
-    fn i420_from_bytes(width: u32, height: u32, raw: &[u8]) -> Option<I420Frame> {
-        let y_len = width as usize * height as usize;
-        let chroma_len = ((width + 1) / 2) as usize * ((height + 1) / 2) as usize;
-        if raw.len() < y_len + chroma_len * 2 {
-            return None;
-        }
-        let u_start = y_len;
-        let v_start = y_len + chroma_len;
-        Some(I420Frame {
-            width,
-            height,
-            y: raw[..y_len].to_vec(),
-            u: raw[u_start..v_start].to_vec(),
-            v: raw[v_start..v_start + chroma_len].to_vec(),
-        })
     }
 
     fn stop_child(child: &Arc<Mutex<Option<Child>>>) {

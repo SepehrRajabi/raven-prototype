@@ -375,7 +375,9 @@ function GlobalSearch({ data, onNavigate }: { data: RavenShellData; onNavigate: 
   }, [open, query, ready, searchTrees, searchUsers]);
 
   useEffect(() => {
-    const focus = () => {
+    const focus = (event?: Event) => {
+      const text = event instanceof CustomEvent ? (event.detail as { text?: unknown } | null)?.text : undefined;
+      if (typeof text === "string") setQuery(text);
       setOpen(true);
       window.requestAnimationFrame(() => {
         inputRef.current?.focus();

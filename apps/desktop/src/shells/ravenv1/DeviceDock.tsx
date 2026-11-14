@@ -23,6 +23,7 @@ import {
   EMPTY_VOICE_OVERLAY_SNAPSHOT,
   remoteMicTracks,
   subscribeVoiceOverlayActions,
+  subscribeVoiceOverlaySettings,
   voiceOverlayCommands,
   type VoiceOverlaySnapshot,
 } from "@/lib/voiceOverlay";
@@ -497,7 +498,28 @@ export function DeviceDock({
     treeId: media.activeNestId ? activeDetails?.nest.treeId ?? null : null,
     view,
   });
+  // The overlay can only be shown while it is turned on, so nothing is built or sent for it
+  // while it is off. Unknown until the engine answers: send as before.
+  const [overlayOn, setOverlayOn] = useState(true);
   useEffect(() => {
+    let active = true;
+    const apply = (settings: { supported: boolean; enabled: boolean }) => {
+      if (active) setOverlayOn(settings.supported && settings.enabled);
+    };
+    void voiceOverlayCommands.getSettings().then(apply).catch(() => undefined);
+    const stop = subscribeVoiceOverlaySettings(apply);
+    return () => {
+      active = false;
+      void stop.then((unlisten) => unlisten()).catch(() => undefined);
+    };
+  }, []);
+  useEffect(() => {
+    if (!overlayOn) {
+      // Turning it on again sends the current snapshot at once.
+      lastOverlaySnapshotRef.current = "";
+      pendingOverlaySnapshotRef.current = null;
+      return;
+    }
     if (!data.user || !activeDetails) {
       // Knocks reach the overlay with or without a call.
       const empty = { ...EMPTY_VOICE_OVERLAY_SNAPSHOT, headsUp: data.user ? headsUp : [] };
@@ -554,6 +576,7 @@ export function DeviceDock({
     media.screenSharingUserIds,
     media.speakingActivity,
     media.videoState,
+    overlayOn,
   ]);
 
   const micLevel = connected && media.localMicEnabled && data.user ? media.speakingActivity[data.user.id]?.intensity ?? 0 : null;

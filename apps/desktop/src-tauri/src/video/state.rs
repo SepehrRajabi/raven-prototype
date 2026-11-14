@@ -36,7 +36,8 @@ use crate::video::capture::{
 use crate::video::domain::{
     CameraDevice, DisplayTarget, PublishedVideoTrack, PublishedVideoTrackId, SelfPreviewMode,
     VideoMixerState, VideoPresentationProfile, VideoPresentationSettings, VideoQualityProfile,
-    VideoSourceId, VideoSourceKind, VideoSourceState, VideoTrackSource, WindowTarget,
+    VideoSourceId, VideoSourceKind, VideoSourceRuntimeStatus, VideoSourceState, VideoTrackSource,
+    WindowTarget,
 };
 use crate::video::engine::{
     measure_video_network_totals, measure_video_quality_report, measure_video_stream_stats,
@@ -413,6 +414,7 @@ pub async fn video_connect_room(
     url: String,
     token: String,
     viewer_token: String,
+    rejoin: Option<bool>,
 ) -> Result<VideoMixerState, VideoStateError> {
     let runtime = video_runtime(&state)?;
     let mut ops = runtime.ops.lock().await;
@@ -428,12 +430,14 @@ pub async fn video_connect_room(
             &token,
             &viewer_token,
             &preferences,
+            rejoin.unwrap_or(false),
         )
         .await
         .map_err(|message| VideoStateError::EngineFailed { message })?;
     {
         let mut guard = state.write().map_err(|_| VideoStateError::StatePoisoned)?;
         guard.mixer.session_lost = false;
+        guard.mixer.session_lost_fatal = false;
     }
     finish_video_mutation(&app, &state, &mut ops).await
 }
@@ -478,6 +482,7 @@ pub async fn disconnect_video_room(
         guard.mixer.remote_tracks.clear();
         guard.mixer.viewer_connected = false;
         guard.mixer.session_lost = false;
+        guard.mixer.session_lost_fatal = false;
         guard.remote_preferences.clear();
     }
     finish_video_mutation(app, state, &mut ops).await
@@ -487,22 +492,84 @@ pub async fn disconnect_video_room(
 pub async fn video_start_camera(
     app: AppHandle,
     state: State<'_, SharedVideoEngineState>,
+    audio_state: State<'_, SharedAudioEngineState>,
     camera_id: String,
     display_name: String,
     profile: VideoQualityProfile,
 ) -> Result<VideoMixerState, VideoStateError> {
-    mutate_video_state(&app, &state, |engine| {
-        engine.add_publishing_source(
-            VideoSourceKind::Camera,
+    start_publishing_source(
+        &app,
+        state.inner(),
+        audio_state.inner(),
+        NewSource {
+            kind: VideoSourceKind::Camera,
             display_name,
-            camera_id,
-            None,
-            None,
-            profile.normalized(),
-        );
+            target_id: camera_id,
+            process_id: None,
+            linked_audio: None,
+            profile: profile.normalized(),
+        },
+    )
+    .await
+}
+
+/// A source a start command adds to the model.
+struct NewSource {
+    kind: VideoSourceKind,
+    display_name: String,
+    target_id: String,
+    process_id: Option<u32>,
+    linked_audio: Option<AudioSourceId>,
+    profile: VideoQualityProfile,
+}
+
+/// Add a publishing source and reconcile. When its capture cannot start (a camera that will
+/// not open or sends no picture, a share target that is gone), the source is removed again,
+/// with its linked audio, so no track stays published without a picture: libwebrtc fills
+/// such a track with uninitialised frames, which viewers see as a green screen. A failed
+/// publish keeps the source, because the next reconcile (or a rejoin) publishes it.
+async fn start_publishing_source(
+    app: &AppHandle,
+    state: &SharedVideoEngineState,
+    audio_state: &SharedAudioEngineState,
+    source: NewSource,
+) -> Result<VideoMixerState, VideoStateError> {
+    let linked_audio = source.linked_audio;
+    let mut added = None;
+    let result = mutate_video_state(app, state, |engine| {
+        added = Some(engine.add_publishing_source(
+            source.kind,
+            source.display_name,
+            source.target_id,
+            source.process_id,
+            source.linked_audio,
+            source.profile,
+        ));
         Ok(())
     })
-    .await
+    .await;
+    let Err(error) = result else {
+        return result;
+    };
+    let capture_failed = added.is_some_and(|id| {
+        state.read().is_ok_and(|guard| {
+            guard.mixer.local_sources.iter().any(|source| {
+                source.id == id && source.runtime.status == VideoSourceRuntimeStatus::Error
+            })
+        })
+    });
+    match added {
+        Some(id) if capture_failed => {
+            let _ = stop_video_source(app, state, audio_state, id).await;
+        }
+        Some(_) => {}
+        None => {
+            if let Some(audio_id) = linked_audio {
+                let _ = remove_shared_audio_source(app, audio_state, audio_id).await;
+            }
+        }
+    }
+    Err(error)
 }
 
 #[tauri::command]
@@ -534,24 +601,20 @@ pub async fn video_start_display_share(
         None
     };
 
-    let result = mutate_video_state(&app, &state, |engine| {
-        engine.add_publishing_source(
-            VideoSourceKind::Display,
+    start_publishing_source(
+        &app,
+        state.inner(),
+        audio_state.inner(),
+        NewSource {
+            kind: VideoSourceKind::Display,
             display_name,
-            display_id,
-            None,
+            target_id: display_id,
+            process_id: None,
             linked_audio,
-            profile.resolved_for_source(source_width, source_height),
-        );
-        Ok(())
-    })
-    .await;
-    if result.is_err() {
-        if let Some(audio_id) = linked_audio {
-            let _ = remove_shared_audio_source(&app, audio_state.inner(), audio_id).await;
-        }
-    }
-    result
+            profile: profile.resolved_for_source(source_width, source_height),
+        },
+    )
+    .await
 }
 
 #[tauri::command]
@@ -591,24 +654,20 @@ pub async fn video_start_window_share(
     // window answers with the size it is restored to (capture restores it when it starts).
     let (source_width, source_height) =
         window_share_size(&window_id).unwrap_or((source_width, source_height));
-    let result = mutate_video_state(&app, &state, |engine| {
-        engine.add_publishing_source(
-            VideoSourceKind::Window,
+    start_publishing_source(
+        &app,
+        state.inner(),
+        audio_state.inner(),
+        NewSource {
+            kind: VideoSourceKind::Window,
             display_name,
-            window_id,
-            Some(process_id),
+            target_id: window_id,
+            process_id: Some(process_id),
             linked_audio,
-            profile.resolved_for_source(source_width, source_height),
-        );
-        Ok(())
-    })
-    .await;
-    if result.is_err() {
-        if let Some(audio_id) = linked_audio {
-            let _ = remove_shared_audio_source(&app, audio_state.inner(), audio_id).await;
-        }
-    }
-    result
+            profile: profile.resolved_for_source(source_width, source_height),
+        },
+    )
+    .await
 }
 
 #[tauri::command]

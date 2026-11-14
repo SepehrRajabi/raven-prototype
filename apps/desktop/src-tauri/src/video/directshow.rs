@@ -3,8 +3,9 @@
 //! Captures DirectShow video devices — notably software virtual cameras like **OBS Virtual
 //! Camera** — which Media Foundation (and therefore nokhwa) cannot enumerate or open. Device
 //! discovery uses the system device enumerator; capture builds a minimal filter graph
-//! `source -> SampleGrabber -> NullRenderer`, runs it, and polls the grabber for RGB frames
-//! which are converted to I420.
+//! `source -> SampleGrabber -> NullRenderer`, runs it, and polls the grabber for frames
+//! (native NV12, I420 or YUY2 when the device offers them, RGB24 otherwise), which are
+//! converted to I420.
 //!
 //! `ISampleGrabber` / `CLSID_SampleGrabber` / `CLSID_NullRenderer` are legacy qedit symbols
 //! that ship in `qedit.dll` but are absent from the `windows` crate metadata, so the
@@ -16,7 +17,7 @@ use std::ffi::c_void;
 use std::mem::ManuallyDrop;
 use std::ptr;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use windows::core::{
     interface, IUnknown, IUnknown_Vtbl, Interface, BSTR, GUID, HRESULT, PCWSTR, VARIANT,
@@ -28,7 +29,8 @@ use windows::Win32::Media::DirectShow::{
 use windows::Win32::Media::MediaFoundation::{
     CLSID_CaptureGraphBuilder2, CLSID_FilterGraph, CLSID_SystemDeviceEnum,
     CLSID_VideoInputDeviceCategory, FORMAT_VideoInfo, MEDIATYPE_Video, AM_MEDIA_TYPE,
-    MEDIASUBTYPE_RGB24, PIN_CATEGORY_CAPTURE, VIDEOINFOHEADER,
+    MEDIASUBTYPE_I420, MEDIASUBTYPE_IYUV, MEDIASUBTYPE_NV12, MEDIASUBTYPE_RGB24, MEDIASUBTYPE_YUY2,
+    PIN_CATEGORY_CAPTURE, VIDEOINFOHEADER,
 };
 use windows::Win32::System::Com::StructuredStorage::IPropertyBag;
 use windows::Win32::System::Com::{
@@ -36,7 +38,7 @@ use windows::Win32::System::Com::{
 };
 
 use crate::video::capture::VideoFrameSink;
-use crate::video::convert::{packed_to_i420, PackedFormat};
+use crate::video::convert::{packed_to_i420, yuv_to_i420, I420Frame, PackedFormat, YuvLayout};
 
 // qedit GUIDs not present in the windows crate metadata.
 const CLSID_SAMPLE_GRABBER: GUID = GUID::from_u128(0xc1f400a0_3f08_11d3_9f0b_006008039e37);
@@ -116,61 +118,133 @@ unsafe fn read_prop(bag: &IPropertyBag, name: &str) -> Option<String> {
     (!value.is_empty()).then_some(value)
 }
 
+/// What the grabber delivers, in the order it is asked for. Native YUV first: virtual cameras
+/// such as OBS offer only NV12, I420 and YUY2, and an RGB24 grabber then needs a converter
+/// filter that connects but never delivers a sample. RGB24 stays as the last resort.
+const FORMATS: [(GUID, Delivered); 5] = [
+    (MEDIASUBTYPE_NV12, Delivered::Yuv(YuvLayout::Nv12)),
+    (MEDIASUBTYPE_I420, Delivered::Yuv(YuvLayout::I420)),
+    (MEDIASUBTYPE_IYUV, Delivered::Yuv(YuvLayout::I420)),
+    (MEDIASUBTYPE_YUY2, Delivered::Yuv(YuvLayout::Yuy2)),
+    (MEDIASUBTYPE_RGB24, Delivered::Rgb24),
+];
+
+/// How long a started graph may go without a first frame before the camera is reported as
+/// not sending a picture.
+const FIRST_FRAME_TIMEOUT: Duration = Duration::from_millis(4000);
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Delivered {
+    Yuv(YuvLayout),
+    Rgb24,
+}
+
+struct Graph {
+    control: IMediaControl,
+    grabber: ISampleGrabber,
+    delivered: Delivered,
+    width: u32,
+    height: u32,
+    bottom_up: bool,
+}
+
 /// Open the DirectShow device identified by `device_path` and stream frames into `sink` until
 /// `stop` is set. COM must already be initialized on this thread (the caller's `ComGuard`).
+/// `on_started` is answered once the first frame has arrived, or with the reason none did.
 pub fn run_capture(
     device_path: &str,
     stop: &AtomicBool,
     sink: &dyn VideoFrameSink,
     on_started: impl FnOnce(Result<(), String>),
 ) {
+    let mut on_started = Some(on_started);
+    let mut report = |result: Result<(), String>| {
+        if let Some(callback) = on_started.take() {
+            callback(result);
+        }
+    };
     unsafe {
-        let (control, grabber, width, height, bottom_up) = match build_graph(device_path) {
-            Ok(parts) => parts,
+        let graph = match build_graph(device_path) {
+            Ok(graph) => graph,
             Err(error) => {
-                eprintln!("[video-capture] directshow open failed: {error:?}");
-                on_started(Err(format!(
-                    "DirectShow could not open the camera: {error}"
-                )));
+                eprintln!("[video-capture] directshow open failed: {error}");
+                report(Err(error));
                 return;
             }
         };
-        if width == 0 || height == 0 {
-            let _ = control.Stop();
-            on_started(Err(
-                "DirectShow opened the camera without a usable video format".to_string(),
-            ));
-            return;
-        }
-
-        on_started(Ok(()));
-
-        let row_stride = ((width as usize * 3) + 3) & !3;
-        let mut buf = vec![0u8; row_stride * height as usize];
+        let started = Instant::now();
+        let mut waiting = true;
+        let mut buf = Vec::new();
         while !stop.load(Ordering::Relaxed) {
             let mut size = 0i32;
-            if grabber.GetCurrentBuffer(&mut size, ptr::null_mut()).is_ok() && size > 0 {
-                let needed = size as usize;
-                if buf.len() < needed {
-                    buf.resize(needed, 0);
-                }
-                if grabber
+            let ready = graph
+                .grabber
+                .GetCurrentBuffer(&mut size, ptr::null_mut())
+                .is_ok()
+                && size > 0;
+            if ready {
+                buf.resize(size as usize, 0);
+                if graph
+                    .grabber
                     .GetCurrentBuffer(&mut size, buf.as_mut_ptr() as *mut i32)
                     .is_ok()
                 {
-                    push_frame(&buf, width, height, row_stride, bottom_up, sink);
+                    buf.truncate(size.max(0) as usize);
+                    match frame_from_buffer(&buf, &graph) {
+                        Some(frame) => {
+                            waiting = false;
+                            report(Ok(()));
+                            sink.push_frame(frame);
+                        }
+                        None => {
+                            let message = format!(
+                                "The camera sent frames Raven could not read ({:?}, {}x{}, {} bytes)",
+                                graph.delivered,
+                                graph.width,
+                                graph.height,
+                                buf.len()
+                            );
+                            eprintln!("[video-capture] {message}");
+                            report(Err(message));
+                            break;
+                        }
+                    }
                 }
+            } else if waiting && started.elapsed() > FIRST_FRAME_TIMEOUT {
+                report(Err(
+                    "The camera opened but sent no picture. If it is a virtual \
+                     camera, start it in the app that provides it."
+                        .to_string(),
+                ));
+                break;
             }
-            // SampleGrabber buffers the latest frame; poll at ~30fps.
+            // SampleGrabber keeps the latest frame; poll at about 30 fps.
             std::thread::sleep(Duration::from_millis(33));
         }
-        let _ = control.Stop();
+        let _ = graph.control.Stop();
     }
 }
 
-unsafe fn build_graph(
+/// Build and run a graph for the first grabber format the device can deliver.
+unsafe fn build_graph(device_path: &str) -> Result<Graph, String> {
+    let mut last_error = String::from("no usable video format");
+    for (subtype, delivered) in FORMATS {
+        match build_graph_for(device_path, subtype, delivered) {
+            Ok(Some(graph)) => return Ok(graph),
+            Ok(None) => {}
+            Err(error) => last_error = error.message().to_string(),
+        }
+    }
+    Err(format!(
+        "DirectShow could not open the camera: {last_error}"
+    ))
+}
+
+unsafe fn build_graph_for(
     device_path: &str,
-) -> windows::core::Result<(IMediaControl, ISampleGrabber, u32, u32, bool)> {
+    subtype: GUID,
+    delivered: Delivered,
+) -> windows::core::Result<Option<Graph>> {
     let graph: IGraphBuilder = CoCreateInstance(&CLSID_FilterGraph, None, CLSCTX_INPROC_SERVER)?;
     let builder: ICaptureGraphBuilder2 =
         CoCreateInstance(&CLSID_CaptureGraphBuilder2, None, CLSCTX_INPROC_SERVER)?;
@@ -184,7 +258,7 @@ unsafe fn build_graph(
     let grabber: ISampleGrabber = grabber_filter.cast()?;
     let desired = AM_MEDIA_TYPE {
         majortype: MEDIATYPE_Video,
-        subtype: MEDIASUBTYPE_RGB24,
+        subtype,
         bFixedSizeSamples: TRUE,
         bTemporalCompression: FALSE,
         lSampleSize: 0,
@@ -201,16 +275,19 @@ unsafe fn build_graph(
         CoCreateInstance(&CLSID_NULL_RENDERER, None, CLSCTX_INPROC_SERVER)?;
     graph.AddFilter(&null_renderer, PCWSTR(wide("NullRenderer").as_ptr()))?;
 
-    builder.RenderStream(
-        Some(&PIN_CATEGORY_CAPTURE as *const GUID),
-        &MEDIATYPE_Video as *const GUID,
-        &source,
-        &grabber_filter,
-        &null_renderer,
-    )?;
-
-    let control: IMediaControl = graph.cast()?;
-    control.Run()?;
+    if builder
+        .RenderStream(
+            Some(&PIN_CATEGORY_CAPTURE as *const GUID),
+            &MEDIATYPE_Video as *const GUID,
+            &source,
+            &grabber_filter,
+            &null_renderer,
+        )
+        .is_err()
+    {
+        // The device cannot deliver this format; this graph is dropped and the next is tried.
+        return Ok(None);
+    }
 
     // Read the negotiated dimensions from the connected media type.
     let mut connected: AM_MEDIA_TYPE = std::mem::zeroed();
@@ -219,8 +296,21 @@ unsafe fn build_graph(
     if !connected.pbFormat.is_null() {
         CoTaskMemFree(Some(connected.pbFormat as *const c_void));
     }
+    if width == 0 || height == 0 {
+        return Ok(None);
+    }
 
-    Ok((control, grabber, width, height, bottom_up))
+    let control: IMediaControl = graph.cast()?;
+    control.Run()?;
+
+    Ok(Some(Graph {
+        control,
+        grabber,
+        delivered,
+        width,
+        height,
+        bottom_up,
+    }))
 }
 
 unsafe fn dimensions(mt: &AM_MEDIA_TYPE) -> (u32, u32, bool) {
@@ -266,32 +356,31 @@ unsafe fn find_source(device_path: &str) -> Option<IBaseFilter> {
     }
 }
 
-unsafe fn push_frame(
-    buf: &[u8],
-    width: u32,
-    height: u32,
-    row_stride: usize,
-    bottom_up: bool,
-    sink: &dyn VideoFrameSink,
-) {
+fn frame_from_buffer(buf: &[u8], graph: &Graph) -> Option<I420Frame> {
+    let (width, height) = (graph.width, graph.height);
+    match graph.delivered {
+        Delivered::Yuv(layout) => {
+            let stride = layout.stride_for(buf.len(), width, height)?;
+            yuv_to_i420(buf, width, height, stride, layout)
+        }
+        Delivered::Rgb24 => rgb24_to_i420(buf, width, height, graph.bottom_up),
+    }
+}
+
+/// A Windows RGB24 DIB: rows padded to four bytes, bottom-up when the height is positive.
+fn rgb24_to_i420(buf: &[u8], width: u32, height: u32, bottom_up: bool) -> Option<I420Frame> {
     let w = width as usize;
     let h = height as usize;
-    if w == 0 || h == 0 {
-        return;
-    }
     let packed = w * 3;
-    // Repack the (possibly padded, possibly bottom-up) DIB into a tightly-packed top-down
-    // BGR buffer for conversion.
+    let row_stride = (packed + 3) & !3;
+    if buf.len() < row_stride * (h - 1) + packed {
+        return None;
+    }
     let mut topdown = vec![0u8; packed * h];
     for y in 0..h {
         let src_y = if bottom_up { h - 1 - y } else { y };
         let src = src_y * row_stride;
-        let dst = y * packed;
-        if src + packed <= buf.len() {
-            topdown[dst..dst + packed].copy_from_slice(&buf[src..src + packed]);
-        }
+        topdown[y * packed..(y + 1) * packed].copy_from_slice(&buf[src..src + packed]);
     }
-    if let Some(i420) = packed_to_i420(&topdown, width, height, packed, PackedFormat::Bgr) {
-        sink.push_frame(i420);
-    }
+    packed_to_i420(&topdown, width, height, packed, PackedFormat::Bgr)
 }

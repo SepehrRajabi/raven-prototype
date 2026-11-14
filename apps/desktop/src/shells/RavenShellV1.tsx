@@ -366,6 +366,7 @@ export function RavenShellV1() {
           <UserSettingsNav
             section={resolveUserSettingsSection(view.section, Boolean(capabilitiesOf(data.user).createInvites))}
             canInvite={Boolean(capabilitiesOf(data.user).createInvites)}
+            labels={data.labels}
             onSelect={(section) => navigation.navigate({ kind: "settings", section })}
             onBack={navigation.leaveView}
           />
@@ -472,7 +473,7 @@ function UpdateRecoveryShell({
           className="grid min-h-0 flex-1 grid-cols-[var(--sidebar-w)_minmax(0,1fr)] pb-2 pr-2"
           style={{ "--sidebar-w": `${Math.min(sidebarWidth, sidebarMaxWidth)}px` } as CSSProperties}
         >
-          <UserSettingsNav section={section} canInvite={false} onSelect={setSection} onBack={() => onShowSettings(false)} />
+          <UserSettingsNav section={section} canInvite={false} labels={data.labels} onSelect={setSection} onBack={() => onShowSettings(false)} />
           <Island className="flex min-h-0 min-w-0 flex-col overflow-hidden">
             <UserSettingsView section={section} data={data} media={media} updater={updater} />
           </Island>
@@ -603,7 +604,6 @@ function viewKey(view: RavenView) {
     case "home":
     case "settings":
     case "mixer":
-    case "messages":
     case "licences":
       return view.kind;
     case "tree-preview":

@@ -30,7 +30,7 @@ export function UnreadCount({ count, className }: { count: number; className?: s
 export function MentionDot({ count, className }: { count?: number; className?: string }) {
   if (!count) return null;
   return (
-    <span role="img" aria-label="Mentions you" title="Mentions you" className={cn("flex h-4 w-4 shrink-0 items-center justify-center rounded-full bg-live text-live-foreground", className)}>
+    <span role="img" aria-label="Mentions you" title="Mentions you" className={cn("flex h-4 w-4 shrink-0 items-center justify-center rounded-full bg-primary text-primary-foreground", className)}>
       <UserRound className="h-2.5 w-2.5" strokeWidth={2.5} aria-hidden />
     </span>
   );

@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import type { ChatConversation, ConversationState } from "@/lib/chat/types";
-import { friendsAndGroups, GROUP_RECENT_MS, GROUPS_SHOWN, visibleTextNests, type FriendsAndGroupsRow } from "./friendsAndGroups";
+import { filterPeople, friendsAndGroups, GROUP_RECENT_MS, GROUPS_SHOWN, visibleTextNests, type FriendsAndGroupsRow } from "./friendsAndGroups";
 import { strangerNamed } from "./people";
 import type { ShellPerson } from "./state";
 
@@ -105,5 +105,46 @@ describe("visibleTextNests", () => {
     expect(visibleTextNests(nests).map((item) => item.summary.id)).toEqual(["links", "plans"]);
     expect(visibleTextNests(nests, "random").map((item) => item.summary.id)).toEqual(["links", "random", "plans"]);
     expect(visibleTextNests([nest("general")])).toEqual([]);
+  });
+});
+
+describe("filterPeople", () => {
+  const ctx = (id: string, treeIds: string[], presence: ShellPerson["presence"] = "offline"): ShellPerson => ({ ...person(id, presence), treeIds, relationship: "context" });
+  const rows: FriendsAndGroupsRow[] = [
+    { kind: "person", person: person("dana", "open") },
+    { kind: "person", person: person("omar", "offline") },
+    { kind: "group", conversation: group("Dance class") },
+    { kind: "group", conversation: group("Book club") },
+  ];
+  const people = [person("dana", "open"), ctx("adam", ["t2", "t1"]), ctx("candace", ["t1"], "open"), ctx("bo", ["t1"])];
+  const archived = [group("Old dance crew", { archived: true }), dm("kai", { archived: true, name: "Kai" })];
+  const others = [group("Quiet dancers"), dm("lee", { name: "Lee" })];
+  const run = (query: string) => filterPeople({ query, rows, people, others, archived, treeName: (id) => `Tree ${id}` });
+
+  test("an empty query leaves everything alone", () => {
+    const result = run("  ");
+    expect(result.rows).toHaveLength(4);
+    expect(result.inTrees).toEqual([]);
+    expect(result.others).toEqual([]);
+    expect(result.archived).toEqual([]);
+  });
+
+  test("matches names anywhere, ignoring case, in all three sections", () => {
+    const result = run("DA");
+    expect(result.rows.map(label)).toEqual(["person:dana", "group:Dance class"]);
+    expect(result.inTrees.map((entry) => entry.person.id)).toEqual(["candace", "adam"]);
+    expect(result.others.map((entry) => entry.id)).toEqual(["Quiet dancers"]);
+    expect(result.archived.map((entry) => entry.id)).toEqual(["Old dance crew"]);
+  });
+
+  test("people from your trees carry the first tree you share, and friends are not repeated there", () => {
+    const result = run("adam");
+    expect(result.inTrees).toEqual([{ person: people[1], caption: "Tree t2" }]);
+    expect(run("dana").inTrees).toEqual([]);
+  });
+
+  test("a leading @ is ignored and handles match", () => {
+    expect(run("@omar").rows.map(label)).toEqual(["person:omar"]);
+    expect(run("zzz")).toEqual({ rows: [], inTrees: [], others: [], archived: [] });
   });
 });

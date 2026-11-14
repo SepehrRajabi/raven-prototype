@@ -6,7 +6,13 @@ data/
 dist/
 node_modules/
 target/
-.claude
+# Local Claude Code state stays private; only the shared project skills are tracked.
+.claude/*
+!.claude/skills/
+.claude/skills/*
+!.claude/skills/raven-ui/
+!.claude/skills/raven-media-engine/
+.claude/skills/raven-media-engine/scroll.js
 .codex
 *.secret
 .raven-secrets/
@@ -23,3 +29,6 @@ apps/desktop/src-tauri/bin/
 *.log
 # Finder folder settings on macOS.
 .DS_Store
+
+# LLM-written plans never enter the repo (see CLAUDE.md).
+docs/plans/

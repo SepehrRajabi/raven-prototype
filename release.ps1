@@ -16,7 +16,7 @@ param(
   [ValidateSet("help", "build", "publish", "repoint", "status", "images", "github")]
   [string]$Command = "help",
   [string]$Version,
-  # Release notes shown in the app. Defaults to release-notes-<version>.md when it exists.
+  # Release notes shown in the app. Defaults to docs/release-notes/<version>.md when it exists.
   [string]$NotesFile,
   # The server a fresh install signs in to (people can change it on the sign-in screen).
   [string]$ApiUrl = "https://mimir.rvn.bluehour.cloud",
@@ -210,8 +210,8 @@ cp "`$base/out/Raven_${Version}_amd64.AppImage" "`$base/out/compatibility-linux.
 # The notes of every version before this one, so someone several versions behind sees them all.
 function Get-NotesHistory([string]$Current) {
   $currentCore = [version]($Current -replace '-.*$', '')
-  $entries = foreach ($file in Get-ChildItem -LiteralPath $Root -Filter "release-notes-*.md") {
-    $name = $file.BaseName -replace '^release-notes-', ''
+  $entries = foreach ($file in Get-ChildItem -LiteralPath (Join-Path $Root "docs/release-notes") -Filter "*.md") {
+    $name = $file.BaseName
     $core = [version]::new()
     if ([version]::TryParse(($name -replace '-.*$', ''), [ref]$core) -and $core -lt $currentCore) {
       [ordered]@{ version = $name; notes = (Get-Content -Raw -Encoding UTF8 -LiteralPath $file.FullName).Trim() }
@@ -256,7 +256,7 @@ function Invoke-Build {
   Build-Linux $stage $artifacts["linux-x86_64"] $commit
   Invoke-Sign $artifacts["linux-x86_64"]
 
-  $notesPath = if ($NotesFile) { $NotesFile } else { Join-Path $Root "release-notes-$Version.md" }
+  $notesPath = if ($NotesFile) { $NotesFile } else { Join-Path $Root "docs/release-notes/$Version.md" }
   $notes = if (Test-Path -LiteralPath $notesPath) { (Get-Content -Raw -Encoding UTF8 -LiteralPath $notesPath).Trim() } else { "" }
   $history = Get-NotesHistory $Version
   $platforms = [ordered]@{}

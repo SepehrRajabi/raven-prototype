@@ -14,7 +14,7 @@ pub const AUDIO_DEVICES_CHANGED_EVENT: &str = "audio-devices-changed";
 
 /// Enumerating ALSA devices probes each PCM, so Linux polls less often than the other
 /// platforms, where listing endpoints is cheap.
-const POLL_INTERVAL: Duration = if cfg!(target_os = "linux") {
+pub(crate) const POLL_INTERVAL: Duration = if cfg!(target_os = "linux") {
     Duration::from_secs(6)
 } else {
     Duration::from_secs(2)
