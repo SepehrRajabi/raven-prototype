@@ -11,8 +11,11 @@
 # checked for libraries or glibc symbols that are missing there.
 #
 # The AppImage and the Windows installer are still built and signed by release.ps1.
-# These packages are attached to a GitHub release only when asked: run this workflow by
-# hand on the release tag with "attach to release" ticked. See docs/releasing.md.
+# A pushed v* tag that matches the app's version publishes these packages on its GitHub
+# release, creating the release if release.ps1 hasn't yet
+# (infra/release/attach-to-github-release.sh). Running this workflow by hand on the tag
+# with "attach to release" ticked does the same, for a run that failed. See
+# docs/releasing.md.
 name: Linux packages
 
 on:
@@ -201,24 +204,26 @@ jobs:
           echo "All $(wc -l < ldd.txt) shared libraries resolve."
 
   attach:
-    name: Attach to the GitHub release
-    if: github.event_name == 'workflow_dispatch' && inputs.attach_to_release && github.ref_type == 'tag'
+    name: Publish on the GitHub release
+    if: github.ref_type == 'tag' && (github.event_name == 'push' || inputs.attach_to_release)
     needs: install
     runs-on: ubuntu-24.04
     permissions:
       contents: write
     steps:
+      - uses: actions/checkout@v5
+        with:
+          sparse-checkout: |
+            apps/desktop/src-tauri/tauri.conf.json
+            docs/release-notes
+            infra/release
+          sparse-checkout-cone-mode: false
       - uses: actions/download-artifact@v4
         with:
           pattern: linux-*
-          path: packages
+          path: ${{ runner.temp }}/packages
           merge-multiple: true
-      - name: Upload
+      - name: Publish
         env:
           GH_TOKEN: ${{ github.token }}
-        run: |
-          cd packages
-          sha256sum -- * > SHA256SUMS-linux-packages
-          # release.ps1 creates the release with its notes; this only adds files to it.
-          gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" > /dev/null
-          gh release upload "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --clobber ./*
+        run: infra/release/attach-to-github-release.sh SHA256SUMS-linux-packages "$RUNNER_TEMP/packages"

@@ -94,19 +94,46 @@ The installers can also be downloaded from
 .\release.ps1 github -Version X.Y.Z
 ```
 
-The release holds the Windows installer, the AppImage and `SHA256SUMS`, with the release
-notes and install steps as its text. The server is not attached: self-hosters use the
+The release holds the Windows installer, the AppImage and `SHA256SUMS` from this command,
+and the [Linux packages](#linux-distribution-packages) and [macOS builds](#macos-builds)
+from GitHub Actions, with the release notes and install steps for all of them as its text
+(`infra/release/github-release.md`). The server is not attached: self-hosters use the
 Docker images, and the text links to them. Raven does not update from GitHub; it only ever
 reads `latest.json` on the Raven host.
+
+### Two ways in, one release
+
+Pushing a `v*` tag runs both workflows, and each publishes its files on that tag's GitHub
+release when its builds and checks pass. `release.ps1 github` pushes the tag itself, so a
+normal release needs nothing more. Whichever gets there first creates the release, with the
+same text; the other adds its files to it:
+
+- The command usually creates it, since the workflows take several minutes. They then add
+  their files, about 20 minutes later on a cold cache.
+- A tag pushed by hand (`git tag -a vX.Y.Z -m "Raven X.Y.Z" && git push origin vX.Y.Z`)
+  gets a release with the Linux packages and macOS builds only. Running the command for
+  that version later adds the Windows installer, the AppImage and `SHA256SUMS`.
+
+Neither side replaces a file that is already on the release. A workflow skips its files
+when its checksum file (`SHA256SUMS-macos`, `SHA256SUMS-linux-packages`) is already
+there, and stops if only some of its files are, naming the ones to delete. The command
+adds only what is missing and compares the rest with its build.
+
+A tag that doesn't match the app's version (`tauri.conf.json`) builds but is never
+published. That catches a forgotten version bump, and makes a test tag safe: for example,
+push `v0.0.0-signing-test` to check the macOS release signing, then delete the tag.
+
+A tag on GitHub, from either path, also publishes nothing to the Raven host: `latest.json`,
+the updater files and the Docker images still come only from `release.ps1`.
 
 This makes code public, because the repository is. The command tags the commit the
 installers were built from as `vX.Y.Z` and pushes the tag. It also moves GitHub's `main`
 forward to that commit, and stops if GitHub's `main` has diverged. Commits after the
 release commit stay local. Rehearsal builds are refused. It needs `gh auth login` once.
 
-A release that already exists is left alone and compared with this build. It downloads
-the release back and stops if a file differs: bump the version instead. If an upload died
-half way, the command names the draft to delete before running it again.
+A release that already exists gets only the files it lacks. The command then downloads its
+own files back and stops if one differs: bump the version instead. If an upload died half
+way, the command names the draft to delete before running it again.
 
 ## Linux distribution packages
 
@@ -124,15 +151,16 @@ checked:
 | `raven-desktop-X.Y.Z-1-x86_64.pkg.tar.zst` | Arch Linux | Arch Linux |
 
 It runs on pushes and pull requests that touch the desktop's Rust side or the packaging,
-on every `v*` tag, and by hand. Each run keeps the packages as workflow artifacts. They go
-on the GitHub release only when you ask, after `release.ps1 github` has created it:
+on every `v*` tag, and by hand. Each run keeps the packages as workflow artifacts. On a
+release tag they also go on the GitHub release with `SHA256SUMS-linux-packages` (see
+[Two ways in, one release](#two-ways-in-one-release)). If that step failed, run it again on
+the tag:
 
 ```sh
 gh workflow run linux-packages.yml --ref vX.Y.Z -f attach_to_release=true
 ```
 
-That adds the packages and `SHA256SUMS-linux-packages`; the release's own files and
-notes are untouched. The packages are not signed, and the in-app updater only knows how
+The packages are not signed, and the in-app updater only knows how
 to replace the AppImage: Raven installed from one of these packages still says when a
 new version is out, but installing it from Raven fails, so people update by installing
 the new package.
@@ -162,14 +190,15 @@ Metal bridge needs its SDK; what the app runs on is set by the deployment target
 runner.
 
 It runs when the same things change as for the Linux packages, on every `v*` tag, and by
-hand. The DMGs are kept as workflow artifacts, and go on the GitHub release only when you
-ask, after `release.ps1 github` has created it:
+hand. The DMGs are kept as workflow artifacts. On a release tag they also go on the GitHub
+release with `SHA256SUMS-macos` (see [Two ways in, one release](#two-ways-in-one-release)).
+If that step failed, run it again on the tag:
 
 ```sh
 gh workflow run macos-builds.yml --ref vX.Y.Z -f attach_to_release=true
 ```
 
-That adds both DMGs and `SHA256SUMS-macos`. Neither is signed with an Apple Developer ID
+Neither is signed with an Apple Developer ID
 or notarized, so macOS refuses the first launch of a downloaded copy: open **System
 Settings › Privacy & Security** and choose **Open Anyway** under the message about Raven,
 once. There are no macOS updater artifacts either (`latest.json` has no macOS entry), so

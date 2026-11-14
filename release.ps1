@@ -489,7 +489,9 @@ function Assert-GitHubRelease {
   $download = Join-Path (Split-Path -Parent $Files[0]) "github-check"
   Remove-Item -Recurse -Force -LiteralPath $download -ErrorAction SilentlyContinue
   try {
-    Invoke-Native "gh" @("release", "download", $Tag, "--repo", $GitHubRepo, "--dir", $download)
+    # Only this build's files: the release also holds what GitHub Actions built.
+    $patterns = @($Files | ForEach-Object { "--pattern"; (Split-Path -Leaf $_) })
+    Invoke-Native "gh" (@("release", "download", $Tag, "--repo", $GitHubRepo, "--dir", $download) + $patterns)
     foreach ($file in $Files) {
       $name = Split-Path -Leaf $file
       $copy = Join-Path $download $name
@@ -545,28 +547,49 @@ function Invoke-GitHub {
   if ($exists -and "$draft".Trim() -eq "true") {
     throw "An unfinished draft of $tag is on GitHub. Remove it, then run this again: gh release delete $tag --repo $GitHubRepo"
   }
-  if ($exists) { Write-Host "  release $tag is already on GitHub" }
-  else {
-    $notes = (Get-Content -Raw -Encoding UTF8 -LiteralPath (Join-Path $stage "latest.json") | ConvertFrom-Json).notes
-    $body = @"
-$notes
-
-## Install
-
-- **Windows:** ``Raven_${Version}_x64-setup.exe``. Windows may say the publisher is unknown: choose "More info", then "Run anyway".
-- **Linux:** ``Raven_${Version}_amd64.AppImage``. Run ``chmod +x`` on it. On newer Ubuntu, install ``libfuse2t64`` first.
-
-Raven tells you when a newer version is out.
-
-## Your own server
-
-Server images are on Docker Hub: [soroushtaheri/raven-api](https://hub.docker.com/r/soroushtaheri/raven-api) and [soroushtaheri/raven-admin](https://hub.docker.com/r/soroushtaheri/raven-admin). See the [self-hosting guide](https://github.com/$GitHubRepo/blob/$tag/docs/self-hosting.md).
-"@
+  if (-not $exists) {
+    # The same text GitHub Actions uses when it creates the release from the tag first
+    # (infra/release/attach-to-github-release.sh).
+    $notes = "$((Get-Content -Raw -Encoding UTF8 -LiteralPath (Join-Path $stage "latest.json") | ConvertFrom-Json).notes)".Trim()
+    $template = Get-Content -Raw -Encoding UTF8 -LiteralPath (Join-Path $Root "infra\release\github-release.md")
+    # The notes go in last, so nothing written in them is taken for a placeholder.
+    $body = $template.Replace("{{version}}", $Version).Replace("{{tag}}", $tag).Replace("{{repo}}", $GitHubRepo).Replace("{{notes}}", $notes).TrimStart()
     $bodyFile = Join-Path $stage "github-notes.md"
     [IO.File]::WriteAllText($bodyFile, ($body -replace "`r", ""), (New-Object Text.UTF8Encoding($false)))
     Write-Host "== Creating the GitHub release $tag"
-    Invoke-Native "gh" (@("release", "create", $tag, "--repo", $GitHubRepo, "--verify-tag", "--title", "Raven $Version", "--notes-file", $bodyFile) + $files)
+    $createArguments = @("release", "create", $tag, "--repo", $GitHubRepo, "--verify-tag", "--title", "Raven $Version", "--notes-file", $bodyFile) + $files
+    $ErrorActionPreference = "Continue"
+    & gh @createArguments
+    $created = $LASTEXITCODE -eq 0
+    $ErrorActionPreference = "Stop"
     Remove-Item -LiteralPath $bodyFile -Force
+    if (-not $created) {
+      # GitHub Actions may have created it from the tag at the same moment; then add to theirs.
+      $ErrorActionPreference = "Continue"
+      $draft = (& gh release view $tag --repo $GitHubRepo --json isDraft --jq .isDraft 2>$null)
+      $exists = $LASTEXITCODE -eq 0
+      $ErrorActionPreference = "Stop"
+      if (-not $exists) { throw "Creating the GitHub release $tag failed." }
+      # gh leaves a draft behind when an upload fails half way.
+      if ("$draft".Trim() -eq "true") {
+        throw "An unfinished draft of $tag is on GitHub. Remove it, then run this again: gh release delete $tag --repo $GitHubRepo"
+      }
+    }
+  }
+  if ($exists) {
+    # Made by GitHub Actions from the tag, or by an earlier run: add this build's files it
+    # lacks. A file already there is compared below, never replaced.
+    Write-Host "  release $tag is already on GitHub"
+    $ErrorActionPreference = "Continue"
+    $onRelease = @(& gh release view $tag --repo $GitHubRepo --json assets --jq ".assets[].name")
+    $listed = $LASTEXITCODE -eq 0
+    $ErrorActionPreference = "Stop"
+    if (-not $listed) { throw "Could not list the files on the GitHub release $tag." }
+    $missing = @($files | Where-Object { $onRelease -notcontains (Split-Path -Leaf $_) })
+    if ($missing.Count -gt 0) {
+      Write-Host "== Adding $($missing.Count) files to the GitHub release $tag"
+      Invoke-Native "gh" (@("release", "upload", $tag, "--repo", $GitHubRepo) + $missing)
+    }
   }
   Assert-GitHubRelease $tag $files
   Write-Host "https://github.com/$GitHubRepo/releases/tag/$tag"
