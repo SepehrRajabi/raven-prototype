@@ -46,6 +46,8 @@ Then in `engine.rs`:
    windowed-sinc `StereoResampler` and cuts exact 10 ms frames
    (`PUBLISH_FRAME_SAMPLES` = 960 interleaved samples). Frames go into a bounded channel
    of `PUBLISH_BACKLOG_FRAMES = 12`; when it is full new frames are dropped, never queued.
+   The drain task hands each used frame buffer back through a small pool, so the capture
+   thread does not allocate one every 10 ms.
 8. **Drain task** — `drain_published_audio` forwards each frame to
    `NativeAudioSource::capture_frame`. If a source produces nothing for
    `PUBLISH_IDLE_AFTER = 60 ms` (silent system loopback, stalled device) it sends
@@ -176,7 +178,8 @@ so its overlapping windows smooth it). A change that arrives mid-fade waits. A s
 error is logged once and the stage drops to a simpler mode: Studio to Strong, Strong to
 sonora's NS (`FailedToStart`); the microphone keeps working and the stream never sees
 the error. The stage keeps running while muted, so the muted-speech meter sees the
-cleaned signal.
+cleaned signal. The device callback never logs: the reason (Studio too slow, a
+suppressor stopping) travels as a `CaptureEvent::Notice` and the event pump prints it.
 
 ### Studio
 
@@ -241,7 +244,9 @@ output volume and the bus limiter. Each canceller holds its own `RenderCursor`; 
 consecutive 10 ms frames, starts 20 ms behind the writer, and resyncs if it falls more
 than 120 ms behind. `feed_render` feeds up to `MAX_RENDER_FRAMES_PER_CAPTURE = 8`
 frames per capture frame to catch up. Do not replace this with "latest N samples": a
-discontinuous reference is why echo cancellation never converged before.
+discontinuous reference is why echo cancellation never converged before. The output
+callback only `try_lock`s the ring: while a canceller is reading it, the played block
+waits in a preallocated 100 ms backlog and is pushed, in order, ahead of the next block.
 
 ## Receive path, in order
 
@@ -321,7 +326,13 @@ playback error.
 ## Device watcher (`devices.rs`)
 
 `spawn_device_watcher` polls device *names* every 2 s (6 s on Linux, where enumeration
-probes ALSA) and emits `audio-devices-changed` so pickers refresh. It opens nothing.
+probes ALSA) and emits `audio-devices-changed` so pickers refresh. It opens nothing. It
+enumerates only while the main window is visible and not minimised, or capture is wanted
+(a call or the Mixer); idle in the tray it does nothing, and the first check after the
+window returns reports any change made meanwhile. Capture and playback follow devices
+with their own probes, so a call does not depend on it. The device and window listing
+commands (`audio_list_*_devices`, `audio_list_app_audio_sources`, `video_list_*`) run on
+a blocking worker, never the main thread.
 Device ids are cpal device names today.
 
 ## Resampling and dynamics building blocks

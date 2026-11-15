@@ -392,19 +392,66 @@ pub async fn video_set_remote_video_receiving(
     finish_video_mutation(&app, &state, &mut ops).await
 }
 
+// Listing devices, displays and windows (with thumbnails and icons) can take hundreds of
+// milliseconds. A synchronous command would run it on the main thread and freeze the UI,
+// so these run on a blocking worker instead.
+
 #[tauri::command]
-pub fn video_list_cameras() -> Result<Vec<CameraDevice>, VideoStateError> {
-    Ok(list_cameras()?)
+pub async fn video_list_cameras() -> Result<Vec<CameraDevice>, VideoStateError> {
+    list_off_main_thread(list_cameras).await
 }
 
 #[tauri::command]
-pub fn video_list_displays() -> Result<Vec<DisplayTarget>, VideoStateError> {
-    Ok(list_displays()?)
+pub async fn video_list_displays() -> Result<Vec<DisplayTarget>, VideoStateError> {
+    list_off_main_thread(list_displays).await
 }
 
 #[tauri::command]
-pub fn video_list_windows() -> Result<Vec<WindowTarget>, VideoStateError> {
-    Ok(list_windows()?)
+pub async fn video_list_windows() -> Result<Vec<WindowTarget>, VideoStateError> {
+    list_off_main_thread(list_windows).await
+}
+
+async fn list_off_main_thread<T: Send + 'static>(
+    list: fn() -> Result<T, VideoCaptureError>,
+) -> Result<T, VideoStateError> {
+    tauri::async_runtime::spawn_blocking(move || {
+        // The shell icon lookups behind window listing need COM on the calling thread.
+        #[cfg(target_os = "windows")]
+        let _com = ComApartment::enter();
+        list()
+    })
+    .await
+    .map_err(|error| VideoStateError::EngineFailed {
+        message: error.to_string(),
+    })?
+    .map_err(VideoStateError::from)
+}
+
+/// COM initialised for the current thread while this lives. A thread already in another
+/// apartment is left as it is and is not uninitialised on drop.
+#[cfg(target_os = "windows")]
+struct ComApartment {
+    initialized: bool,
+}
+
+#[cfg(target_os = "windows")]
+impl ComApartment {
+    fn enter() -> Self {
+        use windows::Win32::System::Com::{CoInitializeEx, COINIT_APARTMENTTHREADED};
+        // SAFETY: plain COM initialisation for this thread, balanced in `drop`.
+        let initialized = unsafe { CoInitializeEx(None, COINIT_APARTMENTTHREADED) }.is_ok();
+        Self { initialized }
+    }
+}
+
+#[cfg(target_os = "windows")]
+impl Drop for ComApartment {
+    fn drop(&mut self) {
+        if self.initialized {
+            // SAFETY: balances the successful `CoInitializeEx` in `enter` on this thread.
+            unsafe { windows::Win32::System::Com::CoUninitialize() };
+        }
+    }
 }
 
 #[tauri::command]

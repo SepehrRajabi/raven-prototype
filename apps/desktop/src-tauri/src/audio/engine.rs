@@ -187,6 +187,58 @@ const RECOVERY_DELAYS: [Duration; 3] = [
     Duration::from_secs(3),
 ];
 
+/// Longest a room connect may take, LiveKit's own join retries included. LiveKit bounds each
+/// step (5 s signal, 5 s join, 15 s ICE) but retries the whole join three times, so a
+/// black-holed network could otherwise hold the engine's `ops` lock, and with it mute,
+/// gain and leave, for well over a minute. The app's rejoin loop retries after this.
+pub(crate) const ROOM_CONNECT_TIMEOUT: Duration = Duration::from_secs(30);
+/// How long a disconnect waits for LiveKit to say goodbye to the server before it carries
+/// on and leaves the close to finish in the background.
+const ROOM_CLOSE_WAIT: Duration = Duration::from_secs(3);
+/// After this the background close is abandoned and the room dropped.
+const ROOM_CLOSE_TIMEOUT: Duration = Duration::from_secs(15);
+
+/// Connect to a LiveKit room on `handle`, giving up after [`ROOM_CONNECT_TIMEOUT`].
+pub(crate) async fn connect_room_bounded(
+    handle: &Handle,
+    url: String,
+    token: String,
+    options: RoomOptions,
+) -> Result<(Room, mpsc::UnboundedReceiver<RoomEvent>), String> {
+    let mut task = handle.spawn(async move { Room::connect(&url, &token, options).await });
+    match tokio::time::timeout(ROOM_CONNECT_TIMEOUT, &mut task).await {
+        Ok(joined) => joined
+            .map_err(|error| error.to_string())
+            .and_then(|result| result.map_err(|error| error.to_string())),
+        Err(_) => {
+            // Dropping the half-made connection is the only way to cancel it.
+            task.abort();
+            Err(format!(
+                "the media server did not answer within {} s",
+                ROOM_CONNECT_TIMEOUT.as_secs()
+            ))
+        }
+    }
+}
+
+/// Close a room, waiting at most [`ROOM_CLOSE_WAIT`]. A close that takes longer (the
+/// network went away) keeps going in the background, bounded by [`ROOM_CLOSE_TIMEOUT`],
+/// so the caller's lock is not held behind a dead connection.
+pub(crate) async fn close_room_bounded(handle: &Handle, room: Arc<Room>) {
+    let mut task = handle.spawn(async move {
+        let _ = tokio::time::timeout(ROOM_CLOSE_TIMEOUT, room.close()).await;
+    });
+    if tokio::time::timeout(ROOM_CLOSE_WAIT, &mut task)
+        .await
+        .is_err()
+    {
+        eprintln!(
+            "[media-engine] room close is taking longer than {} s; finishing it in the background",
+            ROOM_CLOSE_WAIT.as_secs()
+        );
+    }
+}
+
 /// Run a synchronous LiveKit operation with the audio engine's Tokio reactor installed.
 ///
 /// Some LiveKit methods, including `RemoteTrackPublication::set_subscribed`, spawn async
@@ -234,6 +286,28 @@ mod publish_framer_tests {
             .try_recv()
             .expect("a frame after the poisoned lock");
         assert_eq!(frame.len(), PUBLISH_FRAME_SAMPLES);
+    }
+
+    #[test]
+    fn returned_frame_buffers_are_reused_and_survive_a_poisoned_framer() {
+        let (sender, mut receiver) = mpsc::channel::<Vec<i16>>(PUBLISH_BACKLOG_FRAMES);
+        let (recycle, spare) = std::sync::mpsc::sync_channel(PUBLISH_BACKLOG_FRAMES + 2);
+        let sink = PublishSink::with_spare(sender, spare);
+
+        sink.push_samples(&vec![0.25; 480 * 2], 2, 48_000);
+        let first = receiver.try_recv().expect("first frame");
+        let address = first.as_ptr();
+        recycle.try_send(first).expect("returned");
+
+        let _ = std::panic::catch_unwind(|| {
+            let _framer = sink.framer.lock().unwrap();
+            panic!("poison the framer");
+        });
+        sink.push_samples(&vec![-0.25; 480 * 2], 2, 48_000);
+        let second = receiver.try_recv().expect("second frame");
+        assert_eq!(second.as_ptr(), address);
+        assert_eq!(second.len(), PUBLISH_FRAME_SAMPLES);
+        assert!(second.iter().all(|sample| *sample < 0));
     }
 
     #[test]
@@ -532,6 +606,9 @@ pub struct PublishSink {
 struct PublishFramer {
     resampler: StereoResampler,
     pending: Vec<i16>,
+    /// Frame buffers the drain task has finished with, reused so the capture thread does
+    /// not allocate one every 10 ms. Empty or absent, a new buffer is allocated.
+    spare: Option<std::sync::mpsc::Receiver<Vec<i16>>>,
 }
 
 impl PublishFramer {
@@ -539,7 +616,26 @@ impl PublishFramer {
         Self {
             resampler: StereoResampler::new(PUBLISH_SAMPLE_RATE),
             pending: Vec::with_capacity(PUBLISH_FRAME_SAMPLES * 4),
+            spare: None,
         }
+    }
+
+    /// Start the stream over, keeping the spare buffers.
+    fn reset(&mut self) {
+        let spare = self.spare.take();
+        *self = Self::new();
+        self.spare = spare;
+    }
+
+    fn frame_buffer(&self, frame: &[i16]) -> Vec<i16> {
+        let mut buffer = self
+            .spare
+            .as_ref()
+            .and_then(|spare| spare.try_recv().ok())
+            .unwrap_or_else(|| Vec::with_capacity(PUBLISH_FRAME_SAMPLES));
+        buffer.clear();
+        buffer.extend_from_slice(frame);
+        buffer
     }
 
     /// Append a capture block and hand every complete 10 ms frame now available to `emit`.
@@ -556,7 +652,7 @@ impl PublishFramer {
         for frame in
             self.pending[..complete * PUBLISH_FRAME_SAMPLES].chunks_exact(PUBLISH_FRAME_SAMPLES)
         {
-            emit(frame.to_vec());
+            emit(self.frame_buffer(frame));
         }
         self.pending.drain(..complete * PUBLISH_FRAME_SAMPLES);
     }
@@ -570,10 +666,24 @@ impl PublishFramer {
 }
 
 impl PublishSink {
+    #[cfg(test)]
     fn new(sender: mpsc::Sender<Vec<i16>>) -> Self {
         Self {
             sender,
             framer: Mutex::new(PublishFramer::new()),
+        }
+    }
+
+    /// A sink whose drain task hands its used frame buffers back through `spare`.
+    fn with_spare(
+        sender: mpsc::Sender<Vec<i16>>,
+        spare: std::sync::mpsc::Receiver<Vec<i16>>,
+    ) -> Self {
+        let mut framer = PublishFramer::new();
+        framer.spare = Some(spare);
+        Self {
+            sender,
+            framer: Mutex::new(framer),
         }
     }
 }
@@ -597,7 +707,7 @@ impl ProcessedSampleSink for PublishSink {
             Err(poisoned) => {
                 self.framer.clear_poison();
                 let mut framer = poisoned.into_inner();
-                *framer = PublishFramer::new();
+                framer.reset();
                 framer.push_each(samples, channels, sample_rate, send);
             }
         }
@@ -767,12 +877,8 @@ impl AudioEngine {
         // video tracks or another sidecar belonging to the same user.
         options.auto_subscribe = false;
         let handle = self.handle();
-        let (url, token) = (url.to_string(), token.to_string());
-        let connected = handle
-            .spawn(async move { Room::connect(&url, &token, options).await })
-            .await
-            .map_err(|error| error.to_string())
-            .and_then(|result| result.map_err(|error| error.to_string()));
+        let connected =
+            connect_room_bounded(&handle, url.to_string(), token.to_string(), options).await;
         let (room, events) = match connected {
             Ok(connected) => connected,
             Err(error) => {
@@ -828,7 +934,7 @@ impl AudioEngine {
             }
             let room = connection.room.clone();
             let handle = self.handle();
-            let _ = handle.spawn(async move { room.close().await }).await;
+            close_room_bounded(&handle, room).await;
         }
         let output = Arc::clone(&self.output);
         tokio::task::block_in_place(|| output.stop());
@@ -1096,7 +1202,9 @@ impl AudioEngine {
         };
 
         let (sender, receiver) = mpsc::channel::<Vec<i16>>(PUBLISH_BACKLOG_FRAMES);
-        let sink = Arc::new(PublishSink::new(sender));
+        // Room for every frame that can be in flight, so returned buffers are never lost.
+        let (recycle, spare) = std::sync::mpsc::sync_channel(PUBLISH_BACKLOG_FRAMES + 2);
+        let sink = Arc::new(PublishSink::with_spare(sender, spare));
 
         let handle = self.handle();
         let publish_room = Arc::clone(room);
@@ -1118,7 +1226,7 @@ impl AudioEngine {
             track.mute();
         }
 
-        let drain = handle.spawn(drain_published_audio(native, receiver));
+        let drain = handle.spawn(drain_published_audio(native, receiver, recycle));
 
         self.publications.insert(
             source.id,
@@ -1906,14 +2014,21 @@ impl AudioEngine {
 /// is producing audio this adds no buffering; when it falls silent the gap is filled with
 /// silence in step with the wall clock, so receivers see an unbroken stream instead of a
 /// burst of "late" packets when audio resumes.
-async fn drain_published_audio(native: NativeAudioSource, mut receiver: mpsc::Receiver<Vec<i16>>) {
+async fn drain_published_audio(
+    native: NativeAudioSource,
+    mut receiver: mpsc::Receiver<Vec<i16>>,
+    recycle: std::sync::mpsc::SyncSender<Vec<i16>>,
+) {
     let frame_duration = Duration::from_millis(10);
     let mut last_frame_at = Instant::now();
     loop {
         match tokio::time::timeout(PUBLISH_IDLE_AFTER, receiver.recv()).await {
             Ok(Some(samples)) => {
                 last_frame_at = Instant::now();
-                if !capture_publish_frame(&native, samples).await {
+                let sent = capture_publish_frame(&native, &samples).await;
+                // Back to the capture thread for reuse; dropped if the pool is full.
+                let _ = recycle.try_send(samples);
+                if !sent {
                     break;
                 }
             }
@@ -1925,7 +2040,7 @@ async fn drain_published_audio(native: NativeAudioSource, mut receiver: mpsc::Re
                 let behind = last_frame_at.elapsed().saturating_sub(frame_duration * 2);
                 let missing = (behind.as_millis() / frame_duration.as_millis()).min(10) as u32;
                 for _ in 0..missing {
-                    if !capture_publish_frame(&native, vec![0; PUBLISH_FRAME_SAMPLES]).await {
+                    if !capture_publish_frame(&native, &[0; PUBLISH_FRAME_SAMPLES]).await {
                         return;
                     }
                 }
@@ -1938,10 +2053,10 @@ async fn drain_published_audio(native: NativeAudioSource, mut receiver: mpsc::Re
     }
 }
 
-async fn capture_publish_frame(native: &NativeAudioSource, samples: Vec<i16>) -> bool {
+async fn capture_publish_frame(native: &NativeAudioSource, samples: &[i16]) -> bool {
     let frame = AudioFrame {
         samples_per_channel: (samples.len() / PUBLISH_CHANNELS) as u32,
-        data: samples.into(),
+        data: std::borrow::Cow::Borrowed(samples),
         sample_rate: PUBLISH_SAMPLE_RATE,
         num_channels: PUBLISH_CHANNELS as u32,
     };

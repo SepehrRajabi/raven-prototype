@@ -33,6 +33,7 @@ use tokio::runtime::{Handle, Runtime};
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 
+use crate::audio::engine::{close_room_bounded, connect_room_bounded};
 use crate::video::capture::{VideoCaptureCounters, VideoFrameSink};
 use crate::video::convert::I420Frame;
 use crate::video::domain::{
@@ -955,12 +956,13 @@ impl VideoEngine {
         let mut options = RoomOptions::default();
         // The publisher role never subscribes; the separate native viewer below owns receive.
         options.auto_subscribe = false;
-        let (publisher_url, publisher_token) = (url.to_string(), publisher_token.to_string());
-        let (room, events) = handle
-            .spawn(async move { Room::connect(&publisher_url, &publisher_token, options).await })
-            .await
-            .map_err(|error| error.to_string())?
-            .map_err(|error| error.to_string())?;
+        let (room, events) = connect_room_bounded(
+            &handle,
+            url.to_string(),
+            publisher_token.to_string(),
+            options,
+        )
+        .await?;
         let room = Arc::new(room);
         let event_loop = self.spawn_event_loop(app, shared, events);
 
@@ -981,13 +983,13 @@ impl VideoEngine {
         let handle = self.handle();
         let mut viewer_options = RoomOptions::default();
         viewer_options.auto_subscribe = false;
-        let (viewer_url, viewer_token) = (url.to_string(), viewer_token.to_string());
-        let viewer = handle
-            .spawn(async move { Room::connect(&viewer_url, &viewer_token, viewer_options).await })
-            .await
-            .map_err(|error| error.to_string())
-            .and_then(|result| result.map_err(|error| error.to_string()));
-        let (viewer_room, viewer_events) = viewer?;
+        let (viewer_room, viewer_events) = connect_room_bounded(
+            &handle,
+            url.to_string(),
+            viewer_token.to_string(),
+            viewer_options,
+        )
+        .await?;
         let viewer_room = Arc::new(viewer_room);
         let readers = Arc::new(Mutex::new(HashMap::new()));
         let viewer_connected = Arc::clone(&self.link.viewer_connected);
@@ -1025,7 +1027,7 @@ impl VideoEngine {
         if let Some(connection) = self.connection.take() {
             connection.event_loop.abort();
             let room = connection.room.clone();
-            let _ = handle.spawn(async move { room.close().await }).await;
+            close_room_bounded(&handle, room).await;
         }
     }
 
@@ -1039,7 +1041,7 @@ impl VideoEngine {
                 self.hub.remove_stream(&stream_id);
             }
             let room = viewer.room;
-            let _ = handle.spawn(async move { room.close().await }).await;
+            close_room_bounded(&handle, room).await;
         }
     }
 

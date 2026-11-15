@@ -144,6 +144,13 @@ recoverable)`: `DuplicateIdentity`, `ParticipantRemoved`, `RoomDeleted`/`RoomClo
 are final; `ServerShutdown` and everything else are recoverable. Import the enum as
 `livekit::DisconnectReason` — `livekit::prelude` does not re-export the same type.
 
+Connects and closes are bounded so `ops` is never held behind a dead network:
+`connect_room_bounded` (`audio/engine.rs`, also used by the video publisher and viewer)
+gives up after `ROOM_CONNECT_TIMEOUT = 30 s` (LiveKit bounds each step, 5 s signal, 5 s
+join, 15 s ICE, but retries the join three times), and the connect fails with an error
+the supervisor retries. `close_room_bounded` waits `ROOM_CLOSE_WAIT = 3 s` for the close,
+then leaves it to finish in the background (abandoned after 15 s).
+
 On app exit, `leave_rooms_before_exit` (`lib.rs`, `RunEvent::Exit`) disconnects video
 then audio inside a 1.5 s timeout so peers see an immediate leave rather than a frozen
 participant until the SFU times the connection out.
