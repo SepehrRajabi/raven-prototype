@@ -25,6 +25,8 @@ export function SettingsNav({
   groups,
   activeId,
   onSelect,
+  search,
+  results,
 }: {
   title: string;
   backLabel: string;
@@ -32,6 +34,10 @@ export function SettingsNav({
   groups: SettingsCategoryGroup[];
   activeId: string;
   onSelect: (id: string) => void;
+  /** A search field under the title. */
+  search?: ReactNode;
+  /** Shown in place of the categories while there is something to show, such as search results. */
+  results?: ReactNode;
 }) {
   return (
     <nav aria-label={title} className="flex min-h-0 flex-col">
@@ -45,9 +51,10 @@ export function SettingsNav({
           {backLabel}
         </button>
         <div className="truncate px-2 pt-3 text-title font-semibold">{title}</div>
+        {search ? <div className="pt-3">{search}</div> : null}
       </div>
       <div className="min-h-0 flex-1 space-y-4 overflow-y-auto px-2 pb-3">
-        {groups.map((group, index) => (
+        {results ?? groups.map((group, index) => (
           <div key={group.label ?? index}>
             {group.label ? <div className="flex min-h-7 items-center px-2 text-caption font-medium text-subtle">{group.label}</div> : null}
             <div className="space-y-px">
@@ -98,14 +105,17 @@ export function SettingsPage({
 export function SettingsSection({
   title,
   description,
+  anchor,
   children,
 }: {
   title: ReactNode;
   description?: string;
+  /** The name search knows this section by, when the title is not plain text. */
+  anchor?: string;
   children: ReactNode;
 }) {
   return (
-    <section>
+    <section data-settings-section={anchor ?? (typeof title === "string" ? title : undefined)} className="scroll-mt-6">
       <h2 className="text-title-sm font-semibold">{title}</h2>
       {description ? <p className="mt-1 max-w-xl text-small text-muted-foreground">{description}</p> : null}
       <div className="mt-3 space-y-3">{children}</div>
@@ -135,7 +145,10 @@ export function SettingsRow({
   className?: string;
 }) {
   return (
-    <div className={cn("flex min-h-12 items-center justify-between gap-4 rounded-card bg-secondary/50 px-4 py-2.5", className)}>
+    <div
+      data-settings-item={typeof label === "string" ? label : undefined}
+      className={cn("flex min-h-12 items-center justify-between gap-4 rounded-card bg-secondary/50 px-4 py-2.5", className)}
+    >
       <div className="min-w-0">
         <div className="text-body">{label}</div>
         {description ? <div className="mt-0.5 text-caption text-muted-foreground">{description}</div> : null}
@@ -159,7 +172,7 @@ export function SettingsToggleRow({
   onChange: (checked: boolean) => void;
 }) {
   return (
-    <label className={cn("flex min-h-12 items-center justify-between gap-4 rounded-card bg-secondary/50 px-4 py-2.5", disabled && "opacity-55")}>
+    <label data-settings-item={label} className={cn("flex min-h-12 items-center justify-between gap-4 rounded-card bg-secondary/50 px-4 py-2.5", disabled && "opacity-55")}>
       <span className="min-w-0">
         <span className="block text-body">{label}</span>
         {description ? <span className="mt-0.5 block text-caption text-muted-foreground">{description}</span> : null}
@@ -180,7 +193,7 @@ export function SettingsField({
   children: ReactNode;
 }) {
   return (
-    <div className="space-y-1.5">
+    <div data-settings-item={label} className="space-y-1.5">
       <span className="block text-small text-muted-foreground">{label}</span>
       {children}
       {hint ? <p className="text-caption text-muted-foreground">{hint}</p> : null}
@@ -190,7 +203,7 @@ export function SettingsField({
 
 export function SettingsReadOnlyRow({ label, value }: { label: string; value: string }) {
   return (
-    <div className="flex min-h-12 items-center justify-between gap-4 rounded-card bg-secondary/50 px-4 py-2.5">
+    <div data-settings-item={label} className="flex min-h-12 items-center justify-between gap-4 rounded-card bg-secondary/50 px-4 py-2.5">
       <span className="shrink-0 text-body">{label}</span>
       <span className="min-w-0 select-text truncate text-small text-muted-foreground" title={value}>{value}</span>
     </div>
@@ -221,6 +234,7 @@ export function SettingsChoice({
       role="radio"
       aria-checked={selected}
       disabled={disabled}
+      data-settings-item={title}
       onClick={onSelect}
       className="flex w-full items-start gap-3 rounded-card bg-secondary/50 px-4 py-3 text-left transition-colors hover:bg-secondary disabled:cursor-not-allowed disabled:opacity-55"
     >

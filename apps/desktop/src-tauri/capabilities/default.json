@@ -2,7 +2,7 @@
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
   "description": "Raven window permissions; updater mutations are enforced natively for the main window only",
-  "windows": ["main", "nest-window-*", "studio-window-*", "voice-overlay", "pip-*"],
+  "windows": ["main", "nest-window-*", "studio-window-*"],
   "permissions": [
     "core:default",
     "opener:default",

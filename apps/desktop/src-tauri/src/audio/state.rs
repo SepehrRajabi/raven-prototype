@@ -2584,7 +2584,8 @@ pub async fn audio_connect_room(
         session.playback_status = AudioPlaybackStatus::Starting;
         session.playback_error = None;
         session.error = None;
-        session.connection_lost = None;
+        // `connection_lost` stays until the connect succeeds: the app's rejoin loop keeps
+        // retrying while it is set, so a failed attempt must not clear it.
     })?;
     emit_audio_state_changed(&app, &connecting)?;
 
@@ -2600,6 +2601,7 @@ pub async fn audio_connect_room(
     }
     update_session(&shared, |session| {
         session.connection_status = AudioConnectionStatus::Connected;
+        session.connection_lost = None;
     })?;
     // Before the first publish: LiveKit would leave a refused one hanging.
     let limits = ops

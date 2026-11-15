@@ -1,0 +1,12 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "auxiliary",
+  "description": "The voice overlay and picture-in-picture windows: they move, size and close themselves, and open nothing",
+  "windows": ["voice-overlay", "pip-*"],
+  "permissions": [
+    "core:default",
+    "core:window:allow-close",
+    "core:window:allow-start-dragging",
+    "core:window:allow-set-size"
+  ]
+}

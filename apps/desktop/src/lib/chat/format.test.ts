@@ -58,11 +58,22 @@ describe("formatting", () => {
     const blocks = parseMessage("before\n```ts\nconst a = **1**;\n  indented\n```\nafter");
     expect(blocks).toEqual([
       { type: "paragraph", children: [{ type: "text", text: "before" }] },
-      { type: "code", text: "const a = **1**;\n  indented" },
+      { type: "code", text: "const a = **1**;\n  indented", language: "ts" },
       { type: "paragraph", children: [{ type: "text", text: "after" }] },
     ]);
     // A fence that never closes is just text.
     expect(parseMessage("```\nnever closed").map((block) => block.type)).toEqual(["paragraph", "paragraph"]);
+  });
+
+  test("the opening fence's first word names the language", () => {
+    const language = (body: string) => (parseMessage(body)[0] as Extract<Block, { type: "code" }>).language;
+    expect(language("```Go\nx\n```")).toBe("go");
+    expect(language("  ```c++ main.cpp\nx\n```")).toBe("c++");
+    expect(language("```\nx\n```")).toBeUndefined();
+    // Not a language name: kept as code, without one.
+    expect(language("```<b>\nx\n```")).toBeUndefined();
+    expect(language(`\`\`\`${"a".repeat(33)}\nx\n\`\`\``)).toBeUndefined();
+    expect(parseMessage("```<b>\nx\n```")).toEqual([{ type: "code", text: "x" }]);
   });
 });
 

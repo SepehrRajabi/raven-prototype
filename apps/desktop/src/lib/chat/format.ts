@@ -17,7 +17,11 @@ export type Inline =
 export type Block =
   /** One line of the message. Each is given its own direction when drawn. */
   | { type: "paragraph"; children: Inline[] }
-  | { type: "code"; text: string };
+  /** A fenced block. `language` is the name after the opening fence ("```go"), lowercased. */
+  | { type: "code"; text: string; language?: string };
+
+/** A language name as people write it after a fence: "ts", "c++", "objective-c", "c#". */
+const FENCE_LANGUAGE = /^[a-z0-9_+#.-]{1,32}$/;
 
 /**
  * Characters that change the direction text is drawn in. Inside a message they are
@@ -175,8 +179,11 @@ export function parseMessage(body: string): Block[] {
     if (line.trimStart().startsWith("```")) {
       const close = lines.findIndex((candidate, at) => at > index && candidate.trim() === "```");
       if (close > index) {
-        // Anything after the opening fence on its line is a language name, not code.
-        blocks.push({ type: "code", text: lines.slice(index + 1, close).join("\n") });
+        // Anything after the opening fence on its line is a language name, not code. Only
+        // its first word counts ("```ts title" names ts); anything else is ignored.
+        const language = line.trimStart().slice(3).trim().split(/\s+/)[0].toLowerCase();
+        const text = lines.slice(index + 1, close).join("\n");
+        blocks.push(FENCE_LANGUAGE.test(language) ? { type: "code", text, language } : { type: "code", text });
         index = close + 1;
         continue;
       }

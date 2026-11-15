@@ -30,6 +30,7 @@ tauri-build = { version = "2.2.0", features = [] }
 webrtc-sys-build = "=0.3.18"
 
 [dependencies]
+socket2 = "0.6"
 # macos-private-api: transparent windows (the voice overlay) on macOS. No effect elsewhere.
 tauri = { version = "2.5.0", features = ["tray-icon", "macos-private-api"] }
 tauri-plugin-opener = "2.2.7"

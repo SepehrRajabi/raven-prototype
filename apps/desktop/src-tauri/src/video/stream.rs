@@ -8,7 +8,7 @@
 use std::collections::HashMap;
 use std::io::{self, Read, Write};
 use std::net::{TcpListener, TcpStream};
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::mpsc::{sync_channel, Receiver, RecvTimeoutError, SyncSender, TrySendError};
 use std::sync::{Arc, Mutex, RwLock};
 use std::thread;
@@ -24,7 +24,33 @@ use crate::video::pacing::{FramePacer, DISPLAY_TOLERANCE};
 
 const BOUNDARY: &str = "ravenframe";
 type EncodedFrame = Arc<Vec<u8>>;
-type StreamSubscribers = HashMap<Uuid, SyncSender<EncodedFrame>>;
+type StreamSubscribers = HashMap<Uuid, (FrameFormat, SyncSender<EncodedFrame>)>;
+
+/// What a viewer connection wants: raw I420 frames (`.i420`, drawn by WebGL) or JPEG parts
+/// (`.mjpg`, the `<img>` fallback).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum FrameFormat {
+    Raw,
+    Jpeg,
+}
+
+const RAW_MAGIC: &[u8; 4] = b"RVF1";
+const RAW_HEADER_LEN: usize = 16;
+
+/// Pack an I420 frame as the `.i420` wire frame: `RVF1`, width, height and payload length
+/// (u32 little-endian each), then the tight Y, U and V planes.
+fn pack_raw_frame(frame: &I420Frame) -> Vec<u8> {
+    let payload = frame.y.len() + frame.u.len() + frame.v.len();
+    let mut out = Vec::with_capacity(RAW_HEADER_LEN + payload);
+    out.extend_from_slice(RAW_MAGIC);
+    out.extend_from_slice(&frame.width.to_le_bytes());
+    out.extend_from_slice(&frame.height.to_le_bytes());
+    out.extend_from_slice(&(payload as u32).to_le_bytes());
+    out.extend_from_slice(&frame.y);
+    out.extend_from_slice(&frame.u);
+    out.extend_from_slice(&frame.v);
+    out
+}
 
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -46,7 +72,7 @@ impl std::fmt::Debug for VideoFrameHub {
 }
 
 impl VideoFrameHub {
-    fn subscribe(&self, stream_id: &str) -> (Uuid, Receiver<EncodedFrame>) {
+    fn subscribe(&self, stream_id: &str, format: FrameFormat) -> (Uuid, Receiver<EncodedFrame>) {
         let (sender, receiver) = sync_channel(1);
         let subscriber_id = Uuid::new_v4();
         self.subscribers
@@ -54,7 +80,7 @@ impl VideoFrameHub {
             .expect("video frame subscribers poisoned")
             .entry(stream_id.to_string())
             .or_default()
-            .insert(subscriber_id, sender);
+            .insert(subscriber_id, (format, sender));
         (subscriber_id, receiver)
     }
 
@@ -82,10 +108,21 @@ impl VideoFrameHub {
             .unwrap_or(false)
     }
 
-    /// Offer a frame to every viewer of a stream. Returns how many took it; a viewer that
-    /// still has the previous frame pending skips this one.
-    pub fn publish(&self, stream_id: &str, jpeg: Vec<u8>) -> usize {
-        let frame = Arc::new(jpeg);
+    pub fn has_subscribers_for(&self, stream_id: &str, format: FrameFormat) -> bool {
+        self.subscribers
+            .lock()
+            .map(|streams| {
+                streams.get(stream_id).is_some_and(|items| {
+                    items.values().any(|(subscriber, _)| *subscriber == format)
+                })
+            })
+            .unwrap_or(false)
+    }
+
+    /// Offer a frame to every viewer of a stream that wants this format. Returns how many
+    /// took it; a viewer that still has the previous frame pending skips this one.
+    pub fn publish(&self, stream_id: &str, format: FrameFormat, bytes: Vec<u8>) -> usize {
+        let frame = Arc::new(bytes);
         let Ok(mut streams) = self.subscribers.lock() else {
             return 0;
         };
@@ -93,16 +130,19 @@ impl VideoFrameHub {
             return 0;
         };
         let mut delivered = 0;
-        subscribers.retain(
-            |_, subscriber| match subscriber.try_send(Arc::clone(&frame)) {
+        subscribers.retain(|_, (subscribed, subscriber)| {
+            if *subscribed != format {
+                return true;
+            }
+            match subscriber.try_send(Arc::clone(&frame)) {
                 Ok(()) => {
                     delivered += 1;
                     true
                 }
                 Err(TrySendError::Full(_)) => true,
                 Err(TrySendError::Disconnected(_)) => false,
-            },
-        );
+            }
+        });
         if subscribers.is_empty() {
             streams.remove(stream_id);
         }
@@ -130,6 +170,7 @@ impl VideoFrameService {
         let hub = VideoFrameHub::default();
         let server_hub = hub.clone();
         let server_token = token.clone();
+        let open_connections = Arc::new(AtomicUsize::new(0));
         thread::Builder::new()
             .name("raven-video-frame-server".to_string())
             .spawn(move || {
@@ -137,11 +178,24 @@ impl VideoFrameService {
                     let Ok(stream) = connection else {
                         continue;
                     };
+                    // Each viewer holds a thread; refuse past a bound any local
+                    // process could otherwise push to thread exhaustion.
+                    if open_connections.fetch_add(1, Ordering::AcqRel) >= MAX_CONNECTIONS {
+                        open_connections.fetch_sub(1, Ordering::AcqRel);
+                        continue;
+                    }
                     let hub = server_hub.clone();
                     let token = server_token.clone();
-                    let _ = thread::Builder::new()
+                    let open = Arc::clone(&open_connections);
+                    let spawned = thread::Builder::new()
                         .name("raven-video-frame-client".to_string())
-                        .spawn(move || serve_connection(stream, &token, hub));
+                        .spawn(move || {
+                            serve_connection(stream, &token, hub);
+                            open.fetch_sub(1, Ordering::AcqRel);
+                        });
+                    if spawned.is_err() {
+                        open_connections.fetch_sub(1, Ordering::AcqRel);
+                    }
                 }
             })?;
         Ok(Self {
@@ -160,6 +214,9 @@ impl VideoFrameService {
         self.endpoint.clone()
     }
 }
+
+/// Open viewer connections the frame server serves at once (tiles, PiP windows, previews).
+const MAX_CONNECTIONS: usize = 64;
 
 fn serve_connection(mut stream: TcpStream, token: &str, hub: VideoFrameHub) {
     let _ = stream.set_read_timeout(Some(Duration::from_secs(5)));
@@ -180,11 +237,14 @@ fn serve_connection(mut stream: TcpStream, token: &str, hub: VideoFrameHub) {
             .write_all(b"HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n");
         return;
     }
-    let stream_id = path[prefix.len()..]
+    let name = path[prefix.len()..]
         .split(['?', '#'])
         .next()
-        .unwrap_or_default()
-        .trim_end_matches(".mjpg");
+        .unwrap_or_default();
+    let (stream_id, format) = match name.strip_suffix(".i420") {
+        Some(id) => (id, FrameFormat::Raw),
+        None => (name.trim_end_matches(".mjpg"), FrameFormat::Jpeg),
+    };
     if stream_id.is_empty()
         || !stream_id
             .bytes()
@@ -196,11 +256,21 @@ fn serve_connection(mut stream: TcpStream, token: &str, hub: VideoFrameHub) {
         return;
     }
 
-    let (subscriber_id, receiver) = hub.subscribe(stream_id);
+    let (subscriber_id, receiver) = hub.subscribe(stream_id, format);
     let _ = stream.set_nodelay(true);
     let _ = stream.set_read_timeout(Some(Duration::from_millis(250)));
+    if format == FrameFormat::Raw {
+        // Keep about one frame in the kernel so a slow page pushes back to the hub (which
+        // drops) instead of watching stale frames.
+        let _ = socket2::SockRef::from(&stream).set_send_buffer_size(RAW_SEND_BUFFER);
+    }
+    // `fetch` from the app's origin needs CORS; the random token is the access control.
+    let content_type = match format {
+        FrameFormat::Raw => "application/octet-stream".to_string(),
+        FrameFormat::Jpeg => format!("multipart/x-mixed-replace; boundary={BOUNDARY}"),
+    };
     let headers = format!(
-        "HTTP/1.1 200 OK\r\nContent-Type: multipart/x-mixed-replace; boundary={BOUNDARY}\r\nCache-Control: no-store, no-cache, must-revalidate\r\nPragma: no-cache\r\nAccess-Control-Allow-Origin: *\r\nConnection: close\r\n\r\n"
+        "HTTP/1.1 200 OK\r\nContent-Type: {content_type}\r\nAccess-Control-Allow-Origin: *\r\nCache-Control: no-store, no-cache, must-revalidate\r\nPragma: no-cache\r\nConnection: close\r\n\r\n"
     );
     if stream.write_all(headers.as_bytes()).is_err() {
         hub.unsubscribe(stream_id, subscriber_id);
@@ -209,15 +279,19 @@ fn serve_connection(mut stream: TcpStream, token: &str, hub: VideoFrameHub) {
     loop {
         match receiver.recv_timeout(Duration::from_secs(1)) {
             Ok(frame) => {
-                let part = format!(
-                    "--{BOUNDARY}\r\nContent-Type: image/jpeg\r\nContent-Length: {}\r\n\r\n",
-                    frame.len()
-                );
-                if stream.write_all(part.as_bytes()).is_err()
-                    || stream.write_all(&frame).is_err()
-                    || stream.write_all(b"\r\n").is_err()
-                    || stream.flush().is_err()
-                {
+                let written = match format {
+                    FrameFormat::Raw => stream.write_all(&frame).is_ok(),
+                    FrameFormat::Jpeg => {
+                        let part = format!(
+                            "--{BOUNDARY}\r\nContent-Type: image/jpeg\r\nContent-Length: {}\r\n\r\n",
+                            frame.len()
+                        );
+                        stream.write_all(part.as_bytes()).is_ok()
+                            && stream.write_all(&frame).is_ok()
+                            && stream.write_all(b"\r\n").is_ok()
+                    }
+                };
+                if !written || stream.flush().is_err() {
                     break;
                 }
             }
@@ -239,6 +313,10 @@ fn serve_connection(mut stream: TcpStream, token: &str, hub: VideoFrameHub) {
     }
     hub.unsubscribe(stream_id, subscriber_id);
 }
+
+/// Socket send buffer for raw streams: about one 720p frame, so at most a frame or two sit
+/// between the hub and the page.
+const RAW_SEND_BUFFER: usize = 1_400_000;
 
 pub struct VideoFramePublisher {
     stream_id: String,
@@ -300,16 +378,30 @@ impl VideoFramePublisher {
                         .read()
                         .map(|value| value.clone())
                         .unwrap_or_default();
-                    let started = Instant::now();
-                    let jpeg = encode_frame(&frame, &settings, source, &mut resized, &mut planes);
-                    worker_counters.encoded.fetch_add(1, Ordering::Relaxed);
-                    worker_counters
-                        .encode_micros
-                        .fetch_add(started.elapsed().as_micros() as u64, Ordering::Relaxed);
-                    if let Some(jpeg) = jpeg {
-                        if worker_hub.publish(&worker_id, jpeg) > 0 {
-                            worker_counters.shown.fetch_add(1, Ordering::Relaxed);
+                    let want_raw = worker_hub.has_subscribers_for(&worker_id, FrameFormat::Raw);
+                    let want_jpeg = worker_hub.has_subscribers_for(&worker_id, FrameFormat::Jpeg);
+                    let (prepared, quality) =
+                        prepare_frame(&frame, &settings, source, &mut resized);
+                    let mut taken = 0;
+                    if want_raw {
+                        taken += worker_hub.publish(
+                            &worker_id,
+                            FrameFormat::Raw,
+                            pack_raw_frame(prepared),
+                        );
+                    }
+                    if want_jpeg {
+                        let started = Instant::now();
+                        if let Some(jpeg) = encode_i420_jpeg(prepared, quality, &mut planes) {
+                            taken += worker_hub.publish(&worker_id, FrameFormat::Jpeg, jpeg);
                         }
+                        worker_counters
+                            .encode_micros
+                            .fetch_add(started.elapsed().as_micros() as u64, Ordering::Relaxed);
+                    }
+                    worker_counters.encoded.fetch_add(1, Ordering::Relaxed);
+                    if taken > 0 {
+                        worker_counters.shown.fetch_add(1, Ordering::Relaxed);
                     }
                     if let Ok(mut recycled) = worker_recycled.lock() {
                         *recycled = Some(frame);
@@ -409,13 +501,14 @@ fn copy_i420_reusing(source: &I420Frame, recycled: Option<I420Frame>) -> I420Fra
     target
 }
 
-fn encode_frame(
-    frame: &I420Frame,
+/// Resize a decoded frame to the presentation limits once; both formats start from it.
+/// Returns the frame to send and the JPEG quality.
+fn prepare_frame<'a>(
+    frame: &'a I420Frame,
     settings: &VideoPresentationSettings,
     source: VideoTrackSource,
-    resized: &mut I420Frame,
-    planes: &mut JpegPlanes,
-) -> Option<Vec<u8>> {
+    resized: &'a mut I420Frame,
+) -> (&'a I420Frame, f32) {
     let (max_width, max_height, _, quality) = settings.limits_for(source);
     let (width, height) = fit_dimensions(frame.width, frame.height, max_width, max_height);
     let prepared = if frame.width == width && frame.height == height {
@@ -424,7 +517,7 @@ fn encode_frame(
         resize_i420_filtered_reusing(frame, width, height, resized);
         resized
     };
-    encode_i420_jpeg(prepared, quality, planes)
+    (prepared, quality)
 }
 
 /// Block-aligned planes reused across [`encode_i420_jpeg`] calls.
@@ -871,16 +964,91 @@ mod tests {
     #[test]
     fn disconnected_or_slow_consumers_never_create_an_unbounded_queue() {
         let hub = VideoFrameHub::default();
-        let (_, receiver) = hub.subscribe("track");
-        hub.publish("track", vec![1]);
-        hub.publish("track", vec![2]);
+        let (_, receiver) = hub.subscribe("track", FrameFormat::Jpeg);
+        hub.publish("track", FrameFormat::Jpeg, vec![1]);
+        hub.publish("track", FrameFormat::Jpeg, vec![2]);
         assert_eq!(&*receiver.recv().unwrap(), &[1]);
+    }
+
+    #[test]
+    fn raw_frame_has_header_and_tight_planes() {
+        let frame = I420Frame {
+            width: 4,
+            height: 2,
+            y: vec![1; 8],
+            u: vec![2; 2],
+            v: vec![3; 2],
+        };
+        let packed = pack_raw_frame(&frame);
+        assert_eq!(&packed[..4], b"RVF1");
+        assert_eq!(u32::from_le_bytes(packed[4..8].try_into().unwrap()), 4);
+        assert_eq!(u32::from_le_bytes(packed[8..12].try_into().unwrap()), 2);
+        assert_eq!(u32::from_le_bytes(packed[12..16].try_into().unwrap()), 12);
+        assert_eq!(packed.len(), RAW_HEADER_LEN + 12);
+        assert_eq!(&packed[16..24], &[1; 8]);
+        assert_eq!(&packed[24..26], &[2; 2]);
+        assert_eq!(&packed[26..28], &[3; 2]);
+    }
+
+    #[test]
+    fn frames_go_only_to_subscribers_of_their_format() {
+        let hub = VideoFrameHub::default();
+        let (_, raw) = hub.subscribe("track", FrameFormat::Raw);
+        let (_, jpeg) = hub.subscribe("track", FrameFormat::Jpeg);
+        assert!(hub.has_subscribers_for("track", FrameFormat::Raw));
+        assert_eq!(hub.publish("track", FrameFormat::Raw, vec![7]), 1);
+        assert_eq!(&*raw.try_recv().unwrap(), &[7]);
+        assert!(jpeg.try_recv().is_err());
+        assert_eq!(hub.publish("track", FrameFormat::Jpeg, vec![9]), 1);
+        assert_eq!(&*jpeg.try_recv().unwrap(), &[9]);
+        assert!(raw.try_recv().is_err());
+    }
+
+    #[test]
+    fn stream_without_a_format_subscriber_does_not_want_that_format() {
+        let hub = VideoFrameHub::default();
+        let (id, _receiver) = hub.subscribe("track", FrameFormat::Jpeg);
+        assert!(!hub.has_subscribers_for("track", FrameFormat::Raw));
+        hub.unsubscribe("track", id);
+        assert!(!hub.has_subscribers_for("track", FrameFormat::Jpeg));
+    }
+
+    #[test]
+    fn slow_raw_consumers_never_queue() {
+        let hub = VideoFrameHub::default();
+        let (_, receiver) = hub.subscribe("track", FrameFormat::Raw);
+        assert_eq!(hub.publish("track", FrameFormat::Raw, vec![1]), 1);
+        assert_eq!(hub.publish("track", FrameFormat::Raw, vec![2]), 0);
+        assert_eq!(&*receiver.recv().unwrap(), &[1]);
+    }
+
+    #[test]
+    fn odd_sized_sources_present_with_even_dimensions() {
+        let frame = I420Frame {
+            width: 641,
+            height: 361,
+            y: vec![16; 641 * 361],
+            u: vec![128; 321 * 181],
+            v: vec![128; 321 * 181],
+        };
+        let mut resized = empty_i420_frame();
+        let (prepared, _) = prepare_frame(
+            &frame,
+            &VideoPresentationSettings::default(),
+            VideoTrackSource::Camera,
+            &mut resized,
+        );
+        assert_eq!(prepared.width % 2, 0);
+        assert_eq!(prepared.height % 2, 0);
+        let packed = pack_raw_frame(prepared);
+        let payload = (prepared.width * prepared.height * 3 / 2) as usize;
+        assert_eq!(packed.len(), RAW_HEADER_LEN + payload);
     }
 
     #[test]
     fn explicit_unsubscribe_releases_idle_stream_state() {
         let hub = VideoFrameHub::default();
-        let (subscriber_id, _receiver) = hub.subscribe("track");
+        let (subscriber_id, _receiver) = hub.subscribe("track", FrameFormat::Jpeg);
         assert!(hub.has_subscribers("track"));
         hub.unsubscribe("track", subscriber_id);
         assert!(!hub.has_subscribers("track"));

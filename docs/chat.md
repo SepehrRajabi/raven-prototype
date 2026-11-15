@@ -20,7 +20,7 @@ These were decided with Soroush on 2026-10-11.
 
 | Topic | Rule |
 |---|---|
-| Layout | The sidebar stays the live map. One **Friends and groups** section (changed on 2026-10-16, replacing a separate Messages section) has a row per friend, which opens your conversation with them, and a row per recent group; a round avatar with presence is a person, a square one a group. "All conversations" opens the full list. An expanded tree lists its live voice nests, its text nests with unread messages and the open one; the rest are in the tree lobby, where categories and order for voice and text nests are managed. |
+| Layout | The sidebar stays the live map. Since 2026-11-11 it has a Live strip on top and two lenses below (`docs/plans/sidebar-lenses.md`). **People** lists Saved messages, then friends and groups in one list (a round avatar with presence is a person, a square one with "N people" a group); its find field also reaches quiet groups, people from your trees and archived conversations. There is no "All conversations" view any more. In **Places**, an expanded tree lists its text nests with unread messages and the open one; the rest are in the tree lobby, where categories and order for voice and text nests are managed. |
 | Who can write to whom | Friends only, for direct messages and for adding to a group. If a friendship ends, the history stays readable and new messages and edits are refused. Deleting your own messages still works. |
 | Read status | Four mutual switches (Settings › Messages), changed 2026-10-31: **Direct messages, Groups, Private spaces, Public spaces**. A text nest counts as private or public by its tree's visibility at the moment it is asked. With a switch off you are neither shown nor shown others in that kind of conversation. Defaults: direct messages keep each person's old setting, groups on, private spaces on, public spaces off. Direct messages show read ticks; every kind shows, under your own last message, who has seen it and when (`GET /conversations/:id/seen`). Only the last message shows this. Your own read position always syncs across your devices. |
 | Unread | A neutral count on the conversation's own row; a plain dot on tree rows, the collapsed rail and the Windows taskbar icon. A soft sound for new live messages in conversations that notify; optional Windows notifications while Raven is in the background. |
@@ -50,7 +50,10 @@ Defaults chosen during the build. Each is one constant or one check to change:
   conversation up the list.
 - A new incoming message brings an archived conversation back.
 - Messages are up to 4096 characters. Formatting is `**bold**`, `*italic*`, `~~struck~~`,
-  `` `code` `` and fenced code blocks. A web address written out in full becomes a link.
+  `` `code` `` and fenced code blocks. A fence that names a language (` ```go `) is
+  coloured by the desktop's highlighter (lowlight with highlight.js's common languages,
+  loaded the first time it is needed); without a known language the block stays plain,
+  since guessing is slow and often wrong. A web address written out in full becomes a link.
   There is no `[label](address)` form, because a link whose words differ from where it goes
   is how people are tricked.
 

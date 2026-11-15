@@ -320,6 +320,16 @@ function roundIntensity(value: number) {
   return Math.round(value * 100) / 100;
 }
 
+// Meters arrive every 120 ms per source and these maps feed the whole shell, so a level
+// that moved less than this keeps the previous map and nothing re-renders. Reaching or
+// leaving zero always counts.
+const INTENSITY_RENDER_STEP = 0.1;
+
+function sameIntensity(a: number, b: number) {
+  if (a === 0 || b === 0) return a === b;
+  return Math.abs(a - b) < INTENSITY_RENDER_STEP;
+}
+
 function setActivityIfChanged(
   setActivity: React.Dispatch<React.SetStateAction<ParticipantVoiceActivityMap>>,
   next: ParticipantVoiceActivityMap,
@@ -336,7 +346,7 @@ function activityMapsEqual(left: ParticipantVoiceActivityMap, right: Participant
     const b = right[key];
     return b != null
       && a.speaking === b.speaking
-      && a.intensity === b.intensity
+      && sameIntensity(a.intensity, b.intensity)
       && a.meterObserved === b.meterObserved;
   });
 }
@@ -348,7 +358,7 @@ function setSourcesIfChanged(
   setSources((current) => {
     const currentKeys = Object.keys(current);
     if (currentKeys.length !== Object.keys(next).length) return next;
-    const same = currentKeys.every((key) => next[key]?.active === current[key].active && next[key]?.intensity === current[key].intensity);
+    const same = currentKeys.every((key) => next[key] != null && next[key].active === current[key].active && sameIntensity(next[key].intensity, current[key].intensity));
     return same ? current : next;
   });
 }

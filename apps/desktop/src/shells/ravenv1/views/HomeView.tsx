@@ -162,7 +162,7 @@ export function HomeView({
                   icon={<Search />}
                   label={`Find a public ${treeSingular}`}
                   value={`Search by name to see what ${data.labels.treePlural.toLowerCase()} are open.`}
-                  control={<Button size="xs" variant="secondary" onClick={focusGlobalSearch}>Search</Button>}
+                  control={<Button size="xs" variant="secondary" onClick={() => focusGlobalSearch()}>Search</Button>}
                 />
                 {username ? (
                   <DoorwayRow

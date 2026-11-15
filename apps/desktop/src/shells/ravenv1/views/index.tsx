@@ -14,7 +14,6 @@ import { resolveUserSettingsSection, UserSettingsView } from "../UserSettings";
 import { ChatView } from "./ChatView";
 import { HomeView } from "./HomeView";
 import { LicencesView } from "./LicencesView";
-import { MessagesView } from "./MessagesView";
 import { NestView } from "./NestView";
 import { ViewHeader } from "./shared";
 import { PublicTreePreviewView, TreeLobbyView } from "./TreeLobbyView";
@@ -91,8 +90,6 @@ export function MainView({
     }
     case "chat":
       return <ChatView conversationId={view.id} at={view.at} chat={chat} data={data} media={media} entry={entry} onNavigate={onNavigate} onBack={onBack} />;
-    case "messages":
-      return <MessagesView chat={chat} data={data} onNavigate={onNavigate} />;
     case "waiting":
     case "nest": {
       const nest = data.getNest(view.id);

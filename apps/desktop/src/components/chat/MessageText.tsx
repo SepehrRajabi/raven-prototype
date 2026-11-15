@@ -1,7 +1,9 @@
 import { memo, useMemo, useState, type MouseEvent, type ReactNode } from "react";
-import { invoke } from "@tauri-apps/api/core";
+import { invoke, isTauri } from "@tauri-apps/api/core";
+import { toast } from "@/components/ui/toast";
 import { api } from "@/lib/api";
 import { emojiOnlyCount, parseMessage, type Inline } from "@/lib/chat/format";
+import { useHighlightedCode } from "@/lib/chat/highlight";
 import { removedNestText, type MentionResolver, type MentionTarget } from "@/lib/chat/mentions";
 import { cn } from "@/lib/utils";
 import { NestGlyph, PresenceDot } from "@/shells/ravenv1/atoms";
@@ -9,9 +11,15 @@ import type { Presence } from "@/shells/ravenv1/state";
 
 /** Opens a web address in the person's browser, never inside Raven's own window. */
 export function openAddress(href: string) {
-  void invoke("plugin:opener|open_url", { url: href }).catch(() => {
-    // Not inside the desktop app (a browser preview): fall back to a new tab.
+  // Not inside the desktop app (a browser preview): a new tab is the browser.
+  if (!isTauri()) {
     window.open(href, "_blank", "noopener,noreferrer");
+    return;
+  }
+  // Inside Raven a page must never open in one of its own windows, where it could pass
+  // for Raven itself.
+  void invoke("plugin:opener|open_url", { url: href }).catch(() => {
+    toast({ title: "Couldn’t open the link", description: "Your browser didn’t respond. Copy the address and open it there.", tone: "error" });
   });
 }
 
@@ -22,7 +30,7 @@ function onLinkClick(event: MouseEvent<HTMLAnchorElement>) {
 
 export interface MentionContext {
   resolve: MentionResolver;
-  /** The reader, whose own name takes the accent. */
+  /** The reader, whose own name is set heavier. */
   me: string;
   onOpen?: (target: MentionTarget, id: string) => void;
 }
@@ -56,7 +64,7 @@ function Mention({ node, context }: { node: Extract<Inline, { type: "mention" }>
     const inner = (
       <>
         <Face id={node.id} name={person.name} presence={person.presence} className="translate-y-[2px]" />
-        <bdi className={cn("ml-1 font-medium decoration-subtle underline-offset-2 group-hover/mention:underline", isMe ? "text-live" : "text-foreground")}>{person.name}</bdi>
+        <bdi className={cn("ml-1 font-medium decoration-subtle underline-offset-2 group-hover/mention:underline", isMe ? "font-semibold text-foreground" : "text-foreground")}>{person.name}</bdi>
       </>
     );
     return context.onOpen ? (
@@ -118,6 +126,16 @@ function renderInline(nodes: Inline[], keyPrefix = "", context?: MentionContext)
   });
 }
 
+/** A fenced block, coloured when its fence names a language the highlighter knows. */
+function CodeBlock({ text, language }: { text: string; language?: string }) {
+  const runs = useHighlightedCode(language, text);
+  return (
+    <pre dir="ltr" className="rv-mono my-1 overflow-x-auto whitespace-pre rounded-control bg-card px-2.5 py-2 text-small">
+      {runs ? runs.map((run, index) => (run.className ? <span key={index} className={run.className}>{run.text}</span> : run.text)) : text}
+    </pre>
+  );
+}
+
 /**
  * The words of a message. Formatting is drawn from a parsed tree, so nothing a person
  * types is ever interpreted as markup.
@@ -129,9 +147,7 @@ export const MessageText = memo(function MessageText({ body, className, mentions
     <div className={cn("raven-chat-text", ["text-body", "text-emoji-1", "text-emoji-2", "text-emoji-3"][jumbo], className)}>
       {blocks.map((block, index) =>
         block.type === "code" ? (
-          <pre key={index} dir="ltr" className="rv-mono my-1 overflow-x-auto whitespace-pre rounded-control bg-card px-2.5 py-2 text-small">
-            {block.text}
-          </pre>
+          <CodeBlock key={index} text={block.text} language={block.language} />
         ) : (
           <p key={index} dir="auto">{renderInline(block.children, "", mentions)}</p>
         ),

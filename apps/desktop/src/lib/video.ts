@@ -113,6 +113,8 @@ export interface VideoMixerState {
   remoteTracks: RemoteVideoTrackState[];
   /** A video role lost the room for good (not merely reconnecting) and must rejoin. */
   sessionLost?: boolean;
+  /** Rejoining cannot heal the loss (signed in elsewhere, removed, room closed). */
+  sessionLostFatal?: boolean;
 }
 
 export interface VideoPresentationSettings {
@@ -317,9 +319,12 @@ export const videoCommands = {
   setRemoteVideoReceiving: (participantId: string, source: VideoTrackSource, receiving: boolean) =>
     invoke<VideoMixerState>("video_set_remote_video_receiving", { participantId, source, receiving }),
 
-  /** Connect Rust's video publisher and selective viewer roles. */
-  connectRoom: (url: string, token: string, viewerToken: string) =>
-    invoke<VideoMixerState>("video_connect_room", { url, token, viewerToken }),
+  /**
+   * Connect Rust's video publisher and selective viewer roles. With `rejoin`, a role whose
+   * room is still connected is kept, so a lost viewer does not restart a healthy share.
+   */
+  connectRoom: (url: string, token: string, viewerToken: string, rejoin = false) =>
+    invoke<VideoMixerState>("video_connect_room", { url, token, viewerToken, rejoin }),
 
   /** Disconnect the native video sidecar (on leaving the nest). */
   disconnectRoom: () => invoke<VideoMixerState>("video_disconnect_room"),
