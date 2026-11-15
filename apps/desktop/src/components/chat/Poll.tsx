@@ -58,7 +58,9 @@ export function PollCard({
 }) {
   const voted = poll.myVotes.length > 0;
   const closed = Boolean(poll.closedAt);
-  const showResults = voted || closed || mine;
+  // Sending a quiz isn't enough to see its results: whoever saved or forwarded a copy is
+  // its sender here but not its asker, so for a quiz the server's `revealed` decides.
+  const showResults = voted || closed || (mine && (!poll.quiz || poll.revealed));
   // A quiz takes one answer and keeps it.
   const interactive = canVote && !closed && !(poll.quiz && voted);
   const votesKey = poll.myVotes.join(",");

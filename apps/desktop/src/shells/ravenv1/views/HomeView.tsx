@@ -55,7 +55,7 @@ export function HomeView({
   const chatState = useChatState(chat);
   const unread = useMemo(() => unreadConversations(chatState ? Object.values(chatState.conversations).map(({ summary }) => summary) : []), [chatState]);
   const treeChat = useTreeChatSummaries(chat);
-  const lastVisited = useMemo(() => (data.user ? readLastVisited(data.user.id) : {}), [data.user]);
+  const lastVisited = useMemo(() => (data.user ? readLastVisited(data.apiServerUrl, data.user.id) : {}), [data.apiServerUrl, data.user]);
   const liveByTree = useMemo(() => {
     const people = new Map<string, number>();
     for (const nest of liveNests) {

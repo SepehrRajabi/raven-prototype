@@ -8,7 +8,6 @@ This repository is a monorepo:
 apps/desktop   Tauri v2 + React + TypeScript desktop app
 apps/admin     Web dashboard for the server's administrator (docs/permissions.md)
 services/api   Go 1.26.3 + Fiber API with PostgreSQL or SQLite
-packages/shared shared TypeScript domain types
 docs           architecture and development notes
 ```
 

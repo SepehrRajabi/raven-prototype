@@ -71,3 +71,38 @@ describe("the media cache", () => {
     expect(await media.get("b", async () => bytes(1))).toMatch(/^blob:/);
   });
 });
+
+describe("clearing the media cache", () => {
+  test("revokes every URL and forgets what was gone", async () => {
+    const { media, revoked } = cache();
+    const url = await media.get("a", async () => bytes(10));
+    await media.get("b", () => Promise.reject(Object.assign(new Error("gone"), { status: 404 }))).catch(() => undefined);
+    expect(media.isGone("b")).toBe(true);
+    media.clear();
+    expect(revoked).toEqual([url]);
+    expect(media.peek("a")).toBeUndefined();
+    expect(media.isGone("b")).toBe(false);
+    expect(media.size).toBe(0);
+  });
+
+  test("a load that started before clearing is not kept after it", async () => {
+    const { media } = cache();
+    let finish = (_blob: Blob) => {};
+    const pending = media.get("a", () => new Promise<Blob>((resolve) => (finish = resolve)));
+    media.clear();
+    finish(bytes(10));
+    await expect(pending).rejects.toThrow();
+    expect(media.peek("a")).toBeUndefined();
+  });
+
+  test("a hold taken before the load keeps its URL when two loads finish together over the budget", async () => {
+    const { media, revoked } = cache(15);
+    const releaseA = media.hold("a");
+    const releaseB = media.hold("b");
+    const [a, b] = await Promise.all([media.get("a", async () => bytes(10)), media.get("b", async () => bytes(10))]);
+    expect(revoked).not.toContain(a);
+    expect(revoked).not.toContain(b);
+    releaseA();
+    releaseB();
+  });
+});

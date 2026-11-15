@@ -125,9 +125,9 @@ export function RavenShellV1() {
   const signedInId = data.user?.id;
   useEffect(() => {
     if (!signedInId) return;
-    if (view.kind === "nest") writeLastVisited(signedInId, { nestId: view.id });
-    else if (view.kind === "tree") writeLastVisited(signedInId, { treeId: view.id });
-  }, [signedInId, view]);
+    if (view.kind === "nest") writeLastVisited(data.apiServerUrl, signedInId, { nestId: view.id });
+    else if (view.kind === "tree") writeLastVisited(data.apiServerUrl, signedInId, { treeId: view.id });
+  }, [data.apiServerUrl, signedInId, view]);
   // The stage shows a vote. Looking at something else, you still have to hear of it.
   const callVote = media.callVote.vote;
   const callVoteElsewhere = callVote?.outcome === "open" && !(view.kind === "nest" && view.id === callVote.nestId);

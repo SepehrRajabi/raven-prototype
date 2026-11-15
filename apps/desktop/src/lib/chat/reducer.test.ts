@@ -617,3 +617,17 @@ describe("mention count", () => {
     expect(sent.conversations[C].summary.mentionCount).toBe(0);
   });
 });
+
+describe("a conversation that appears while the list is fetched", () => {
+  test("is kept and fetched on its own when the older list does not have it", () => {
+    const start = chat();
+    const { state, effects } = applyList(start, [], { ...DEFAULT_SETTINGS }, new Set([C]));
+    expect(state.conversations[C]).toBe(start.conversations[C]);
+    expect(effects).toContainEqual({ type: "fetchSummary", conversationId: C });
+  });
+
+  test("is dropped as before when nothing happened to it during the fetch", () => {
+    const { state } = applyList(chat(), [], { ...DEFAULT_SETTINGS });
+    expect(state.conversations[C]).toBeUndefined();
+  });
+});

@@ -35,6 +35,8 @@ export class MediaCache {
   private readonly holds = new Map<string, number>();
   private readonly gone = new Set<string>();
   private total = 0;
+  /** Bumped by `clear`, so a load that started before it is not kept after it. */
+  private generation = 0;
   private readonly budget: number;
   private readonly createUrl: (blob: Blob) => string;
   private readonly revokeUrl: (url: string) => void;
@@ -66,12 +68,15 @@ export class MediaCache {
     if (this.gone.has(key)) return Promise.reject(new AttachmentGoneError());
     const running = this.inFlight.get(key);
     if (running) return running;
+    const generation = this.generation;
     const request = load().then(
       (blob) => {
+        if (generation !== this.generation) throw new Error("The media cache was cleared.");
         this.inFlight.delete(key);
         return this.put(key, blob);
       },
       (error: unknown) => {
+        if (generation !== this.generation) throw error;
         this.inFlight.delete(key);
         if (httpStatusOf(error) === 404) {
           this.gone.add(key);
@@ -106,6 +111,16 @@ export class MediaCache {
   /** Bytes held now. */
   get size(): number {
     return this.total;
+  }
+
+  /** Forgets everything, revoking every URL. Signing out ends here. */
+  clear() {
+    this.generation += 1;
+    for (const entry of this.entries.values()) this.revokeUrl(entry.url);
+    this.entries.clear();
+    this.inFlight.clear();
+    this.gone.clear();
+    this.total = 0;
   }
 
   private put(key: string, blob: Blob): string {

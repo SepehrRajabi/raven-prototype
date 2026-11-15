@@ -276,6 +276,10 @@ function OpenConversation({
     return () => window.removeEventListener("keydown", onKey);
   }, [selecting, forwarding]);
   const forwardOne = useCallback((message: ChatMessage) => setForwarding([message.id]), []);
+  // Stable, so the list's rows are not all drawn again on every change in the shell.
+  const openPerson = useCallback((userId: string) => onNavigate({ kind: "user", id: userId }), [onNavigate]);
+  const openSpace = useCallback((treeId: string) => onNavigate({ kind: "tree", id: treeId }), [onNavigate]);
+  const limitsForReactions = useMemo(() => reactionLimits(data.serverProperties.properties), [data.serverProperties.properties]);
   const startSelecting = useCallback((message: ChatMessage) => {
     setReplyingTo(null);
     setEditing(null);
@@ -483,7 +487,7 @@ function OpenConversation({
         <MessageList
           ref={list}
           store={chat}
-          reactionLimits={reactionLimits(data.serverProperties.properties)}
+          reactionLimits={limitsForReactions}
           conversation={conversation}
           me={me}
           windowActive={windowActive}
@@ -493,8 +497,8 @@ function OpenConversation({
           onRemoveForMe={askRemove}
           onDeleteForEveryone={askDelete}
           onOpenImage={openImage}
-          onOpenPerson={(userId) => onNavigate({ kind: "user", id: userId })}
-          onOpenSpace={(treeId) => onNavigate({ kind: "tree", id: treeId })}
+          onOpenPerson={openPerson}
+          onOpenSpace={openSpace}
           onSave={summary.kind === "saved" ? undefined : saveMessage}
           onOpenSource={openSource}
           onForward={forwardOne}

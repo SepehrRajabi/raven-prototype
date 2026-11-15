@@ -84,7 +84,32 @@ export function nextToSend(pending: PendingMessage[]): PendingMessage | undefine
 export type OutboxStorage = Pick<Storage, "getItem" | "setItem" | "removeItem">;
 
 const STORAGE_PREFIX = "raven.chat.outbox.";
-const storageKey = (userId: string) => `${STORAGE_PREFIX}${userId}`;
+/** `scope` is an account: `accountScope(serverUrl, userId)`. */
+const storageKey = (scope: string) => `${STORAGE_PREFIX}${scope}`;
+
+/**
+ * Names one account on this device: server plus user, since two servers can hand out the
+ * same user id. Outbox and other per-account keys in `localStorage` use it.
+ */
+export function accountScope(serverUrl: string, userId: string): string {
+  return `${serverUrl}|${userId}`;
+}
+
+/**
+ * Raven 0.1.11 and earlier keyed the outbox by user id alone. The first account with that
+ * id to open takes the old entry over; there is no way to tell which server wrote it.
+ */
+export function migrateOutboxKey(storage: OutboxStorage, userId: string, scope: string): void {
+  if (!userId || userId === scope) return;
+  try {
+    const legacy = storage.getItem(storageKey(userId));
+    if (legacy === null) return;
+    if (storage.getItem(storageKey(scope)) === null) storage.setItem(storageKey(scope), legacy);
+    storage.removeItem(storageKey(userId));
+  } catch {
+    // Storage unavailable: nothing to carry over.
+  }
+}
 /** 2 added attachments. Version 1 is still read, as messages without them. */
 const OUTBOX_VERSION = 2;
 
@@ -227,15 +252,13 @@ export function clearOutbox(storage: OutboxStorage, userId: string): void {
 }
 
 /**
- * Removes every account's unsent messages from this device. Called when someone signs
- * out on purpose, so what they wrote is not left behind for whoever uses the app next.
+ * Removes one account's unsent messages from this device, including what an older
+ * version saved under the user id alone. Called when that account signs out on purpose,
+ * so what they wrote is not left behind for whoever uses the app next. Other saved
+ * accounts keep theirs.
  */
-export function forgetUnsentMessages(storage: Storage): void {
-  try {
-    for (const key of Object.keys(storage)) {
-      if (key.startsWith("raven.chat.outbox.")) storage.removeItem(key);
-    }
-  } catch {
-    // Nothing to clear.
-  }
+export function forgetUnsentMessages(storage: OutboxStorage, serverUrl: string, userId: string): void {
+  if (!userId) return;
+  clearOutbox(storage, accountScope(serverUrl, userId));
+  clearOutbox(storage, userId);
 }

@@ -866,3 +866,41 @@ describe("reacting to messages", () => {
     } finally { f.store.dispose(); }
   });
 });
+
+describe("the saved outbox before the first list load", () => {
+  test("sending while the list is still on its way keeps what was saved before", async () => {
+    const storage = memoryStorage();
+    const first = await openStore(fakeServer(), { storage, outboxScope: "https://a.example|me" });
+    first.server.hold("send");
+    const earlier = first.store.send(C, "from last time")!;
+    await until(() => storage.values.size === 1, "the outbox to be saved");
+    first.store.dispose();
+
+    const second = fakeServer();
+    const releaseList = second.hold("list");
+    second.hold("send");
+    const store = new ChatStore({ api: second.api, me: ME, delayScale: 0.001, storage, outboxScope: "https://a.example|me" });
+    store.streamOpened();
+    // The conversation arrives on its own (a DM being opened) before the list does.
+    store.refreshConversation(C);
+    await until(() => Boolean(store.getState().conversations[C]), "the conversation");
+    const now = store.send(C, "written meanwhile")!;
+    await until(() => (storage.getItem("raven.chat.outbox.https://a.example|me") ?? "").includes(now), "the new message to be saved");
+    const saved = JSON.parse(storage.getItem("raven.chat.outbox.https://a.example|me")!) as { items: Array<{ clientMessageId: string }> };
+    expect(saved.items.map((item) => item.clientMessageId).sort()).toEqual([earlier, now].sort());
+
+    releaseList();
+    await until(() => store.getState().listLoaded, "the list");
+    expect(conversation(store).pending.map((item) => item.clientMessageId).sort()).toEqual([earlier, now].sort());
+    store.dispose();
+  });
+
+  test("an outbox saved by user id alone is taken over by the account's own key", () => {
+    const storage = memoryStorage();
+    storage.setItem("raven.chat.outbox.me", JSON.stringify({ version: 2, items: [] }));
+    const store = new ChatStore({ api: fakeServer().api, me: ME, storage, outboxScope: "https://a.example|me" });
+    expect(storage.getItem("raven.chat.outbox.me")).toBeNull();
+    expect(storage.getItem("raven.chat.outbox.https://a.example|me")).not.toBeNull();
+    store.dispose();
+  });
+});
