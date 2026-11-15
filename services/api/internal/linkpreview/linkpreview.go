@@ -73,8 +73,8 @@ const (
 	maxImagePixels = 16_000_000
 	// decodeSlots is how many pictures are decoded at once, whatever the number of
 	// workers: a full-size decode holds up to 64 MB.
-	decodeSlots = 2
-	minImageSide   = 32
+	decodeSlots  = 2
+	minImageSide = 32
 	// fitSide is the longest side of the stored picture: enough for a card at twice its
 	// CSS size, small enough that every reader loads it quickly.
 	fitSide = 800
@@ -249,6 +249,14 @@ func readImage(body io.Reader) (*Image, error) {
 	if len(data) > maxImageBytes {
 		return nil, errors.New("linkpreview: image too large")
 	}
+	return FitImage(data, fitSide)
+}
+
+// FitImage decodes a JPEG, PNG, GIF or WebP within the fetcher's size limits (at most
+// 8192 pixels a side and 16 megapixels) and encodes it again with its longest side at
+// most side pixels, as a JPEG, or a PNG when it has transparency. Animation and metadata
+// are dropped. Other uploads that must not reach a reader's decoder as sent use it too.
+func FitImage(data []byte, side int) (*Image, error) {
 	switch http.DetectContentType(data) {
 	case "image/jpeg", "image/png", "image/gif", "image/webp":
 	default:
@@ -269,7 +277,7 @@ func readImage(body io.Reader) (*Image, error) {
 		return nil, err
 	}
 
-	scale := min(1, float64(fitSide)/float64(max(w, h)))
+	scale := min(1, float64(side)/float64(max(w, h)))
 	tw, th := max(1, int(float64(w)*scale+0.5)), max(1, int(float64(h)*scale+0.5))
 	canvas := image.NewRGBA(image.Rect(0, 0, tw, th))
 	if tw == w && th == h {

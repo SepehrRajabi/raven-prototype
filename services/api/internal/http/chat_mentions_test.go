@@ -51,6 +51,26 @@ func TestMentionCountCountsOnlyUnreadMentionsOfTheCaller(t *testing.T) {
 	}
 }
 
+// Only the latest chatMentionScan sequence numbers are searched for mentions, so an
+// unopened busy conversation costs the list a bounded scan.
+func TestMentionCountLooksOnlyAtRecentMessages(t *testing.T) {
+	server, aliceToken := newTestServer(t)
+	alice := chatAlice(t, server, aliceToken)
+	bob := chatNewPerson(t, server, "bob")
+	chatBefriend(t, server, alice, bob)
+	group := chatNewGroup(t, server, alice, "Crew", bob)
+	chatSend(t, server, bob.token, group.ID, "hi <@u:"+alice.user.ID+">")
+	if got := chatFind(chatList(t, server, alice.token), group.ID).MentionCount; got != 1 {
+		t.Fatalf("recent mention: %d", got)
+	}
+	if _, err := server.db.Exec(`UPDATE chat_conversations SET last_seq = last_seq + ? WHERE id = ?`, chatMentionScan, group.ID); err != nil {
+		t.Fatal(err)
+	}
+	if got := chatFind(chatList(t, server, alice.token), group.ID).MentionCount; got != 0 {
+		t.Fatalf("mention beyond the scan: %d", got)
+	}
+}
+
 func TestNestMentionsStayInsideTheirTree(t *testing.T) {
 	server, aliceToken := newTestServer(t)
 	alice := chatAlice(t, server, aliceToken)

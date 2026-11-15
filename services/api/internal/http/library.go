@@ -1016,6 +1016,11 @@ func (s *Server) saveLibraryItem(c *fiber.Ctx) error {
 	if err != nil {
 		return err
 	}
+	if created {
+		if err := libraryItemsQuotaTx(tx, libraryOwner{Scope: "personal"}, viewer); err != nil {
+			return err
+		}
+	}
 	item, err := s.libraryItem(tx, id)
 	if err != nil {
 		return err

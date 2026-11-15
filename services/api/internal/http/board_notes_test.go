@@ -8,6 +8,26 @@ import (
 	"time"
 )
 
+// Changes to a board's events, notes and rules are rate-limited per person, each kind
+// on its own; reading is not.
+func TestBoardChangesAreRateLimited(t *testing.T) {
+	server, aliceToken := newTestServer(t)
+	treeID := createTestTree(t, server, aliceToken, "Core")
+	base := "/v1/trees/" + treeID
+	for _, kind := range []string{"notes", "events", "rules"} {
+		for i := 0; i < boardChangesPerMinute; i++ {
+			if status, raw, _, err := chatCall(server, http.MethodPost, aliceToken, base+"/"+kind+"/order", map[string]any{"ids": []string{}}); err != nil || status == http.StatusTooManyRequests {
+				t.Fatalf("%s change %d: %d %s %v", kind, i, status, raw, err)
+			}
+		}
+		raw := chatDo(t, server, http.MethodPost, aliceToken, base+"/"+kind+"/order", map[string]any{"ids": []string{}}, http.StatusTooManyRequests)
+		if !strings.Contains(string(raw), "changing the board too quickly") {
+			t.Fatalf("%s: %s", kind, raw)
+		}
+		chatDo(t, server, http.MethodGet, aliceToken, base+"/"+kind, nil, http.StatusOK)
+	}
+}
+
 type notePayload struct {
 	Note  TreeNote   `json:"note"`
 	Notes []TreeNote `json:"notes"`

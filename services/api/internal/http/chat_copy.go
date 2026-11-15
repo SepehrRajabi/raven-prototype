@@ -146,20 +146,28 @@ func (s *Server) chatOriginViews(message ChatMessage, userIDs []string) []chatOr
 	if cache == nil {
 		cache = chatSourceViews{}
 	}
+	unknown := []string{}
+	for _, userID := range userIDs {
+		if _, seen := cache[[2]string{row.ConversationID, userID}]; !seen {
+			unknown = append(unknown, userID)
+		}
+	}
+	if len(unknown) > 0 {
+		// One set of queries for everyone, not one access check per person: this runs for
+		// each event about a copy, under the target conversation's lock.
+		sources, err := s.chatOriginSourcesFor(s.db, row.ConversationID, unknown)
+		if err != nil {
+			log.Printf("chat: check a copy's source: %v", err)
+		}
+		for _, userID := range unknown {
+			cache[[2]string{row.ConversationID, userID}] = sources[userID]
+		}
+	}
 	indexes := map[ChatOriginSource]int{}
 	views := []chatOriginView{}
 	hiddenFrom := []string{}
 	for _, userID := range userIDs {
-		key := [2]string{row.ConversationID, userID}
-		source, seen := cache[key]
-		if !seen {
-			source, err = s.chatOriginSourceFor(s.db, row.ConversationID, userID)
-			if err != nil {
-				log.Printf("chat: check a copy's source: %v", err)
-				source = nil
-			}
-			cache[key] = source
-		}
+		source := cache[[2]string{row.ConversationID, userID}]
 		if source == nil {
 			hiddenFrom = append(hiddenFrom, userID)
 			continue
@@ -181,42 +189,109 @@ func (s *Server) chatOriginViews(message ChatMessage, userIDs []string) []chatOr
 	return views
 }
 
-// chatOriginSourceFor describes a source conversation if the viewer may see it: they can
-// read it, or it is a text nest of a public tree. Otherwise it returns nil.
+// chatOriginSourceFor describes a source conversation if the viewer may see it.
 func (s *Server) chatOriginSourceFor(q chatQuerier, conversationID, viewerID string) (*ChatOriginSource, error) {
-	access, err := s.chatAccessFor(q, conversationID, viewerID)
-	if err == nil {
-		// Saved messages is nobody's place to go: a note forwarded from it has no source.
-		if access.Kind == chatKindSaved || access.Kind == chatKindRaven {
-			return nil, nil
-		}
-		source := &ChatOriginSource{ConversationID: conversationID, Kind: access.Kind, Name: access.Name, TreeID: access.TreeID}
-		if access.Kind == chatKindDM && access.PeerID != "" {
-			peer, err := chatUserRef(q, access.PeerID)
-			if err != nil && !errors.Is(err, sql.ErrNoRows) {
-				return nil, err
-			}
-			source.Name, source.PeerID = peer.DisplayName, access.PeerID
-		}
-		return source, nil
+	sources, err := s.chatOriginSourcesFor(q, conversationID, []string{viewerID})
+	return sources[viewerID], err
+}
+
+// chatOriginSourcesBatch bounds the ids in one IN list.
+const chatOriginSourcesBatch = 500
+
+// chatOriginSourcesFor describes a source conversation to each viewer who may see it: they
+// can read it (as chatAccessFor decides: messages allowed for their account, and a member
+// of the conversation, or of the tree for a text nest), or it is a text nest of a public
+// tree. Viewers who may not see it are absent from the map. Saved messages and Raven's
+// own conversation are nobody's place to go, so a copy from them has no source.
+func (s *Server) chatOriginSourcesFor(q chatQuerier, conversationID string, viewerIDs []string) (map[string]*ChatOriginSource, error) {
+	out := map[string]*ChatOriginSource{}
+	if len(viewerIDs) == 0 {
+		return out, nil
 	}
-	var expected *fiber.Error
-	if !errors.As(err, &expected) {
-		return nil, err
-	}
-	source := &ChatOriginSource{ConversationID: conversationID, Kind: chatKindNest}
-	err = q.QueryRow(
-		`SELECT c.name, c.tree_id FROM chat_conversations c JOIN trees t ON t.id = c.tree_id
-		 WHERE c.id = ? AND c.kind = 'nest' AND c.status = 'active' AND t.visibility = 'public'`,
+	var kind, status, name string
+	var treeID, visibility sql.NullString
+	err := q.QueryRow(
+		`SELECT c.kind, c.status, c.name, c.tree_id, t.visibility FROM chat_conversations c LEFT JOIN trees t ON t.id = c.tree_id WHERE c.id = ?`,
 		conversationID,
-	).Scan(&source.Name, &source.TreeID)
-	if errors.Is(err, sql.ErrNoRows) {
-		return nil, nil
+	).Scan(&kind, &status, &name, &treeID, &visibility)
+	if errors.Is(err, sql.ErrNoRows) || (err == nil && status != "active") {
+		return out, nil
 	}
 	if err != nil {
 		return nil, err
 	}
-	return source, nil
+	switch kind {
+	case chatKindDM, chatKindGroup, chatKindNest:
+	default:
+		return out, nil
+	}
+
+	// Who among the viewers may read here at all, in batches.
+	readers := map[string]bool{}
+	for start := 0; start < len(viewerIDs); start += chatOriginSourcesBatch {
+		batch := viewerIDs[start:min(start+chatOriginSourcesBatch, len(viewerIDs))]
+		member := `SELECT 1 FROM chat_members cm WHERE cm.conversation_id = ? AND cm.user_id = u.id AND cm.state = 'joined'`
+		scope := conversationID
+		if kind == chatKindNest {
+			member = `SELECT 1 FROM tree_members tm WHERE tm.tree_id = ? AND tm.user_id = u.id AND tm.state = 'joined'`
+			scope = treeID.String
+		}
+		args := make([]any, 0, len(batch)+3)
+		args = append(args, scope, database.CapabilityMessagesRead, database.CapabilityMessagesRead)
+		for _, id := range batch {
+			args = append(args, id)
+		}
+		ids, err := stringColumnTx(q,
+			`SELECT u.id FROM users u
+			 WHERE EXISTS (`+member+`)
+			   AND (u.role = 'admin' OR COALESCE(
+			     (SELECT o.allowed FROM user_capability_overrides o WHERE o.user_id = u.id AND o.capability = ?),
+			     (SELECT d.allowed FROM server_capability_defaults d WHERE d.capability = ?), FALSE))
+			   AND u.id IN (`+chatPlaceholders(len(batch))+`)`, args...)
+		if err != nil {
+			return nil, err
+		}
+		for _, id := range ids {
+			readers[id] = true
+		}
+	}
+
+	switch kind {
+	case chatKindGroup:
+		source := &ChatOriginSource{ConversationID: conversationID, Kind: kind, Name: name, TreeID: treeID.String}
+		for id := range readers {
+			out[id] = source
+		}
+	case chatKindNest:
+		source := &ChatOriginSource{ConversationID: conversationID, Kind: kind, Name: name, TreeID: treeID.String}
+		public := visibility.String == "public"
+		for _, id := range viewerIDs {
+			if readers[id] || public {
+				out[id] = source
+			}
+		}
+	case chatKindDM:
+		members, err := stringColumnTx(q, `SELECT user_id FROM chat_members WHERE conversation_id = ?`, conversationID)
+		if err != nil {
+			return nil, err
+		}
+		for id := range readers {
+			source := &ChatOriginSource{ConversationID: conversationID, Kind: kind, Name: name}
+			for _, peer := range members {
+				if peer == id {
+					continue
+				}
+				ref, err := chatUserRef(q, peer)
+				if err != nil && !errors.Is(err, sql.ErrNoRows) {
+					return nil, err
+				}
+				source.Name, source.PeerID = ref.DisplayName, peer
+				break
+			}
+			out[id] = source
+		}
+	}
+	return out, nil
 }
 
 // chatMentionToken matches any mention token: a person, a voice nest or a text nest.
@@ -473,6 +548,13 @@ func (s *Server) chatCopyMessagesTx(tx *database.Tx, caller User, sourceIDs []st
 // that space.
 func chatCopyAttachmentsTx(tx *database.Tx, fromMessageID, toMessageID string, target chatAccess, uploaderID, now string) error {
 	conversationID := target.ConversationID
+	// Lock the source's attachment rows before reading them. Deleting the source deletes
+	// those rows and queues their objects for purging; holding the lock makes that wait
+	// until this copy has committed, so the purge then sees the copy's rows and keeps the
+	// objects. (SQLite already lets one writer in at a time; this is for PostgreSQL.)
+	if _, err := tx.Exec(`UPDATE chat_attachments SET position = position WHERE message_id = ?`, fromMessageID); err != nil {
+		return err
+	}
 	ids, err := stringColumnTx(tx, `SELECT id FROM chat_attachments WHERE message_id = ? ORDER BY position, id`, fromMessageID)
 	if err != nil {
 		return err
@@ -519,6 +601,9 @@ func chatCopyAttachmentsTx(tx *database.Tx, fromMessageID, toMessageID string, t
 	return nil
 }
 
+// errChatCopiesMoved means a copy appeared in a conversation the caller has not locked.
+var errChatCopiesMoved = errors.New("chat: copies changed while deleting")
+
 // chatCopyConversationIDs lists the conversations holding live copies of a message.
 func (s *Server) chatCopyConversationIDs(originID string) ([]string, error) {
 	return s.stringColumn(
@@ -527,8 +612,9 @@ func (s *Server) chatCopyConversationIDs(originID string) ([]string, error) {
 
 // chatEraseCopiesTx erases every live copy of a message the way the original was erased,
 // each with its own conversation's next sequence number. It returns the events to send
-// once the transaction has committed.
-func (s *Server) chatEraseCopiesTx(tx *database.Tx, originID, actorID, now string) ([]pendingChatPublish, error) {
+// once the transaction has committed. With locked set, a copy in a conversation outside
+// it (made after the caller listed the copies) returns errChatCopiesMoved instead.
+func (s *Server) chatEraseCopiesTx(tx *database.Tx, originID, actorID, now string, locked map[string]bool) ([]pendingChatPublish, error) {
 	rows, err := tx.Query(
 		`SELECT m.id, m.conversation_id, m.sender_id, c.kind, COALESCE(c.tree_id, '')
 		 FROM chat_messages m JOIN chat_conversations c ON c.id = m.conversation_id
@@ -552,6 +638,13 @@ func (s *Server) chatEraseCopiesTx(tx *database.Tx, originID, actorID, now strin
 	}
 	if err := rows.Close(); err != nil {
 		return nil, err
+	}
+	if locked != nil {
+		for _, item := range copies {
+			if !locked[item.access.ConversationID] {
+				return nil, errChatCopiesMoved
+			}
+		}
 	}
 	var publishes []pendingChatPublish
 	for _, item := range copies {

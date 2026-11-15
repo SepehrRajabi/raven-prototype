@@ -322,7 +322,7 @@ func (s *Server) settleCallVote(vote *callVote, update CallVoteUpdate) {
 		s.publishCallVote(update, vote.audience())
 		return
 	}
-	until := time.Now().Add(callVoteRemoval).UTC().Format(time.RFC3339Nano)
+	until := database.Timestamp(time.Now().Add(callVoteRemoval))
 	if _, err := s.db.Exec(
 		`UPDATE nest_members SET removed_until = ?, updated_at = ? WHERE nest_id = ? AND user_id = ?`,
 		until, database.Now(), vote.nestID, vote.targetID,

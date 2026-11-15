@@ -22,9 +22,12 @@ func eventUpdates(updates []LiveUpdate, updateType string) []LiveUpdate {
 	return out
 }
 
-// ravenEventMessage reads the system_json of a person's Raven message about an event.
+// ravenEventMessage reads the system_json of a person's Raven message about an event,
+// once the queued messages have been written.
 func ravenEventMessage(t *testing.T, server *Server, userID, eventID string) map[string]any {
 	t.Helper()
+	server.waitEventMessages()
+
 	var raw string
 	err := server.db.QueryRow(
 		`SELECT m.system_json FROM chat_messages m JOIN chat_conversations c ON c.id = m.conversation_id

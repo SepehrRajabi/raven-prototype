@@ -26,8 +26,38 @@ type Object struct {
 
 type Store interface {
 	Put(context.Context, string, []byte, string) error
+	// Get reads an object of at most DefaultMaxObjectBytes.
 	Get(context.Context, string) (Object, error)
 	Delete(context.Context, string) error
+}
+
+// DefaultMaxObjectBytes is the most Get reads: the largest chat image or avatar.
+const DefaultMaxObjectBytes = 10 * 1024 * 1024
+
+// LimitedGetter reads an object up to a size the caller names, for objects that may be
+// larger than DefaultMaxObjectBytes, such as library originals.
+type LimitedGetter interface {
+	GetLimited(ctx context.Context, key string, maxBytes int64) (Object, error)
+}
+
+// GetLimited reads key with a cap of maxBytes when the store supports it, and through Get
+// otherwise (test stores that keep everything in memory).
+func GetLimited(ctx context.Context, store Store, key string, maxBytes int64) (Object, error) {
+	if limited, ok := store.(LimitedGetter); ok {
+		return limited.GetLimited(ctx, key, maxBytes)
+	}
+	return store.Get(ctx, key)
+}
+
+func readBounded(body io.Reader, maxBytes int64) ([]byte, error) {
+	if maxBytes <= 0 {
+		maxBytes = DefaultMaxObjectBytes
+	}
+	data, err := io.ReadAll(io.LimitReader(body, maxBytes+1))
+	if err != nil || int64(len(data)) > maxBytes {
+		return nil, errors.New("profile image could not be read")
+	}
+	return data, nil
 }
 
 type S3Store struct {
@@ -40,6 +70,9 @@ type UnavailableStore struct{ err error }
 func (s UnavailableStore) Put(context.Context, string, []byte, string) error { return s.err }
 func (s UnavailableStore) Get(context.Context, string) (Object, error)       { return Object{}, s.err }
 func (s UnavailableStore) Delete(context.Context, string) error              { return s.err }
+func (s UnavailableStore) GetLimited(context.Context, string, int64) (Object, error) {
+	return Object{}, s.err
+}
 
 // RAVEN_MEDIA_DIR wins over the S3 settings: a self-hosted server needs no object store.
 func NewStoreFromEnv() Store {
@@ -113,6 +146,10 @@ func (s *S3Store) Put(ctx context.Context, key string, body []byte, contentType 
 }
 
 func (s *S3Store) Get(ctx context.Context, key string) (Object, error) {
+	return s.GetLimited(ctx, key, DefaultMaxObjectBytes)
+}
+
+func (s *S3Store) GetLimited(ctx context.Context, key string, maxBytes int64) (Object, error) {
 	key, err := validKey(key)
 	if err != nil {
 		return Object{}, err
@@ -122,9 +159,9 @@ func (s *S3Store) Get(ctx context.Context, key string) (Object, error) {
 		return Object{}, errors.New("profile image is unavailable")
 	}
 	defer result.Body.Close()
-	body, err := io.ReadAll(io.LimitReader(result.Body, 10*1024*1024+1))
-	if err != nil || len(body) > 10*1024*1024 {
-		return Object{}, errors.New("profile image could not be read")
+	body, err := readBounded(result.Body, maxBytes)
+	if err != nil {
+		return Object{}, err
 	}
 	return Object{Bytes: body, ContentType: aws.ToString(result.ContentType)}, nil
 }
@@ -178,7 +215,11 @@ func (s *DiskStore) Put(_ context.Context, key string, body []byte, contentType 
 	return nil
 }
 
-func (s *DiskStore) Get(_ context.Context, key string) (Object, error) {
+func (s *DiskStore) Get(ctx context.Context, key string) (Object, error) {
+	return s.GetLimited(ctx, key, DefaultMaxObjectBytes)
+}
+
+func (s *DiskStore) GetLimited(_ context.Context, key string, maxBytes int64) (Object, error) {
 	path, err := s.path(key)
 	if err != nil {
 		return Object{}, err
@@ -188,9 +229,9 @@ func (s *DiskStore) Get(_ context.Context, key string) (Object, error) {
 		return Object{}, errors.New("profile image is unavailable")
 	}
 	defer file.Close()
-	body, err := io.ReadAll(io.LimitReader(file, 10*1024*1024+1))
-	if err != nil || len(body) > 10*1024*1024 {
-		return Object{}, errors.New("profile image could not be read")
+	body, err := readBounded(file, maxBytes)
+	if err != nil {
+		return Object{}, err
 	}
 	contentType, _ := os.ReadFile(path + ".content-type")
 	return Object{Bytes: body, ContentType: string(contentType)}, nil

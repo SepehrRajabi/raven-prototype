@@ -2,6 +2,7 @@ package http
 
 import (
 	"strings"
+	"time"
 	"unicode/utf8"
 
 	"github.com/gofiber/fiber/v2"
@@ -32,11 +33,12 @@ type TreeRule struct {
 
 func (s *Server) registerBoardRoutes(service fiber.Router) {
 	service.Get("/trees/:id/rules", s.chatRoute("list rules", s.getTreeRules))
-	service.Post("/trees/:id/rules", s.chatRoute("create rule", s.createTreeRule))
+	limit := s.userLimiter("board rules", boardChangesPerMinute, time.Minute, boardTooQuickly)
+	service.Post("/trees/:id/rules", limit, s.chatRoute("create rule", s.createTreeRule))
 	// Registered before ":ruleId" so "order" is not read as a rule id.
-	service.Post("/trees/:id/rules/order", s.chatRoute("order rules", s.orderTreeRules))
-	service.Post("/trees/:id/rules/:ruleId", s.chatRoute("edit rule", s.editTreeRule))
-	service.Delete("/trees/:id/rules/:ruleId", s.chatRoute("delete rule", s.deleteTreeRule))
+	service.Post("/trees/:id/rules/order", limit, s.chatRoute("order rules", s.orderTreeRules))
+	service.Post("/trees/:id/rules/:ruleId", limit, s.chatRoute("edit rule", s.editTreeRule))
+	service.Delete("/trees/:id/rules/:ruleId", limit, s.chatRoute("delete rule", s.deleteTreeRule))
 }
 
 func (s *Server) treeRules(q chatQuerier, treeID string) ([]TreeRule, error) {

@@ -68,7 +68,7 @@ func (s *Server) chatAttachmentCapabilities() map[string]any {
 		for name, v := range rule.variants {
 			variants[name] = v.maxBytes
 		}
-		kinds[kind] = fiber.Map{"variants": variants, "maxPixels": rule.maxPixels, "maxSide": rule.maxSide}
+		kinds[kind] = fiber.Map{"variants": variants, "maxPixels": rule.maxPixels, "maxSide": rule.maxSide, "previewMaxSide": chatImagePreviewSide}
 	}
 	return fiber.Map{"version": 1, "kinds": kinds, "sources": []string{"stored"}, "maxPerMessage": chatMaxAttachments}
 }
@@ -235,7 +235,7 @@ func validateChatAttachment(in chatAttachmentInput) error {
 	if !ok || in.Source != "stored" {
 		return fiber.NewError(422, "This server can't take that kind of attachment.")
 	}
-	if !validClientMessageID(in.ClientUploadID) || !utf8.ValidString(in.Name+in.Placeholder) || strings.ContainsRune(in.Name+in.Placeholder, 0) || len(in.Name) > 1024 || len(in.Placeholder) > 4096 {
+	if !validClientMessageID(in.ClientUploadID) || !utf8.ValidString(in.Name+in.Placeholder) || chatHasControl(in.Name+in.Placeholder, false) || len(in.Name) > 1024 || len(in.Placeholder) > 4096 {
 		return errChatAttachmentInvalid
 	}
 	if rule.needsSize && (in.Width == nil || in.Height == nil) {
@@ -307,6 +307,13 @@ func (s *Server) createChatAttachment(c *fiber.Ctx) error {
 	if err := validateChatAttachment(in); err != nil {
 		return err
 	}
+	var declared int64
+	for _, v := range in.Variants {
+		declared += v.Size
+	}
+	if err := chatPendingQuotaTx(tx, user, declared); err != nil {
+		return err
+	}
 	id = auth.NewID()
 	result, err := tx.Exec(`INSERT INTO chat_attachments (id, conversation_id, uploader_id, client_upload_id, kind, source, content_type, size_bytes, name, width, height, placeholder, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT (uploader_id, client_upload_id) DO NOTHING`, id, conversation, user, in.ClientUploadID, in.Kind, in.Source, in.ContentType, in.Size, in.Name, in.Width, in.Height, in.Placeholder, database.Now())
 	if err != nil {
@@ -366,7 +373,7 @@ func validateChatVariant(a ChatAttachment, variant, contentType string, body []b
 		if variant == "full" && !((w == fw && h == fh) || (w == fh && h == fw)) {
 			return errChatAttachmentInvalid
 		}
-		if variant == "preview" && !((w <= fw && h <= fh) || (w <= fh && h <= fw)) {
+		if variant == "preview" && (w > chatImagePreviewSide || h > chatImagePreviewSide || !((w <= fw && h <= fh) || (w <= fh && h <= fw))) {
 			return errChatAttachmentInvalid
 		}
 	}

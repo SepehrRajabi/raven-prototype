@@ -2,10 +2,10 @@ package media
 
 import (
 	"context"
-	"os"
-	"path/filepath"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"testing"
 )
 
@@ -83,5 +83,41 @@ func TestNewStoreFromEnvPrefersMediaDir(t *testing.T) {
 	t.Setenv("RAVEN_MEDIA_DIR", filepath.Join(t.TempDir(), "m"))
 	if _, ok := NewStoreFromEnv().(*DiskStore); !ok {
 		t.Fatal("RAVEN_MEDIA_DIR did not select the disk store")
+	}
+}
+
+// Library originals may be up to 20 MB, more than Get reads; GetLimited reads them with
+// the caller's cap, in both stores.
+func TestGetLimitedReadsObjectsLargerThanTheDefault(t *testing.T) {
+	const size = 11 * 1024 * 1024
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "video/mp4")
+		_, _ = w.Write(make([]byte, size))
+	}))
+	defer server.Close()
+	s3, err := NewS3Store(server.URL, "test", "us-east-1", "test", "test", true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	disk, err := NewDiskStore(filepath.Join(t.TempDir(), "media"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	if err := disk.Put(ctx, "library/a/original.mp4", make([]byte, size), "video/mp4"); err != nil {
+		t.Fatal(err)
+	}
+	for name, store := range map[string]Store{"s3": s3, "disk": disk} {
+		key := "library/a/original.mp4"
+		if _, err := store.Get(ctx, key); err == nil {
+			t.Errorf("%s: Get read an object over the default cap", name)
+		}
+		object, err := GetLimited(ctx, store, key, 20*1024*1024)
+		if err != nil || len(object.Bytes) != size {
+			t.Errorf("%s: GetLimited bytes=%d err=%v", name, len(object.Bytes), err)
+		}
+		if _, err := GetLimited(ctx, store, key, size-1); err == nil {
+			t.Errorf("%s: GetLimited read past its cap", name)
+		}
 	}
 }

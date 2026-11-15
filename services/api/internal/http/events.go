@@ -30,6 +30,12 @@ const streamSessionCheckTicks = 20
 // further behind than this is disconnected rather than left with a hole in what it knows.
 const streamFrameBuffer = 256
 
+// maxStreamsPerSession is how many event streams one sign-in may hold open. An app
+// window holds one; a few more cover reconnects whose old stream has not been noticed
+// as gone yet. Opening another ends that sign-in's oldest, so a client cannot pile up
+// streams, and an honest one that reconnects is never refused.
+const maxStreamsPerSession = 8
+
 const (
 	streamEventNest = "nest-update"
 	streamEventChat = "chat"
@@ -55,6 +61,8 @@ type streamClient struct {
 	// stillValid, when set, is asked now and then whether the session is still good.
 	stillValid func() bool
 	metrics    *serverMetrics
+	// seq orders a session's streams by when they opened.
+	seq uint64
 }
 
 func (c *streamClient) end() {
@@ -66,6 +74,7 @@ type eventBroker struct {
 	clients map[*streamClient]struct{}
 	byUser  map[string]map[*streamClient]struct{}
 	metrics *serverMetrics
+	seq     uint64
 }
 
 type LiveUpdate struct {
@@ -113,6 +122,11 @@ func (b *eventBroker) subscribeSession(userID, authSessionID string, chat bool) 
 		metrics:       b.metrics,
 	}
 	b.mu.Lock()
+	b.seq++
+	client.seq = b.seq
+	if authSessionID != "" {
+		b.trimSessionLocked(userID, authSessionID, maxStreamsPerSession-1)
+	}
 	b.clients[client] = struct{}{}
 	streams := b.byUser[userID]
 	if streams == nil {
@@ -126,6 +140,27 @@ func (b *eventBroker) subscribeSession(userID, authSessionID string, chat bool) 
 		b.metrics.streamsOpen.Add(1)
 	}
 	return client
+}
+
+// trimSessionLocked ends a sign-in's oldest streams until at most keep are left.
+func (b *eventBroker) trimSessionLocked(userID, authSessionID string, keep int) {
+	for {
+		var oldest *streamClient
+		count := 0
+		for client := range b.byUser[userID] {
+			if client.authSessionID != authSessionID {
+				continue
+			}
+			count++
+			if oldest == nil || client.seq < oldest.seq {
+				oldest = client
+			}
+		}
+		if count <= keep || oldest == nil {
+			return
+		}
+		b.removeLocked(oldest, "replaced")
+	}
 }
 
 // unsubscribe is called when a stream's writer returns. It is safe after the broker has

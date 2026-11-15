@@ -14,8 +14,11 @@ import (
 // Policy is what the relay asks the rest of the API: who a session token belongs to and
 // whether that person may still publish or consume in the share's place. It is asked
 // when a connection opens and for every flow, so losing access takes effect at once.
+//
+// Authenticate also names the sign-in (its public id, not the token), which is what
+// EndSession and Sessions go by.
 type Policy interface {
-	Authenticate(token string) (userID string, err error)
+	Authenticate(token string) (userID, sessionID string, err error)
 	MayPublish(userID string, share ShareInfo) error
 	MayConsume(userID string, share ShareInfo) error
 }
@@ -28,14 +31,74 @@ type Server struct {
 	ln     *quic.Listener // nil until Listen; WebSocket clients come through the API
 	flowID atomic.Uint32
 
-	// The connections each sign-in (session token) holds, so they can be cut when the
-	// sign-in ends.
+	// The connections each sign-in (by its public session id) holds, so they can be cut
+	// when the sign-in ends.
 	mu       sync.Mutex
 	sessions map[string]map[Conn]struct{}
+
+	// Connections that have not signed in yet, in total and per source address. Each
+	// can live helloTimeout before it is dropped, so without a cap a flood of them
+	// would hold goroutines and memory however briefly each one lasts.
+	pendingMu     sync.Mutex
+	pending       int
+	pendingBySrc  map[string]int
+	maxPending    int
+	maxPendingSrc int
 }
 
+const (
+	// DefaultMaxPendingConns is how many connections may be waiting to sign in at once.
+	DefaultMaxPendingConns = 512
+	// DefaultMaxPendingPerSource is how many of those may come from one address.
+	DefaultMaxPendingPerSource = 16
+)
+
 func NewServer(reg *Registry, policy Policy) *Server {
-	return &Server{reg: reg, policy: policy, sessions: map[string]map[Conn]struct{}{}}
+	return &Server{
+		reg:           reg,
+		policy:        policy,
+		sessions:      map[string]map[Conn]struct{}{},
+		pendingBySrc:  map[string]int{},
+		maxPending:    DefaultMaxPendingConns,
+		maxPendingSrc: DefaultMaxPendingPerSource,
+	}
+}
+
+// SetPendingLimits changes the caps on connections that have not signed in yet. A value
+// of zero or less keeps the current one.
+func (s *Server) SetPendingLimits(total, perSource int) {
+	s.pendingMu.Lock()
+	defer s.pendingMu.Unlock()
+	if total > 0 {
+		s.maxPending = total
+	}
+	if perSource > 0 {
+		s.maxPendingSrc = perSource
+	}
+}
+
+// admitPending reserves a place for a connection from source that has not signed in
+// yet. It returns false when the relay is full, and otherwise a release func to call
+// once the connection has signed in or ended.
+func (s *Server) admitPending(source string) (func(), bool) {
+	s.pendingMu.Lock()
+	defer s.pendingMu.Unlock()
+	if s.pending >= s.maxPending || s.pendingBySrc[source] >= s.maxPendingSrc {
+		return nil, false
+	}
+	s.pending++
+	s.pendingBySrc[source]++
+	var once sync.Once
+	return func() {
+		once.Do(func() {
+			s.pendingMu.Lock()
+			defer s.pendingMu.Unlock()
+			s.pending--
+			if s.pendingBySrc[source]--; s.pendingBySrc[source] <= 0 {
+				delete(s.pendingBySrc, source)
+			}
+		})
+	}, true
 }
 
 func (s *Server) track(token string, conn Conn) {
@@ -103,7 +166,25 @@ func refuse(ctrl Stream, conn Conn, code, message string) {
 }
 
 // Serve runs one client connection until it ends, whatever transport carries it.
+// Connections that come in through ServeFrom are counted against the pre-sign-in caps;
+// Serve itself does not count them.
 func (s *Server) Serve(conn Conn) {
+	s.serve(conn, func() {})
+}
+
+// ServeFrom is Serve for a connection from a known source address. It is refused at once
+// when too many connections are already waiting to sign in, in total or from source.
+func (s *Server) ServeFrom(conn Conn, source string) {
+	release, ok := s.admitPending(source)
+	if !ok {
+		conn.Close("busy")
+		return
+	}
+	defer release()
+	s.serve(conn, release)
+}
+
+func (s *Server) serve(conn Conn, signedIn func()) {
 	// A client that hasn't said hello and attached in time is dropped.
 	late := time.AfterFunc(helloTimeout, func() { conn.Close("hello_timeout") })
 	defer late.Stop()
@@ -119,13 +200,15 @@ func (s *Server) Serve(conn Conn) {
 		refuse(ctrl, conn, "bad_hello", "The relay didn’t understand this connection.")
 		return
 	}
-	userID, err := s.policy.Authenticate(hello.Token)
+	userID, sessionID, err := s.policy.Authenticate(hello.Token)
 	if err != nil {
 		refuse(ctrl, conn, "unauthenticated", err.Error())
 		return
 	}
-	s.track(hello.Token, conn)
-	defer s.untrack(hello.Token, conn)
+	// Signed in: it no longer counts against the caps on strangers.
+	signedIn()
+	s.track(sessionID, conn)
+	defer s.untrack(sessionID, conn)
 	if err := WriteFrame(ctrl, Frame{Type: FrameHelloOK, UserID: userID}); err != nil {
 		conn.Close("hello")
 		return
