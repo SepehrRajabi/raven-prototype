@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -67,6 +68,17 @@ type fakeTG struct {
 	deletes  int
 	docs     map[string][]byte
 	setTitle string
+
+	// Optional behaviour for the limit tests.
+	body          []byte        // download body; default "data:<path>"
+	fileSize      string        // getFile's file_size; default "10"
+	stickers      int           // getStickerSet returns this many plain stickers instead
+	downloadDelay time.Duration // each download takes this long
+	inflight      int
+	maxInflight   int
+	docCalls      int
+	failDoc       int // this sendDocument call (1-based) fails
+	docOrder      []string
 }
 
 func (f *fakeTG) handler(t *testing.T) http.HandlerFunc {
@@ -74,12 +86,34 @@ func (f *fakeTG) handler(t *testing.T) http.HandlerFunc {
 		p := r.URL.Path
 		switch {
 		case strings.HasPrefix(p, "/file/bot"):
-			io.WriteString(w, "data:"+strings.TrimPrefix(p, "/file/botTOK/"))
+			f.mu.Lock()
+			f.inflight++
+			f.maxInflight = max(f.maxInflight, f.inflight)
+			delay, body := f.downloadDelay, f.body
+			f.mu.Unlock()
+			time.Sleep(delay)
+			if body == nil {
+				body = []byte("data:" + strings.TrimPrefix(p, "/file/botTOK/"))
+			}
+			w.Write(body)
+			f.mu.Lock()
+			f.inflight--
+			f.mu.Unlock()
 			return
 		case strings.HasSuffix(p, "/getFile"):
 			var in map[string]string
 			json.NewDecoder(r.Body).Decode(&in)
-			io.WriteString(w, `{"ok":true,"result":{"file_path":"files/`+in["file_id"]+`.dat","file_size":10}}`)
+			size := f.fileSize
+			if size == "" {
+				size = "10"
+			}
+			io.WriteString(w, `{"ok":true,"result":{"file_path":"files/`+in["file_id"]+`.dat","file_size":`+size+`}}`)
+		case strings.HasSuffix(p, "/getStickerSet") && f.stickers > 0:
+			var list []string
+			for i := range f.stickers {
+				list = append(list, fmt.Sprintf(`{"file_id":"b%d","file_unique_id":"ub%d","emoji":"x"}`, i, i))
+			}
+			io.WriteString(w, `{"ok":true,"result":{"name":"big","title":"Big","stickers":[`+strings.Join(list, ",")+`]}}`)
 		case strings.HasSuffix(p, "/getStickerSet"):
 			io.WriteString(w, `{"ok":true,"result":{"name":"cats","title":"`+f.setTitle+`","stickers":[{"file_id":"s1","file_unique_id":"u1","emoji":"a"},{"file_id":"s2","file_unique_id":"u2","emoji":"b","is_animated":true},{"file_id":"s3","file_unique_id":"u3","type":"custom_emoji"}]}}`)
 		case strings.HasSuffix(p, "/sendMessage"), strings.HasSuffix(p, "/editMessageText"):
@@ -103,7 +137,14 @@ func (f *fakeTG) handler(t *testing.T) http.HandlerFunc {
 			}
 			b, _ := io.ReadAll(file)
 			f.mu.Lock()
+			f.docCalls++
+			if f.docCalls == f.failDoc {
+				f.mu.Unlock()
+				io.WriteString(w, `{"ok":false,"error_code":400,"description":"Bad Request"}`)
+				return
+			}
 			f.docs[h.Filename] = b
+			f.docOrder = append(f.docOrder, h.Filename)
 			f.mu.Unlock()
 			io.WriteString(w, `{"ok":true,"result":{"message_id":5}}`)
 		case strings.HasSuffix(p, "/deleteMessage"):
@@ -122,7 +163,7 @@ func newBot(t *testing.T) (*Bot, *fakeTG) {
 	srv := httptest.NewServer(f.handler(t))
 	t.Cleanup(srv.Close)
 	api := botapi.New(srv.URL, "TOK")
-	api.Sleep = func(time.Duration) {}
+	api.Sleep = func(context.Context, time.Duration) error { return nil }
 	store := drafts.New(t.TempDir(), nil)
 	return New(api, store, slog.New(slog.NewTextHandler(io.Discard, nil))), f
 }

@@ -1,7 +1,9 @@
 package botapi
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -18,8 +20,39 @@ func newTest(t *testing.T, h http.HandlerFunc) *Client {
 	srv := httptest.NewServer(h)
 	t.Cleanup(srv.Close)
 	c := New(srv.URL, "SECRET-TOKEN")
-	c.Sleep = func(time.Duration) {}
+	c.Sleep = func(context.Context, time.Duration) error { return nil }
 	return c
+}
+
+func TestDownloadStopsAtLimit(t *testing.T) {
+	// getFile reported no size (or a custom API URL lies): the body is still capped.
+	c := newTest(t, func(w http.ResponseWriter, r *http.Request) {
+		io.WriteString(w, strings.Repeat("x", 64))
+	})
+	dst := filepath.Join(t.TempDir(), "big.gif")
+	if _, err := c.Download(t.Context(), "animations/big.gif", dst, 63); !errors.Is(err, ErrTooBig) {
+		t.Fatalf("err=%v", err)
+	}
+	if _, err := os.Stat(dst); !os.IsNotExist(err) {
+		t.Fatalf("partial file kept: %v", err)
+	}
+	if n, err := c.Download(t.Context(), "animations/big.gif", dst, 64); err != nil || n != 64 {
+		t.Fatalf("exactly at the limit: n=%d err=%v", n, err)
+	}
+}
+
+func TestRetryAfterWaitEndsWithContext(t *testing.T) {
+	c := newTest(t, func(w http.ResponseWriter, r *http.Request) {
+		io.WriteString(w, `{"ok":false,"error_code":429,"description":"Too Many Requests","parameters":{"retry_after":3600}}`)
+	})
+	c.Sleep = sleep // the real one
+	ctx, cancel := context.WithTimeout(t.Context(), 50*time.Millisecond)
+	defer cancel()
+	start := time.Now()
+	_, err := c.SendMessage(ctx, 1, "hi", 0, nil)
+	if !errors.Is(err, context.DeadlineExceeded) || time.Since(start) > 5*time.Second {
+		t.Fatalf("err=%v after %v", err, time.Since(start))
+	}
 }
 
 func TestGetStickerSet(t *testing.T) {
@@ -51,7 +84,7 @@ func TestRetryAfter429(t *testing.T) {
 		}
 		io.WriteString(w, `{"ok":true,"result":{"message_id":7}}`)
 	})
-	c.Sleep = func(d time.Duration) { slept = d }
+	c.Sleep = func(_ context.Context, d time.Duration) error { slept = d; return nil }
 	id, err := c.SendMessage(t.Context(), 1, "hi", 0, nil)
 	if err != nil || id != 7 || calls.Load() != 2 || slept != 3*time.Second {
 		t.Fatalf("id=%d err=%v calls=%d slept=%v", id, err, calls.Load(), slept)
@@ -108,15 +141,15 @@ func TestDownloadAndTokenRedaction(t *testing.T) {
 		io.WriteString(w, "imagebytes")
 	})
 	dst := filepath.Join(t.TempDir(), "out.webp")
-	if err := c.Download(t.Context(), "stickers/file_1.webp", dst); err != nil {
-		t.Fatal(err)
+	if n, err := c.Download(t.Context(), "stickers/file_1.webp", dst, 100); err != nil || n != 10 {
+		t.Fatalf("n=%d err=%v", n, err)
 	}
 	if b, _ := os.ReadFile(dst); string(b) != "imagebytes" {
 		t.Fatalf("file %q", b)
 	}
 	// A dead server: the transport error holds the URL; the client must hide the token.
 	dead := New("http://127.0.0.1:1", "SECRET-TOKEN")
-	err := dead.Download(t.Context(), "x.webp", filepath.Join(t.TempDir(), "y"))
+	_, err := dead.Download(t.Context(), "x.webp", filepath.Join(t.TempDir(), "y"), 100)
 	if err == nil || strings.Contains(err.Error(), "SECRET-TOKEN") {
 		t.Fatalf("err=%v", err)
 	}
