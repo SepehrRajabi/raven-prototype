@@ -11,6 +11,12 @@ x-logging: &logging
     max-size: 10m
     max-file: "3"
 
+# No process may gain privileges it starts without (setuid binaries, file capabilities).
+# Dropping privileges still works: the postgres, redis and nginx entrypoints start as
+# root and switch to their own user, which needs no setuid binary.
+x-security: &security
+  - no-new-privileges:true
+
 services:
   postgres:
     image: postgres:16-alpine@sha256:57c72fd2a128e416c7fcc499958864df5301e940bca0a56f58fddf30ffc07777
@@ -28,6 +34,7 @@ services:
       timeout: 5s
       retries: 12
     logging: *logging
+    security_opt: *security
     networks: [raven_internal]
 
   redis:
@@ -42,6 +49,7 @@ services:
       timeout: 5s
       retries: 12
     logging: *logging
+    security_opt: *security
     networks: [raven_internal]
 
   # No memory limit on purpose: an out-of-memory kill would drop calls in progress.
@@ -76,6 +84,7 @@ services:
       timeout: 5s
       retries: 12
     logging: *logging
+    security_opt: *security
     networks:
       raven_internal:
         aliases: [raven-livekit]
@@ -117,6 +126,7 @@ services:
       timeout: 5s
       retries: 12
     logging: *logging
+    security_opt: *security
     networks:
       raven_internal:
         aliases: [raven-api]
@@ -126,17 +136,18 @@ services:
     pull_policy: never
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "wget", "--quiet", "--spider", "http://127.0.0.1/healthz"]
+      test: ["CMD", "wget", "--quiet", "--spider", "http://127.0.0.1:8080/healthz"]
       interval: 10s
       timeout: 5s
       retries: 12
     logging: *logging
+    security_opt: *security
     networks:
       raven_internal:
         aliases: [raven-admin]
 
   releases:
-    image: nginx:1.30-trixie
+    image: nginx:1.30.6-trixie@sha256:42c68eab6f7e22611786a9fe1d1c019e275c50185bd54b8f75dc2b9184322703
     restart: unless-stopped
     volumes:
       - /srv/raven/releases-nginx.conf:/etc/nginx/conf.d/default.conf:ro
@@ -147,25 +158,30 @@ services:
       timeout: 5s
       retries: 12
     logging: *logging
+    security_opt: *security
     networks:
       raven_internal:
         aliases: [raven-releases]
 
   edge:
-    image: nginx:1.30-trixie
+    image: nginx:1.30.6-trixie@sha256:42c68eab6f7e22611786a9fe1d1c019e275c50185bd54b8f75dc2b9184322703
     restart: unless-stopped
     depends_on: [api, admin, releases, livekit]
     ports:
       - "80:80/tcp"
+      # Origin TLS (see edge-nginx.conf): uncomment with the tls volume below.
+      # - "443:443/tcp"
     volumes:
       - /srv/raven/edge-nginx.conf:/etc/nginx/conf.d/default.conf:ro
       - /srv/raven/.admin.htpasswd:/etc/nginx/raven-admin.htpasswd:ro
+      # - /srv/raven/tls:/etc/nginx/tls:ro
     healthcheck:
       test: ["CMD", "curl", "--fail", "--silent", "http://127.0.0.1/edge-health"]
       interval: 10s
       timeout: 5s
       retries: 12
     logging: *logging
+    security_opt: *security
     networks: [raven_internal]
 
 volumes:

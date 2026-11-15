@@ -4,9 +4,12 @@ ARG TARGETOS=linux
 ARG TARGETARCH=amd64
 WORKDIR /src/services/api
 COPY services/api/go.mod services/api/go.sum ./
-# The default module proxy refuses some downloads from some networks. "|" moves on to the
-# next source after any failure; go.sum still checks every module that arrives.
-ARG GOPROXY=https://proxy.golang.org|https://goproxy.cn|direct
+# Go's own module proxy, then the modules' source repositories. Some networks are refused
+# some downloads by proxy.golang.org; a builder there can add a fallback proxy with
+# --build-arg GOPROXY=... (release.ps1 passes RAVEN_GOPROXY on). "|" moves on to the next
+# source after any failure, and go.sum still checks every module that arrives, but the
+# fallback learns which modules are fetched and the build then depends on it.
+ARG GOPROXY=https://proxy.golang.org|direct
 ENV GOPROXY=${GOPROXY}
 RUN go mod download
 COPY services/api ./
@@ -20,9 +23,16 @@ RUN CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH go build -trimpath -ldflags=
 FROM debian:12-slim@sha256:60eac759739651111db372c07be67863818726f754804b8707c90979bda511df AS ffmpeg
 
 ARG FFMPEG_VERSION=7.1.1
+# sha256 of ffmpeg-7.1.1.tar.xz from ffmpeg.org. It was checked against Debian's copy of the
+# same tarball (ffmpeg_7.1.1.orig.tar.xz, whose upstream signature Debian verifies). When
+# bumping the version, check the new tarball's .asc signature with FFmpeg's release key
+# before taking its hash.
+ARG FFMPEG_SHA256=733984395e0dbbe5c046abda2dc49a5544e7e0e1e2366bba849222ae9e3a03b1
 RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates wget xz-utils build-essential nasm pkg-config libvpx-dev libwebp-dev && rm -rf /var/lib/apt/lists/*
 WORKDIR /src
-RUN wget -q https://ffmpeg.org/releases/ffmpeg-${FFMPEG_VERSION}.tar.xz && tar xf ffmpeg-${FFMPEG_VERSION}.tar.xz
+RUN wget -q https://ffmpeg.org/releases/ffmpeg-${FFMPEG_VERSION}.tar.xz \
+    && echo "${FFMPEG_SHA256}  ffmpeg-${FFMPEG_VERSION}.tar.xz" | sha256sum --check --strict - \
+    && tar xf ffmpeg-${FFMPEG_VERSION}.tar.xz
 WORKDIR /src/ffmpeg-${FFMPEG_VERSION}
 RUN ./configure --prefix=/opt/ffmpeg --disable-everything --disable-doc --disable-debug --disable-network \
       --disable-autodetect --disable-ffplay --enable-libvpx --enable-libwebp \

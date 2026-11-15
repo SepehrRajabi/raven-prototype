@@ -15,4 +15,13 @@ if ! cmp -s "$new" "$list"; then
   install -m 644 "$new" "$list"
   /usr/local/sbin/raven-firewall-apply
   echo "CDN ranges updated ($n entries)"
+  # edge-nginx.conf trusts X-Forwarded-For only from these ranges, and keeps its own copy.
+  if [ -f /srv/raven/edge-nginx.conf ]; then
+    missing=$(while read -r range; do
+      grep -qF "set_real_ip_from $range;" /srv/raven/edge-nginx.conf || echo "$range"
+    done < "$list")
+    if [ -n "$missing" ]; then
+      echo "edge-nginx.conf lacks set_real_ip_from for: $(echo "$missing" | paste -sd' ' -). Clients behind those PoPs show the PoP's address until it is added." >&2
+    fi
+  fi
 fi
