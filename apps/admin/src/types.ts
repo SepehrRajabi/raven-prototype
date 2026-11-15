@@ -27,6 +27,8 @@ export interface AdminUser {
   lastSeenAt: string | null;
   activeSessions: number;
   spaceCount: number;
+  /** The owner deleted the account. Only a tombstone row is left, and nothing can be changed. */
+  deleted: boolean;
 }
 
 export type CapabilityName =
@@ -67,6 +69,8 @@ export interface UserSession {
   createdAt: string;
   lastAccessedAt: string;
   expiresAt: string;
+  /** True for the session this dashboard is signed in with. Older servers leave it out. */
+  current?: boolean;
 }
 
 export interface UserSpace {

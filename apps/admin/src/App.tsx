@@ -5,6 +5,7 @@ import { ApiError, browserApi } from "./api";
 import type { AdminApi } from "./api";
 import type { SessionUser } from "./types";
 import { Button, Field, Input, Loading, Notice, cn } from "./components/ui";
+import { ErrorBoundary } from "./components/ErrorBoundary";
 import { errorMessage } from "./lib/useLoad";
 import { routeHref, useRoute } from "./lib/route";
 import type { Route } from "./lib/route";
@@ -202,7 +203,9 @@ function Shell({ api, user, onSignOut }: { api: AdminApi; user: SessionUser; onS
       <main className="min-w-0 flex-1 p-3 md:pl-0">
         <div className="min-h-full rounded-panel bg-card px-5 py-6 md:px-8">
           <div className="mx-auto max-w-4xl">
-            <Page api={api} route={route} me={user} />
+            <ErrorBoundary resetKey={routeHref(route)}>
+              <Page api={api} route={route} me={user} />
+            </ErrorBoundary>
           </div>
         </div>
         <div className="p-3 md:hidden">

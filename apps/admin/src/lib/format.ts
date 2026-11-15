@@ -52,6 +52,14 @@ export const CAPABILITY_TEXT: Record<CapabilityName, { title: string; descriptio
   "workshop.use_ports": { title: "Use shared ports", description: "Connect to ports others have shared in a call or room." },
 };
 
+/**
+ * The words for a capability. A server newer than this dashboard can send one it does not
+ * know; that shows under its own name rather than breaking the page.
+ */
+export function capabilityText(capability: string): { title: string; description: string } {
+  return (CAPABILITY_TEXT as Record<string, { title: string; description: string } | undefined>)[capability] ?? { title: capability, description: "" };
+}
+
 /** The capabilities that take a limit, and what the limit counts. */
 export const CAPABILITY_LIMITS: Partial<Record<CapabilityName, { one: string; many: string; label: string }>> = {
   "spaces.create": { one: "space", many: "spaces", label: "Most spaces one account may own" },
@@ -92,6 +100,7 @@ const ACTION_TEXT: Record<string, string> = {
   "space.member_added": "Added member",
   "space.member_removed": "Removed member",
   "space.member_role_changed": "Changed member role",
+  "space.member_name_changed": "Set a member’s name",
   "room.created": "Created room",
   "room.renamed": "Renamed room",
   "room.removed": "Removed room",
@@ -99,6 +108,8 @@ const ACTION_TEXT: Record<string, string> = {
   "settings.server_image_changed": "Changed server image",
   "settings.accounts_changed": "Changed who can join",
   "user.signed_up": "Signed up",
+  "account.deleted": "Deleted their own account",
+  "admin.message_sent": "Sent a message from Raven",
   "invite.created": "Made an invite",
   "invite.revoked": "Withdrew an invite",
   "library.unpublished": "Unpublished a GIF or sticker",
