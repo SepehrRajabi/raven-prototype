@@ -1,5 +1,5 @@
 //! `.ravenpack`: a zip of `manifest.json` and `items/<file>`. The format is in
-//! docs/plans/gifs-stickers/README.md. Everything is checked before anything is staged:
+//! docs/ravenpack.md. Everything is checked before anything is staged:
 //! entry names (no paths, so nothing can be written or read outside the pack), counts and
 //! sizes, and the manifest. Files are originals; the server converts them and enforces
 //! its own limits when they are added.

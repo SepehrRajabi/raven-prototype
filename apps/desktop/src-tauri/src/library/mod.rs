@@ -223,7 +223,7 @@ fn read_path(path: &Path) -> Result<Vec<u8>> {
 }
 
 /// Stages a file: its bytes with `{name}` in the `X-Raven-Library` header (picked in the
-/// page), or `{path}` (dropped on the window).
+/// page), or `{path}` (dropped on the window; any other path is refused).
 #[tauri::command]
 pub async fn library_stage(app: tauri::AppHandle, request: Request<'_>) -> Result<StagedFile> {
     let root = staging(&app)?;
@@ -250,6 +250,10 @@ pub async fn library_stage(app: tauri::AppHandle, request: Request<'_>) -> Resul
                 .to_string_lossy()
                 .into_owned();
             let path = options.path;
+            // Only a file the person dropped on the window this session.
+            if !crate::picked_paths::is_granted(&path) {
+                return Err(LibraryError::Io);
+            }
             return tauri::async_runtime::spawn_blocking(move || {
                 stage(&root, &read_path(&path)?, &name)
             })
@@ -292,7 +296,10 @@ pub async fn library_pick_pack(window: tauri::WebviewWindow) -> Result<Option<St
             return Ok(None);
         };
         let path = path.into_path().map_err(|_| LibraryError::Io)?;
-        Ok(Some(path.to_string_lossy().into_owned()))
+        let shown = path.to_string_lossy().into_owned();
+        // `read_ravenpack` opens only what was picked or dropped, under the same spelling.
+        crate::picked_paths::grant(Path::new(&shown));
+        Ok(Some(shown))
     })
     .await
     .map_err(|_| LibraryError::Io)?
@@ -301,6 +308,9 @@ pub async fn library_pick_pack(window: tauri::WebviewWindow) -> Result<Option<St
 /// Opens a `.ravenpack`, checks it and stages its items. See `pack.rs` for the rules.
 #[tauri::command]
 pub async fn read_ravenpack(app: tauri::AppHandle, path: String) -> Result<Pack> {
+    if !crate::picked_paths::is_granted(Path::new(&path)) {
+        return Err(LibraryError::Io);
+    }
     let root = staging(&app)?;
     tauri::async_runtime::spawn_blocking(move || {
         let file = fs::File::open(&path)?;
