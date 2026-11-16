@@ -1,5 +1,6 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
-import { Headphones, HeadphoneOff, Mic, MicOff, MonitorUp, WifiLow, WifiOff } from "lucide-react";
+import { Hand, Headphones, HeadphoneOff, Mic, MicOff, MonitorUp, WifiLow, WifiOff } from "lucide-react";
+import { handLabel } from "@/lib/raisedHand";
 import { Avatar } from "@/components/ui/avatar";
 import { api, type KnockReply } from "@/lib/api";
 import { overlayAnswers, overlayRemoveHint } from "@/shells/ravenv1/knockReplies";
@@ -103,7 +104,7 @@ const DEFAULT_DISPLAY: Display = {
   mutedHint: true,
   showWeakConnections: true,
   showJoinsAndLeaves: true,
-  overlayButtons: { mute: true, deafen: true, away: true },
+  overlayButtons: { mute: true, deafen: true, away: true, hand: false },
   scrollVolume: true,
 };
 
@@ -189,7 +190,7 @@ export function VoiceOverlayWindow() {
   scrollVolumeRef.current = display.scrollVolume;
   snapshotRef.current = snapshot;
   const [pendingButtons, setPendingButtons] = useState<Partial<Record<CardButton, boolean>>>({});
-  const [hotkeys, setHotkeys] = useState({ mic: "", deafen: "" });
+  const [hotkeys, setHotkeys] = useState({ mic: "", deafen: "", hand: "" });
 
   const later = (callback: () => void, ms: number) => {
     const timer = window.setTimeout(() => {
@@ -240,7 +241,7 @@ export function VoiceOverlayWindow() {
     mediaHotkeyCommands
       .getSettings()
       .then((settings) => {
-        if (active) setHotkeys({ mic: settings.mic, deafen: settings.deafen });
+        if (active) setHotkeys({ mic: settings.mic, deafen: settings.deafen, hand: settings.hand ?? "" });
       })
       .catch(() => undefined);
     return () => {
@@ -483,10 +484,11 @@ export function VoiceOverlayWindow() {
   const localMuted = local?.muted ?? false;
   const localDeafened = local?.deafened ?? false;
   const localAway = local?.away ?? false;
+  const localHand = (local?.handOrder ?? 0) > 0;
   // A press stays pending until the thing it changes changes, so a second press cannot
   // send the same action twice.
   useEffect(() => {
-    const flags: Record<CardButton, boolean> = { mute: localMuted, deafen: localDeafened, away: localAway };
+    const flags: Record<CardButton, boolean> = { mute: localMuted, deafen: localDeafened, away: localAway, hand: localHand };
     setPendingButtons((current) => {
       const settled = (Object.keys(current) as CardButton[]).filter((kind) => current[kind] !== flags[kind]);
       if (settled.length === 0) return current;
@@ -494,10 +496,10 @@ export function VoiceOverlayWindow() {
       for (const kind of settled) delete next[kind];
       return next;
     });
-  }, [localMuted, localDeafened, localAway]);
+  }, [localMuted, localDeafened, localAway, localHand]);
 
   const press = (kind: CardButton) => {
-    const was = { mute: localMuted, deafen: localDeafened, away: localAway }[kind];
+    const was = { mute: localMuted, deafen: localDeafened, away: localAway, hand: localHand }[kind];
     setPendingButtons((current) => ({ ...current, [kind]: was }));
     later(
       () =>
@@ -513,7 +515,9 @@ export function VoiceOverlayWindow() {
         ? { kind: "mic" }
         : kind === "deafen"
           ? { kind: "deafen" }
-          : { kind: "away", away: !localAway };
+          : kind === "away"
+            ? { kind: "away", away: !localAway }
+            : { kind: "hand", hand: !localHand };
     void voiceOverlayCommands.action(action).catch(() => undefined);
   };
 
@@ -523,6 +527,7 @@ export function VoiceOverlayWindow() {
     interactive: layout.interactive,
     buttons: display.overlayButtons,
     awaySupported: snapshot.awaySupported,
+    handSupported: snapshot.handSupported,
   });
   const barKey = barKinds.join(",");
   const [bar, setBar] = useState<{ kinds: CardButton[]; leaving: boolean } | null>(null);
@@ -627,7 +632,8 @@ export function VoiceOverlayWindow() {
           displayName: participants.find((person) => person.userId === userId)?.displayName ?? userId,
         }))
       : null;
-  const personProps = { shape, avatarSize: scale.avatar, shadow: fillOff };
+  const handsUp = snapshot.participants.filter((participant) => participant.handOrder > 0).length;
+  const personProps = { shape, avatarSize: scale.avatar, shadow: fillOff, handsUp };
 
   const others: ReactNode[] = rowList.map(({ participant, ghost }) => {
     const active = isTalkActive(talk[participant.userId], now, lingerMs);
@@ -713,6 +719,17 @@ export function VoiceOverlayWindow() {
           disabled={pendingButtons.deafen != null}
           icon={localDeafened ? <HeadphoneOff className="h-3.5 w-3.5" /> : <Headphones className="h-3.5 w-3.5" />}
           onPress={() => press("deafen")}
+        />
+      ) : null}
+      {bar.kinds.includes("hand") ? (
+        <CardControl
+          kind="hand"
+          active={false}
+          label={localHand ? "Lower your hand" : "I’d like to speak"}
+          hotkey={hotkeys.hand}
+          disabled={pendingButtons.hand != null}
+          icon={<Hand className="h-3.5 w-3.5" />}
+          onPress={() => press("hand")}
         />
       ) : null}
       {bar.kinds.includes("away") ? (
@@ -940,6 +957,7 @@ function PersonItem({
   shape,
   avatarSize,
   shadow,
+  handsUp = 0,
   active,
   showName,
   status,
@@ -954,6 +972,8 @@ function PersonItem({
   shape: VoiceOverlayResolvedShape;
   avatarSize: number;
   shadow: boolean;
+  /** How many hands are up, for the place-in-line number. */
+  handsUp?: number;
   active: boolean;
   showName: boolean;
   status: RowStatus | null;
@@ -966,9 +986,10 @@ function PersonItem({
   share?: WatchPerson[] | null;
 }) {
   const shareNode = share ? <ShareMark watchers={share} isLocal={participant.isLocal} avatarSize={avatarSize} shadow={shadow} /> : null;
-  const name = participant.isLocal ? "You" : participant.displayName;
+  const name = participant.displayName;
+  const handNode = participant.handOrder > 0 ? <OverlayHand order={participant.handOrder} handsUp={handsUp} shadow={shadow} /> : null;
   const motion = cn(animateIn && "animate-pop-in", leaving && "animate-pop-out");
-  const label = `${name}${participant.speaking ? ", speaking" : ""}`;
+  const label = `${name}${participant.isLocal ? " (you)" : ""}${participant.speaking ? ", speaking" : ""}`;
   // Scrolling on a person (while interactive) adds their volume here; it is the only
   // thing that identifies the row to the wheel listener.
   const volumeUser = volume ? participant.userId : undefined;
@@ -1002,6 +1023,7 @@ function PersonItem({
       )}
     >
       {name}
+      {participant.isLocal ? <span className="font-normal text-muted-foreground"> you</span> : null}
     </span>
   ) : null;
 
@@ -1013,6 +1035,7 @@ function PersonItem({
           {saying ? null : <StatusBadge status={status} shadow={shadow} />}
         </div>
         {nameNode}
+        {handNode}
         {shareNode}
         {readout}
         {caption ? <span className="text-muted-foreground">{caption}</span> : null}
@@ -1031,6 +1054,7 @@ function PersonItem({
         <ParticipantAvatar participant={participant} size={avatarSize} />
         {nameNode}
         <div className={cn("flex shrink-0 items-center gap-1", showName && "ml-auto pl-3")}>
+          {handNode}
           {shareNode}
           {readout}
           {saying ? (
@@ -1044,6 +1068,17 @@ function PersonItem({
       </div>
       {volumeBar}
     </div>
+  );
+}
+
+/** "I'd like to speak", with the place in line once more than one hand is up. */
+function OverlayHand({ order, handsUp, shadow }: { order: number; handsUp: number; shadow: boolean }) {
+  const label = handLabel(order, handsUp);
+  return (
+    <span role="img" aria-label={label} title={label} className="flex shrink-0 items-center gap-0.5 tabular-nums text-foreground">
+      <Hand className={cn("h-3.5 w-3.5", shadow && ICON_SHADOW_CLASS)} aria-hidden />
+      {handsUp > 1 ? <span aria-hidden>{order}</span> : null}
+    </span>
   );
 }
 

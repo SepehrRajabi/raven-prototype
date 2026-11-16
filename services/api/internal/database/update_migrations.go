@@ -67,6 +67,7 @@ func migrateVersioned(db *sql.DB, driver string) error {
 		{version: "2026111006_library", statements: libraryStatements()},
 		{version: "2026111101_chat_polls", statements: chatPollStatements()},
 		{version: "2026111102_chat_poll_feedback", statements: chatPollFeedbackStatements()},
+		{version: "2026111601_raised_hand", statements: raisedHandStatements()},
 	}
 	for _, migration := range migrations {
 		if err := applyUpdateMigration(db, driver, migration); err != nil {

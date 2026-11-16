@@ -4,7 +4,7 @@ import type { Announcements, Modifier, UniqueIdentifier } from "@dnd-kit/core";
 // How the dock is arranged and how it behaves, kept on this device. Not part of
 // /v1/preferences: that is a contract with the API, and these are per-machine habits.
 
-export const DOCK_CONTROL_IDS = ["mic", "camera", "screen", "hear"] as const;
+export const DOCK_CONTROL_IDS = ["mic", "camera", "screen", "hear", "hand"] as const;
 export type DockControlId = (typeof DOCK_CONTROL_IDS)[number];
 export const DEFAULT_DOCK_ORDER: readonly DockControlId[] = DOCK_CONTROL_IDS;
 
@@ -13,10 +13,12 @@ export const DOCK_CONTROL_NAMES: Record<DockControlId, string> = {
   camera: "Camera",
   screen: "Screen share",
   hear: "Hearing",
+  hand: "I’d like to speak",
 };
 
 const ORDER_KEY = "raven.dock.order";
 const CONFIRM_LEAVE_KEY = "raven.dock.confirmLeave";
+const SHOW_HAND_KEY = "raven.dock.showHand";
 
 function isDockControlId(value: unknown): value is DockControlId {
   return typeof value === "string" && (DOCK_CONTROL_IDS as readonly string[]).includes(value);
@@ -92,7 +94,7 @@ export function dockAnnouncements(order: readonly DockControlId[]): Announcement
 
 // ---- storage ---------------------------------------------------------------------------
 
-type Settings = { order: DockControlId[]; confirmLeave: boolean };
+type Settings = { order: DockControlId[]; confirmLeave: boolean; showHand: boolean };
 
 const listeners = new Set<() => void>();
 let current: Settings | null = null;
@@ -100,13 +102,15 @@ let current: Settings | null = null;
 function load(): Settings {
   let order: DockControlId[] = [...DEFAULT_DOCK_ORDER];
   let confirmLeave = false;
+  let showHand = true;
   try {
     order = parseDockOrder(localStorage.getItem(ORDER_KEY));
     confirmLeave = localStorage.getItem(CONFIRM_LEAVE_KEY) === "true";
+    showHand = localStorage.getItem(SHOW_HAND_KEY) !== "false";
   } catch {
     // Storage can be unavailable; the defaults still work.
   }
-  return { order, confirmLeave };
+  return { order, confirmLeave, showHand };
 }
 
 function snapshot(): Settings {
@@ -119,6 +123,7 @@ function update(patch: Partial<Settings>) {
   try {
     if (patch.order) localStorage.setItem(ORDER_KEY, JSON.stringify(patch.order));
     if (patch.confirmLeave !== undefined) localStorage.setItem(CONFIRM_LEAVE_KEY, String(patch.confirmLeave));
+    if (patch.showHand !== undefined) localStorage.setItem(SHOW_HAND_KEY, String(patch.showHand));
   } catch {
     // Kept for this run only; nothing else depends on it.
   }
@@ -147,4 +152,13 @@ export function useDockOrder(): DockControlId[] {
 
 export function useConfirmLeave(): boolean {
   return useSyncExternalStore(subscribe, () => snapshot().confirmLeave);
+}
+
+/** Whether the bar shows "I'd like to speak". Its hotkey works either way. */
+export function writeShowHand(showHand: boolean) {
+  update({ showHand });
+}
+
+export function useShowHand(): boolean {
+  return useSyncExternalStore(subscribe, () => snapshot().showHand);
 }

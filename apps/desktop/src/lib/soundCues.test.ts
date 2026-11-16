@@ -2,6 +2,8 @@ import { describe, expect, it } from "bun:test";
 import type { RemoteVideoTrackState } from "./video";
 import {
   DEFAULT_SOUND_CUE_SETTINGS,
+  handCueStep,
+  INITIAL_HAND_CUE_STATE,
   INITIAL_SHARE_CUE_STATE,
   normalizeSoundCueSettings,
   remoteSharers,
@@ -98,5 +100,25 @@ describe("share cues", () => {
     const result = shareCueStep(INITIAL_SHARE_CUE_STATE, { nestId: null, viewerConnected: false, sharers: new Set(["anna"]) }, 0);
     expect(result.cues).toEqual([]);
     expect(result.state.sharers).toBeNull();
+  });
+});
+
+describe("handCueStep", () => {
+  const at = (nestId: string | null, ...ids: string[]) => ({ nestId, raised: nestId ? new Set(ids) : null });
+
+  it("stays quiet about hands already up when you arrive", () => {
+    expect(handCueStep(INITIAL_HAND_CUE_STATE, at("n", "a")).cue).toBe(false);
+  });
+
+  it("plays when a hand goes up, never when it goes down", () => {
+    const first = handCueStep(INITIAL_HAND_CUE_STATE, at("n"));
+    const up = handCueStep(first.state, at("n", "a"));
+    expect(up.cue).toBe(true);
+    expect(handCueStep(up.state, at("n")).cue).toBe(false);
+  });
+
+  it("starts over in another room", () => {
+    const first = handCueStep(INITIAL_HAND_CUE_STATE, at("n"));
+    expect(handCueStep(first.state, at("m", "a")).cue).toBe(false);
   });
 });

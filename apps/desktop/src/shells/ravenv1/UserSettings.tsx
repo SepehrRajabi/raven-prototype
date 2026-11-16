@@ -531,6 +531,13 @@ function SoundCueSection({ media, nest }: { media: RavenMediaAdapterState; nest:
           onChange={(entryHeadsUp) => media.setSoundCues({ entryHeadsUp })}
         />
         <SettingsToggleRow
+          label="Someone would like to speak"
+          description="A soft note when someone else raises their hand. Nothing plays when it goes down."
+          checked={cues.hands}
+          disabled={off}
+          onChange={(hands) => media.setSoundCues({ hands })}
+        />
+        <SettingsToggleRow
           label="People joining and leaving"
           description={`When someone arrives in your ${nest} and can be heard, or leaves it.`}
           checked={cues.people}

@@ -85,7 +85,7 @@ const RULES: Rule[] = [
     why: "Only media overlays sit on arbitrary video and may use black/white.",
     pattern: /\b(?:text|bg|border)-(?:white|black)(?:\/\d+)?\b|#[0-9a-fA-F]{6}\b/g,
     allowed: (file, line) =>
-      inFile(file, "MediaTile.tsx", "LiveMediaStage.tsx", "VoiceOverlayWindow.tsx", "PictureInPictureWindow.tsx") ? "label over video"
+      inFile(file, "MediaTile.tsx", "LiveMediaStage.tsx", "VoiceOverlayWindow.tsx", "PictureInPictureWindow.tsx", "HandMark.tsx") ? "label over video"
         : inFile(file, "SatelliteCluster.tsx") && line.includes("bg-black/") ? "audio-source chips drawn over a video tile"
         : inFile(file, "dialog.tsx", "drawer.tsx") && line.includes("bg-black/") ? "modal scrim"
         : line.includes("#c42b1c") ? "Windows close-button convention"

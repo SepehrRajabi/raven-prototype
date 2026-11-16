@@ -6,6 +6,7 @@ const saved: HotkeyDraft = {
   camera: "Control+Shift+V",
   deafen: "Control+Shift+D",
   screenShare: "Control+Shift+S",
+  hand: "Control+Shift+H",
   voiceOverlay: "Control+Shift+O",
 };
 

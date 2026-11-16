@@ -29,6 +29,7 @@ const FIELDS: { id: keyof HotkeyDraft; label: string; hint: string }[] = [
   { id: "camera", label: "Camera", hint: "Turn your camera on or off." },
   { id: "deafen", label: "Stop hearing people", hint: "Silence everyone, or hear them again." },
   { id: "screenShare", label: "Screen share", hint: "Choose what to share, or stop sharing." },
+  { id: "hand", label: "I’d like to speak", hint: "Raise or lower your hand in a call, even when the bar hides its button." },
   { id: "voiceOverlay", label: "Voice overlay", hint: "Show or hide the overlay." },
 ];
 
@@ -174,6 +175,7 @@ function pickMediaDraft(draft: HotkeyDraft): MediaHotkeySettingsPatch {
     camera: draft.camera,
     deafen: draft.deafen,
     screenShare: draft.screenShare,
+    hand: draft.hand,
   };
 }
 
@@ -183,6 +185,7 @@ function pickBindings(settings: MediaHotkeySettings): MediaHotkeySettingsPatch {
     camera: settings.camera,
     deafen: settings.deafen,
     screenShare: settings.screenShare,
+    hand: settings.hand,
   };
 }
 

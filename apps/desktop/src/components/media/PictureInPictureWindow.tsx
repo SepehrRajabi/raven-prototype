@@ -116,7 +116,7 @@ export function PictureInPictureWindow({ target }: { target: PipTarget }) {
   const isShare = target.source === "screen";
   const label = !tile
     ? ""
-    : isShare ? `${tile.displayName}’s screen` : tile.isLocal ? "You" : tile.displayName;
+    : isShare ? `${tile.displayName}’s screen` : tile.isLocal ? `${tile.displayName} (you)` : tile.displayName;
   const paused = isShare && tile?.sharePaused ? sharePausedText(tile) : null;
   const playing = status === "live" && Boolean(tile?.streamUrl);
   const message = status === "reconnecting" ? "Reconnecting…" : status === "live" && !playing ? "Waiting for video…" : null;

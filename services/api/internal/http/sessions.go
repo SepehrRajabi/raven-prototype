@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"sort"
 	"time"
 
 	"raven/services/api/internal/auth"
@@ -20,6 +21,9 @@ type ParticipantSummary struct {
 	// Away is "Back in a bit": a marker with no time or duration, by design.
 	Away     bool `json:"away"`
 	Deafened bool `json:"deafened"`
+	// HandOrder is "I'd like to speak": 0 when the hand is down, otherwise the person's
+	// place in line (1 is first). How long anyone has waited is never sent.
+	HandOrder int `json:"handOrder"`
 	// ServerMuted and ServerDeafened were set by a moderator, and the person cannot undo them.
 	ServerMuted    bool `json:"serverMuted"`
 	ServerDeafened bool `json:"serverDeafened"`
@@ -227,7 +231,7 @@ func (s *Server) leaveCallSession(c *fiber.Ctx) error {
 	return c.JSON(fiber.Map{"session": summary})
 }
 
-// setCallState updates the caller's own "Back in a bit" and deafened markers.
+// setCallState updates the caller's own "Back in a bit", deafened and raised-hand markers.
 // It never touches another person's row, and it writes no event log entry:
 // these are live markers, not history (presence is consent, not telemetry).
 func (s *Server) setCallState(c *fiber.Ctx) error {
@@ -236,11 +240,12 @@ func (s *Server) setCallState(c *fiber.Ctx) error {
 	var body struct {
 		Away     *bool `json:"away"`
 		Deafened *bool `json:"deafened"`
+		Hand     *bool `json:"hand"`
 	}
 	if err := c.BodyParser(&body); err != nil {
 		return fiber.NewError(fiber.StatusBadRequest, "invalid call state payload")
 	}
-	summary, changed, err := s.updateParticipantState(nestID, user.ID, body.Away, body.Deafened)
+	summary, changed, err := s.updateParticipantState(nestID, user.ID, participantStatePatch{Away: body.Away, Deafened: body.Deafened, Hand: body.Hand})
 	if err != nil {
 		return err
 	}
@@ -250,7 +255,12 @@ func (s *Server) setCallState(c *fiber.Ctx) error {
 	return c.JSON(fiber.Map{"session": summary})
 }
 
-func (s *Server) updateParticipantState(nestID, userID string, away, deafened *bool) (SessionSummary, bool, error) {
+// participantStatePatch holds the markers a person sets for themselves; nil leaves one as it is.
+type participantStatePatch struct {
+	Away, Deafened, Hand *bool
+}
+
+func (s *Server) updateParticipantState(nestID, userID string, patch participantStatePatch) (SessionSummary, bool, error) {
 	now := database.Now()
 	tx, err := s.db.Begin()
 	if err != nil {
@@ -262,24 +272,37 @@ func (s *Server) updateParticipantState(nestID, userID string, away, deafened *b
 		return SessionSummary{}, false, err
 	}
 	var currentAway, currentDeafened bool
+	var currentHand sql.NullString
 	if err := tx.QueryRow(
-		`SELECT away, deafened FROM session_participants WHERE session_id = ? AND user_id = ? AND left_at IS NULL`,
+		`SELECT away, deafened, hand_raised_at FROM session_participants WHERE session_id = ? AND user_id = ? AND left_at IS NULL`,
 		sessionID, userID,
-	).Scan(&currentAway, &currentDeafened); err != nil {
+	).Scan(&currentAway, &currentDeafened, &currentHand); err != nil {
 		return SessionSummary{}, false, err
 	}
-	nextAway, nextDeafened := currentAway, currentDeafened
-	if away != nil {
-		nextAway = *away
+	nextAway, nextDeafened, nextHand := currentAway, currentDeafened, currentHand
+	if patch.Away != nil {
+		nextAway = *patch.Away
 	}
-	if deafened != nil {
-		nextDeafened = *deafened
+	if patch.Deafened != nil {
+		nextDeafened = *patch.Deafened
 	}
-	changed := nextAway != currentAway || nextDeafened != currentDeafened
+	if patch.Hand != nil {
+		if !*patch.Hand {
+			nextHand = sql.NullString{}
+		} else if !currentHand.Valid {
+			// Raising a hand that is already up keeps its place in line.
+			nextHand = sql.NullString{String: now, Valid: true}
+		}
+	}
+	// Someone who stepped away is not waiting to speak.
+	if nextAway && !currentAway {
+		nextHand = sql.NullString{}
+	}
+	changed := nextAway != currentAway || nextDeafened != currentDeafened || nextHand.Valid != currentHand.Valid
 	if changed {
 		if _, err := tx.Exec(
-			`UPDATE session_participants SET away = ?, deafened = ?, updated_at = ? WHERE session_id = ? AND user_id = ? AND left_at IS NULL`,
-			nextAway, nextDeafened, now, sessionID, userID,
+			`UPDATE session_participants SET away = ?, deafened = ?, hand_raised_at = ?, updated_at = ? WHERE session_id = ? AND user_id = ? AND left_at IS NULL`,
+			nextAway, nextDeafened, nextHand, now, sessionID, userID,
 		); err != nil {
 			return SessionSummary{}, false, err
 		}
@@ -556,7 +579,7 @@ func (s *Server) leaveActiveSession(nestID, userID, status string) (*SessionSumm
 	if err := tx.QueryRow(`SELECT id, started_at FROM nest_sessions WHERE nest_id = ? AND ended_at IS NULL`, nestID).Scan(&sessionID, &startedAt); err != nil {
 		return nil, err
 	}
-	res, err := tx.Exec(`UPDATE session_participants SET left_at = ?, last_seen_at = ?, status = ?, updated_at = ? WHERE session_id = ? AND user_id = ? AND left_at IS NULL`, now, now, status, now, sessionID, userID)
+	res, err := tx.Exec(`UPDATE session_participants SET left_at = ?, last_seen_at = ?, status = ?, hand_raised_at = NULL, updated_at = ? WHERE session_id = ? AND user_id = ? AND left_at IS NULL`, now, now, status, now, sessionID, userID)
 	if err != nil {
 		return nil, err
 	}
@@ -678,7 +701,7 @@ func (s *Server) sessionsForNest(nestID string) ([]SessionSummary, error) {
 
 func (s *Server) activeParticipants(sessionID string) ([]ParticipantSummary, error) {
 	rows, err := s.db.Query(
-		`SELECT u.id, u.username, `+spaceNameSQL("tm", "up", "u")+`, sp.joined_at, sp.away, sp.deafened,
+		`SELECT u.id, u.username, `+spaceNameSQL("tm", "up", "u")+`, sp.joined_at, sp.away, sp.deafened, sp.hand_raised_at,
 		        COALESCE(CASE WHEN n.tree_id IS NOT NULL AND n.type = 'persistent' THEN tm.server_muted ELSE nm.server_muted END, FALSE),
 		        COALESCE(CASE WHEN n.tree_id IS NOT NULL AND n.type = 'persistent' THEN tm.server_deafened ELSE nm.server_deafened END, FALSE)
 		 FROM session_participants sp
@@ -697,14 +720,21 @@ func (s *Server) activeParticipants(sessionID string) ([]ParticipantSummary, err
 	}
 	defer rows.Close()
 	participants := []ParticipantSummary{}
+	raisedAt := []sql.NullString{}
 	for rows.Next() {
 		var participant ParticipantSummary
-		if err := rows.Scan(&participant.UserID, &participant.Username, &participant.DisplayName, &participant.JoinedAt, &participant.Away, &participant.Deafened, &participant.ServerMuted, &participant.ServerDeafened); err != nil {
+		var handRaisedAt sql.NullString
+		if err := rows.Scan(&participant.UserID, &participant.Username, &participant.DisplayName, &participant.JoinedAt, &participant.Away, &participant.Deafened, &handRaisedAt, &participant.ServerMuted, &participant.ServerDeafened); err != nil {
 			return nil, err
 		}
 		participants = append(participants, participant)
+		raisedAt = append(raisedAt, handRaisedAt)
 	}
-	return participants, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	assignHandOrder(participants, raisedAt)
+	return participants, nil
 }
 
 func (s *Server) eventsForNest(nestID string) ([]NestEvent, error) {
@@ -780,4 +810,23 @@ func durationSeconds(start, end string) int64 {
 		return 0
 	}
 	return seconds
+}
+
+// assignHandOrder turns raised-hand times into places in line, so the times stay on the server.
+func assignHandOrder(participants []ParticipantSummary, raisedAt []sql.NullString) {
+	raised := []int{}
+	for i, at := range raisedAt {
+		if at.Valid {
+			raised = append(raised, i)
+		}
+	}
+	// RFC3339Nano drops trailing zeros, so the strings do not sort as times.
+	when := func(i int) time.Time {
+		at, _ := time.Parse(time.RFC3339Nano, raisedAt[i].String)
+		return at
+	}
+	sort.SliceStable(raised, func(a, b int) bool { return when(raised[a]).Before(when(raised[b])) })
+	for place, i := range raised {
+		participants[i].HandOrder = place + 1
+	}
 }

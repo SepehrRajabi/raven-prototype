@@ -217,11 +217,14 @@ export interface ParticipantSummary {
   /** Set by a moderator, and the person can't undo them. Absent on an older server. */
   serverMuted?: boolean;
   serverDeafened?: boolean;
+  /** "I'd like to speak": 0 when down, else the place in line (1 is first). Absent on an older server. */
+  handOrder?: number;
 }
 
 export interface CallStatePatch {
   away?: boolean;
   deafened?: boolean;
+  hand?: boolean;
 }
 
 export interface SessionSummary {

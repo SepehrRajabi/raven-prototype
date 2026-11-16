@@ -10,7 +10,7 @@ export const VOLUME_SEND_INTERVAL_MS = 80;
 /** The percent and its bar stay for this long after the last scroll. */
 export const VOLUME_READOUT_MS = 1500;
 
-export type CardButton = "mute" | "deafen" | "away";
+export type CardButton = "mute" | "deafen" | "away" | "hand";
 
 /** Volume after `notches` scroll notches (positive is louder), kept to a whole 0–200. */
 export function steppedVolumePercent(current: number, notches: number): number {
@@ -43,17 +43,20 @@ export function cardButtons({
   interactive,
   buttons,
   awaySupported,
+  handSupported = false,
 }: {
   inCall: boolean;
   interactive: boolean;
   buttons: VoiceOverlayButtons;
   awaySupported: boolean;
+  handSupported?: boolean;
 }): CardButton[] {
   if (!inCall || !interactive) return [];
   const shown: CardButton[] = [];
   if (buttons.mute) shown.push("mute");
   if (buttons.deafen) shown.push("deafen");
   if (buttons.away && awaySupported) shown.push("away");
+  if (buttons.hand && handSupported) shown.push("hand");
   return shown;
 }
 

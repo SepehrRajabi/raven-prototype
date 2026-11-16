@@ -61,12 +61,12 @@ export function NestView({
     [activeSession, inside, media.audioState, media.videoState],
   );
   const localUserId = data.user?.id;
-  const { localAway, localDeafened } = media;
+  const { localAway, localDeafened, localHand } = media;
   const callStates = useMemo(
     () => (inside && callStateSupported(activeSession)
-      ? callStatesByUser(activeSession?.participants, localUserId ? { userId: localUserId, away: localAway, deafened: localDeafened } : undefined)
+      ? callStatesByUser(activeSession?.participants, localUserId ? { userId: localUserId, away: localAway, deafened: localDeafened, hand: localHand } : undefined)
       : null),
-    [activeSession, inside, localAway, localDeafened, localUserId],
+    [activeSession, inside, localAway, localDeafened, localHand, localUserId],
   );
   const treeDetails = nest.treeId ? data.getTreeDetails(nest.treeId) : undefined;
   const canOfferModeration = inside && voiceModerationSupported(activeSession);
@@ -119,6 +119,7 @@ export function NestView({
         voiceModeration={voiceModeration}
         callVote={media.callVote}
         localUserId={localUserId}
+        localDisplayName={activeSession?.participants.find((participant) => participant.userId === localUserId)?.displayName || data.user?.displayName || ""}
         pictureInPictureKeys={media.pictureInPictureKeys}
         onOpenPictureInPicture={media.openPictureInPicture}
         onClosePictureInPicture={media.closePictureInPicture}

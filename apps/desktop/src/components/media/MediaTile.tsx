@@ -1,4 +1,6 @@
 import { useEffect, useRef, useState } from "react";
+import { SelfMark } from "./SelfMark";
+import { HandMark } from "./HandMark";
 import type { VideoConnectionQuality, VideoPresentationProfile } from "@/lib/video";
 import {
   Activity,
@@ -50,6 +52,8 @@ export function MediaTile({
   reconnecting = false,
   fit,
   receiving,
+  handsUp = 0,
+  yourTurn = false,
   presentationProfile,
   onTogglePin,
   onFitChange,
@@ -70,6 +74,10 @@ export function MediaTile({
   fit: MediaFit;
   /** Whether you are receiving (or, for your own share, previewing) this video. */
   receiving: boolean;
+  /** How many hands are up in the call, for the place-in-line number. */
+  handsUp?: number;
+  /** Your own hand, first in line, in a quiet moment. */
+  yourTurn?: boolean;
   presentationProfile: VideoPresentationProfile;
   onTogglePin: () => void;
   onFitChange: (fit: MediaFit) => void;
@@ -126,7 +134,7 @@ export function MediaTile({
           ? { title: "Video hidden for you", detail: "", loading: false }
           : { title: isShare ? "Waiting for the screen…" : "Waiting for video…", detail: "", loading: true };
 
-  const label = isShare ? (tile.isLocal ? "Your screen" : `${tile.displayName}’s screen`) : tile.isLocal ? "You" : tile.displayName;
+  const label = isShare ? (tile.isLocal ? "Your screen" : `${tile.displayName}’s screen`) : tile.displayName;
   const receiveAction = onReceivingChange
     ? tile.isLocal
       ? { label: "Hide preview", fullLabel: "Hide the preview of your screen", icon: <EyeOff />, receiving: false }
@@ -362,6 +370,8 @@ export function MediaTile({
       <div className="pointer-events-none absolute bottom-2 left-2 flex max-w-[calc(100%-16px)] items-center gap-1.5 rounded-chip bg-black/65 px-2 py-1 text-caption font-medium text-white backdrop-blur-md">
         {isShare ? <MonitorUp className="h-3.5 w-3.5 shrink-0" /> : null}
         <span className="min-w-0 truncate">{label}</span>
+        {!isShare && tile.isLocal ? <SelfMark className="text-white/70" /> : null}
+        {!isShare ? <HandMark order={tile.handOrder ?? 0} raisedCount={handsUp} yourTurn={yourTurn} onVideo className={yourTurn ? "h-5 min-w-5 px-1" : undefined} /> : null}
         {!isShare && (tile.serverMuted || tile.serverDeafened) ? (
           <ServerVoiceMark person={tile} className="h-4 w-4 shrink-0" />
         ) : !isShare && tile.deafened ? (
