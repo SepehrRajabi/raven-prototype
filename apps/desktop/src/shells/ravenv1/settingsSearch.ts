@@ -160,6 +160,7 @@ function pages({ labels, mac }: SettingsSearchContext): PageSpec[] {
             { title: "Never join already sharing", keywords: ["screen share"] },
           ],
         },
+        { title: "Mixer", keywords: ["levels", "volume", "processing", "equaliser", "equalizer", "noise", "echo", "sources"], items: ["Open Mixer"] },
         {
           title: "Push to talk",
           keywords: ["ptt", "hold to talk", "voice activation"],
@@ -247,12 +248,11 @@ function pages({ labels, mac }: SettingsSearchContext): PageSpec[] {
       page: "notifications",
       keywords: ["alerts", "popups", "toasts"],
       sections: [
-        // Called the same as the Messages switch on this page; "Messages from Raven" is the one to find.
-        { title: "Messages", listed: false, items: [{ title: "Messages from Raven", keywords: ["admin", "announcements", "maintenance", "event invitations"] }] },
+        { title: "Raven and your server", items: [{ title: "Notes from Raven", keywords: ["admin", "announcements", "maintenance", "event invitations", "messages from raven"] }] },
       ],
       items: [
         { title: "Knocks", keywords: ["knock notifications"] },
-        { title: "Messages", keywords: ["message notifications"] },
+        { title: "New messages", keywords: ["messages", "message notifications"] },
         { title: "Show message text", keywords: ["preview", "message preview"] },
         { title: "Events", keywords: ["reminders", "event notifications"] },
       ],

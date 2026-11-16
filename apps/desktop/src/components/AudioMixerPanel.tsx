@@ -593,7 +593,7 @@ export function AudioMixerPanel({ deafen }: { deafen?: { deafened: boolean; onTo
         <MixerSection
           title="What you send"
           description="Each source has its own level and processing, and is sent separately."
-          emptyText="Nothing to send yet. Add a source to begin."
+          emptyText="No microphone is set up. Add a source to send sound."
         >
           {mixerState.localSources.map((source) => (
             <ChannelStrip

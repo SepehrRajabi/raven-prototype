@@ -66,7 +66,8 @@ import { toast } from "@/components/ui/toast";
 import { studioJustFellBack, studioTooSlowNotice } from "@/lib/noiseSuppression";
 import { NestEntryCancelled } from "./nestEntry";
 import { presenceForActiveNest } from "./state";
-import { callStateCatchUp, callStateSupported, participantCallState } from "@/lib/callState";
+import { callStateCatchUp, callStateSupported, participantCallState, raisedHandSupported } from "@/lib/callState";
+import { hadTurn, NO_SPEECH, SPEECH_TICK_MS, trackSpeech } from "@/lib/raisedHand";
 import { rememberActiveNest } from "@/lib/crashRecovery";
 
 export type SelfMediaPreviewMode = SelfPreviewMode;
@@ -171,6 +172,10 @@ export interface RavenMediaAdapterState {
   callVote: CallVoteState;
   /** False against a server that predates the shared call state. */
   awaySupported: boolean;
+  /** "I'd like to speak" is up. It lowers itself once you have spoken for a few seconds. */
+  localHand: boolean;
+  /** False against a server that predates raised hands. */
+  handSupported: boolean;
   deafenMode: DeafenMode;
   deafenSupported: boolean;
   outputMuteSupported: boolean;
@@ -232,6 +237,7 @@ export interface RavenMediaAdapterState {
   toggleCamera: () => Promise<void>;
   toggleDeafen: () => Promise<void>;
   setAway: (away: boolean) => Promise<void>;
+  setHand: (hand: boolean) => Promise<void>;
   startScreenShare: () => Promise<void>;
   stopScreenShare: () => Promise<void>;
   refreshMediaDevices: () => Promise<void>;
@@ -314,6 +320,9 @@ export function useRavenMediaAdapter(
   const [away, setAwayState] = useState(false);
   const [awaySupported, setAwaySupported] = useState(false);
   const awayRef = useRef(false);
+  const [hand, setHandState] = useState(false);
+  const [handSupported, setHandSupported] = useState(false);
+  const handRef = useRef(false);
   /** The deafened value the server last confirmed for this participation. */
   const deafenSharedRef = useRef(false);
   const localUserIdRef = useRef(options.localUserId);
@@ -684,8 +693,11 @@ export function useRavenMediaAdapter(
   const resetSharedCallState = useCallback(() => {
     awayRef.current = false;
     deafenSharedRef.current = false;
+    handRef.current = false;
     setAwayState(false);
     setAwaySupported(false);
+    setHandState(false);
+    setHandSupported(false);
   }, []);
 
   /**
@@ -698,9 +710,15 @@ export function useRavenMediaAdapter(
     const { session } = await api.joinSession(nestId);
     const supported = callStateSupported(session);
     setAwaySupported(supported);
+    const handsHere = raisedHandSupported(session);
+    setHandSupported(handsHere);
+    if (!handsHere && handRef.current) {
+      handRef.current = false;
+      setHandState(false);
+    }
     if (!supported) return;
     const server = participantCallState(session.participants, localUserIdRef.current ?? "");
-    const want = { away: awayRef.current, deafened: deafenRef.current.deafened };
+    const want = { away: awayRef.current, deafened: deafenRef.current.deafened, hand: handsHere ? handRef.current : server.hand };
     deafenSharedRef.current = want.deafened;
     const patch = callStateCatchUp(server, want);
     if (!patch) return;
@@ -1111,6 +1129,20 @@ export function useRavenMediaAdapter(
   }, [audioCapabilities?.supportsMicrophone, ensureDefaultMic]);
   prepareMicrophoneRef.current = prepareMicrophone;
 
+  // Prepare the signal before entering (design §6.3): the microphone source exists from
+  // the start, carrying the chosen device and remembered processing, so the dock, the
+  // Mixer and the switches show it outside a call. Nothing is captured or published until
+  // a call or the Mixer asks for it, and joining finds the source already configured.
+  const micReadyRef = useRef(false);
+  const supportsMicrophone = audioCapabilities?.supportsMicrophone === true;
+  useEffect(() => {
+    if (!supportsMicrophone || micReadyRef.current) return;
+    micReadyRef.current = true;
+    void ensureDefaultMic().catch(() => {
+      micReadyRef.current = false;
+    });
+  }, [ensureDefaultMic, supportsMicrophone]);
+
   const publishMic = useCallback(async () => {
     setError("");
     if (!audioCapabilities?.supportsMicrophone) {
@@ -1322,6 +1354,11 @@ export function useRavenMediaAdapter(
     if (!nestId || !awaySupported || awayRef.current === next) return;
     awayRef.current = next;
     setAwayState(next);
+    // The server lowers a hand when you step away; do the same here so it answers at once.
+    if (next && handRef.current) {
+      handRef.current = false;
+      setHandState(false);
+    }
     try {
       await api.setCallState(nestId, { away: next });
     } catch (err) {
@@ -1339,6 +1376,29 @@ export function useRavenMediaAdapter(
     }
   }, [awaySupported, nestLabel, setNonFatalError]);
 
+  const setHand = useCallback(async (next: boolean) => {
+    const nestId = activeNestRef.current;
+    if (!nestId || !handSupported || handRef.current === next) return;
+    if (next && awayRef.current) void setAway(false);
+    handRef.current = next;
+    setHandState(next);
+    try {
+      await api.setCallState(nestId, { hand: next });
+    } catch (err) {
+      if (handRef.current === next && activeNestRef.current === nestId) {
+        handRef.current = !next;
+        setHandState(!next);
+      }
+      setNonFatalError(
+        messageFromError(err, "Your hand could not be shared"),
+        "rtc_failure",
+        next
+          ? `Others in the ${nestLabel} can't see that you'd like to speak. Try again.`
+          : `Others in the ${nestLabel} may still see your hand up. Try again.`,
+      );
+    }
+  }, [handSupported, nestLabel, setAway, setNonFatalError]);
+
   // Back in a bit clears itself when you come back: unmuting, or talking with the mic on.
   const localSpeaking = Boolean(options.localUserId && speakingActivity[options.localUserId]?.speaking);
   const micWasEnabledRef = useRef(localMicEnabled);
@@ -1347,6 +1407,21 @@ export function useRavenMediaAdapter(
     micWasEnabledRef.current = localMicEnabled;
     if (awayRef.current && localMicEnabled && (unmuted || localSpeaking)) void setAway(false);
   }, [localMicEnabled, localSpeaking, setAway]);
+
+  // A raised hand lowers itself once you have had your turn: a few seconds of your own
+  // speech with the mic live. Speech while muted or server-muted is not heard, so it
+  // does not count.
+  const localSpeakingRef = useRef(localSpeaking);
+  localSpeakingRef.current = localSpeaking;
+  useEffect(() => {
+    if (!hand || !localMicEnabled || serverMuted) return;
+    let run = NO_SPEECH;
+    const timer = window.setInterval(() => {
+      run = trackSpeech(run, localSpeakingRef.current, Date.now());
+      if (hadTurn(run)) void setHand(false);
+    }, SPEECH_TICK_MS);
+    return () => window.clearInterval(timer);
+  }, [hand, localMicEnabled, serverMuted, setHand]);
 
   const setOutputDevice = useCallback(async (deviceId: string | null) => {
     setError("");
@@ -1568,6 +1643,8 @@ export function useRavenMediaAdapter(
     localServerMuted: serverMuted,
     localServerDeafened: serverDeafened,
     localAway: away,
+    localHand: hand,
+    handSupported,
     callVote,
     awaySupported,
     deafenMode,
@@ -1619,6 +1696,7 @@ export function useRavenMediaAdapter(
     toggleCamera,
     toggleDeafen,
     setAway,
+    setHand,
     startScreenShare,
     stopScreenShare,
     refreshMediaDevices,

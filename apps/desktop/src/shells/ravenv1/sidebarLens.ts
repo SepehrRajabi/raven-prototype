@@ -22,8 +22,9 @@ export function storeLens(lens: SidebarLens) {
 }
 
 /**
- * The lens the open view belongs to, or null where the view belongs to neither and the
- * lens should stay as it is. A conversation's kind is empty until it is known.
+ * The lens the open view is listed under, or null where it is listed under neither. The
+ * sidebar never switches to it; it only tells the person where the open view is.
+ * A conversation's kind is empty until it is known.
  */
 export function lensForView(view: RavenView, chatKind = ""): SidebarLens | null {
   switch (view.kind) {
@@ -40,22 +41,5 @@ export function lensForView(view: RavenView, chatKind = ""): SidebarLens | null 
       return chatKind === "nest" ? "places" : "people";
     default:
       return null;
-  }
-}
-
-/** Changes only when the open view does, so the lens flips on arrival and never while someone looks at it. */
-export function viewSignature(view: RavenView, chatKind = ""): string {
-  switch (view.kind) {
-    case "tree-preview":
-      return `${view.kind}:${view.result.tree.id}`;
-    case "home":
-    case "settings":
-    case "mixer":
-    case "licences":
-      return view.kind;
-    case "chat":
-      return `chat:${view.id}:${chatKind}`;
-    default:
-      return `${view.kind}:${view.id}`;
   }
 }

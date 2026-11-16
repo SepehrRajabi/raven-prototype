@@ -122,7 +122,7 @@ export function PollCard({
                 onClick={() => pick(index)}
                 className={cn(
                   "relative flex w-full items-center gap-2 overflow-hidden rounded-control border px-2.5 py-1.5 text-left transition-colors",
-                  right ? "border-live/60" : wrongPick ? "border-destructive/60" : "border-foreground/10",
+                  right ? "border-foreground/60" : wrongPick ? "border-destructive/60" : "border-foreground/10",
                   interactive && !busy ? "cursor-pointer hover:border-foreground/30" : "cursor-default",
                 )}
               >
@@ -131,7 +131,7 @@ export function PollCard({
                     aria-hidden
                     className={cn(
                       "absolute inset-y-0 left-0 transition-[width] duration-300",
-                      right ? "bg-live/20" : wrongPick ? "bg-destructive/15" : selected ? "bg-foreground/15" : "bg-foreground/[0.07]",
+                      right ? "bg-foreground/20" : wrongPick ? "bg-destructive/15" : selected ? "bg-foreground/15" : "bg-foreground/[0.07]",
                     )}
                     style={{ width: `${share}%` }}
                   />
@@ -141,9 +141,9 @@ export function PollCard({
                   className={cn(
                     "relative flex h-4 w-4 shrink-0 items-center justify-center border",
                     poll.multiple ? "rounded-[4px]" : "rounded-full",
-                    rightPick ? "border-live bg-live text-live-foreground"
+                    rightPick ? "border-foreground bg-foreground text-background"
                       : wrongPick ? "border-destructive bg-destructive text-destructive-foreground"
-                      : right ? "border-live text-live"
+                      : right ? "border-foreground text-foreground"
                       : selected ? "border-foreground bg-foreground text-background"
                       : "border-foreground/35 text-transparent",
                   )}
@@ -158,7 +158,7 @@ export function PollCard({
                 <p
                   className={cn(
                     "ml-2 mt-1 break-words border-l-2 pl-2 text-caption text-muted-foreground",
-                    rightPick ? "border-live" : wrongPick ? "border-destructive" : "border-foreground/20",
+                    rightPick ? "border-foreground" : wrongPick ? "border-destructive" : "border-foreground/20",
                   )}
                   dir="auto"
                 >
@@ -170,7 +170,7 @@ export function PollCard({
         })}
       </ul>
       {outcome ? (
-        <p className={cn("mt-2 text-small font-medium", outcome === "right" ? "text-live" : outcome === "wrong" ? "text-destructive" : "text-warning")} role="status">
+        <p className={cn("mt-2 text-small font-medium", outcome === "right" ? "text-foreground" : outcome === "wrong" ? "text-destructive" : "text-warning")} role="status">
           {outcome === "right" ? "You got it right." : outcome === "partly" ? "Partly right." : "Not quite."}
         </p>
       ) : null}

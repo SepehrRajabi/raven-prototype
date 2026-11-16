@@ -43,12 +43,15 @@ export function layoutSections(layout: TreeLayout | undefined, existing: NestRef
   return [top, ...categories.map((category) => byCategory.get(category.id)!)];
 }
 
-/** A tree's text nests in layout order, for the sidebar. */
-export function orderTextNests(nests: ConversationState[], layout: TreeLayout | undefined): ConversationState[] {
-  const byId = new Map(nests.map((nest) => [nest.summary.id, nest]));
-  const oldestFirst = [...nests].sort((a, b) => a.summary.createdAt.localeCompare(b.summary.createdAt) || a.summary.id.localeCompare(b.summary.id));
-  const sections = layoutSections(layout, oldestFirst.map((nest) => ({ kind: "text" as const, id: nest.summary.id })));
-  return sections.flatMap((section) => section.items.map((item) => byId.get(item.id)!));
+/** Every nest a tree has, before ordering: text nests oldest first, then voice nests. */
+export function existingNestRefs(textNests: ConversationState[], voiceNests: Array<{ id: string }>): NestRef[] {
+  const oldestFirst = [...textNests].sort((a, b) => a.summary.createdAt.localeCompare(b.summary.createdAt) || a.summary.id.localeCompare(b.summary.id));
+  return [...oldestFirst.map((nest) => ({ kind: "text" as const, id: nest.summary.id })), ...voiceNests.map((nest) => ({ kind: "voice" as const, id: nest.id }))];
+}
+
+/** A tree's nests, voice and text, in the order its lobby lists them. Categories are flattened. */
+export function orderedNestRefs(layout: TreeLayout | undefined, existing: NestRef[]): NestRef[] {
+  return layoutSections(layout, existing).flatMap((section) => section.items);
 }
 
 // ---- rearranging -----------------------------------------------------------------------

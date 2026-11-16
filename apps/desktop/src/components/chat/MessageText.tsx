@@ -85,7 +85,7 @@ function Mention({ node, context }: { node: Extract<Inline, { type: "mention" }>
   const faces = nest.people.slice(0, 3);
   const inner = (
     <>
-      <NestGlyph kind={nest.kind} live={live} className={cn("h-3.5 w-3.5", live ? "text-live" : "text-subtle")} />
+      <NestGlyph kind={nest.kind} live={live} className={cn("h-3.5 w-3.5", live ? "text-foreground" : "text-subtle")} />
       <bdi className={cn("font-medium", nest.kind === "voice" && !live ? "text-muted-foreground" : "text-foreground")}>{nest.name}</bdi>
       {faces.length > 0 ? (
         <span className="ml-0.5 inline-flex items-center -space-x-1">

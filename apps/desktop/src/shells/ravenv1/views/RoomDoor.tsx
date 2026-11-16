@@ -19,15 +19,17 @@ const DOOR_OPTIONS: { id: NestDoor; label: string }[] = [
   { id: "quiet", label: "Quiet" },
 ];
 
-/** A room's rule on its row. An open door shows nothing. */
+/** A room's rule on its row, in a word. An open door shows nothing; the tooltip says what it means. */
 export function DoorMark({ door }: { door: NestDoor | undefined }) {
   const note = door ? DOOR_NOTE[door] : undefined;
   if (!note) return null;
   const Icon = door === "knock" ? Hand : MicOff;
+  const label = DOOR_OPTIONS.find((option) => option.id === door)?.label;
   return (
     <Tooltip label={note}>
-      <span tabIndex={0} role="img" aria-label={note} className="mr-2 flex h-7 w-7 shrink-0 items-center justify-center rounded-control text-subtle">
+      <span tabIndex={0} role="note" aria-label={note} className="mr-2 flex h-7 shrink-0 items-center gap-1.5 rounded-control px-1.5 text-caption text-subtle">
         <Icon className="h-3.5 w-3.5" aria-hidden />
+        {label}
       </span>
     </Tooltip>
   );

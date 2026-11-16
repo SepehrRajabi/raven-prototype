@@ -32,7 +32,7 @@ reachable, what is alive, or what they are about to reveal? If not, it belongs d
 
 ```
 ┌──────────────────────────────────────────────────────────────────────┐
-│ ‹ ›        [ Search people and trees     Ctrl K ]        inbox  — ☐ ✕│ 40  TopBar
+│ ‹ ›        [ Search people and trees     Ctrl K ]        ⚙ bell — ☐ ✕│ 40  TopBar
 ├─────────────┬────────────────────────────────────────────────────────┤
 │ ◆ Server    │╭──────────────────────────────────────────────────────╮│
 │ Reaching you││ contextual view: Home, Tree lobby, Person, Nest      ││
@@ -171,7 +171,7 @@ All under `apps/desktop/src`.
 | Primitives (button, input, select, dialog, popover, switch, toast…) | `components/ui/` |
 | Shared atoms (presence, avatars, section label, grouped list, empty state) | `shells/ravenv1/atoms.tsx` |
 | Shell: layout, history, toasts, sign-in, recovery screens | `shells/RavenShellV1.tsx` |
-| Title bar, search, inbox | `shells/ravenv1/TopBar.tsx`, `Inbox.tsx` |
+| Title bar, search, settings, "Reaching you" bell | `shells/ravenv1/TopBar.tsx`, `Inbox.tsx` |
 | Sidebar and reachability helpers | `shells/ravenv1/Sidebar.tsx`, `people.ts` |
 | Dock, device popovers, call chip, network readout | `shells/ravenv1/DeviceDock.tsx` |
 | Views and their router | `shells/ravenv1/views/` (`index.tsx` is `MainView`) |

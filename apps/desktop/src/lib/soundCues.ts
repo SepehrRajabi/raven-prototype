@@ -10,6 +10,7 @@ export const DEFAULT_SOUND_CUE_SETTINGS: SoundCueSettings = {
   screenShares: true,
   people: true,
   entryHeadsUp: true,
+  hands: true,
 };
 
 /** Saved settings with anything missing or malformed set to its default (on). */
@@ -29,6 +30,7 @@ export function normalizeSoundCueSettings(value: unknown): SoundCueSettings {
     screenShares: flag("screenShares"),
     people: flag("people"),
     entryHeadsUp: flag("entryHeadsUp"),
+    hands: flag("hands"),
   };
 }
 
@@ -82,4 +84,27 @@ export function shareCueStep(
   if (started) cues.push("shareStarted");
   if (stopped) cues.push("shareStopped");
   return { state: next, cues };
+}
+
+export interface HandCueState {
+  nestId: string | null;
+  /** Others with a hand up; `null` until the call's participants are known. */
+  raised: ReadonlySet<string> | null;
+}
+
+export const INITIAL_HAND_CUE_STATE: HandCueState = { nestId: null, raised: null };
+
+/**
+ * Whether someone else just raised their hand. Only a hand going up plays; lowering is
+ * silent, and the hands already up when you join or change room are not news.
+ */
+export function handCueStep(
+  state: HandCueState,
+  input: { nestId: string | null; raised: ReadonlySet<string> | null },
+): { state: HandCueState; cue: boolean } {
+  if (!input.nestId || !input.raised) return { state: { nestId: input.nestId, raised: null }, cue: false };
+  const next: HandCueState = { nestId: input.nestId, raised: new Set(input.raised) };
+  if (state.raised === null || state.nestId !== input.nestId) return { state: next, cue: false };
+  const previous = state.raised;
+  return { state: next, cue: [...input.raised].some((id) => !previous.has(id)) };
 }

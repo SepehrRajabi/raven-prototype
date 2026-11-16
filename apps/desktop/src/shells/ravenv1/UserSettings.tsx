@@ -188,7 +188,7 @@ function UserSettingsPage({
     case "appearance":
       return <AppearanceSettings data={data} />;
     case "audio-video":
-      return <AudioVideoSettings data={data} media={media} />;
+      return <AudioVideoSettings data={data} media={media} onNavigate={onNavigate} />;
     case "hotkeys":
       return (
         <SettingsPage title="Hotkeys" description="Shortcuts that work even when Raven is in the background.">
@@ -210,8 +210,8 @@ function UserSettingsPage({
     case "notifications":
       return (
         <SettingsPage title="Notifications" description="What Raven tells you about while you are in another app or it is in the tray.">
-          <RavenMessagesSetting data={data} />
           <NotificationSettingsPanel />
+          <RavenMessagesSetting data={data} />
         </SettingsPage>
       );
     case "server":
@@ -531,6 +531,13 @@ function SoundCueSection({ media, nest }: { media: RavenMediaAdapterState; nest:
           onChange={(entryHeadsUp) => media.setSoundCues({ entryHeadsUp })}
         />
         <SettingsToggleRow
+          label="Someone would like to speak"
+          description="A soft note when someone else raises their hand. Nothing plays when it goes down."
+          checked={cues.hands}
+          disabled={off}
+          onChange={(hands) => media.setSoundCues({ hands })}
+        />
+        <SettingsToggleRow
           label="People joining and leaving"
           description={`When someone arrives in your ${nest} and can be heard, or leaves it.`}
           checked={cues.people}
@@ -596,11 +603,11 @@ function SoundCueVolume({ value, disabled, onCommit }: { value: number; disabled
 function RavenMessagesSetting({ data }: { data: RavenShellData }) {
   const [on, setOn] = useAppliedPreference(data.preferences.ravenMessages !== false, (value) => data.updatePreferences({ ravenMessages: value }));
   return (
-    <SettingsSection title="Messages">
+    <SettingsSection title="Raven and your server">
       <SettingsRows>
         <SettingsToggleRow
-          label="Messages from Raven"
-          description={"Raven uses this to send you event invitations and their updates from your spaces, and notes from the person who runs this server, such as planned maintenance. Turn it off and you won't get any of these, including the admin's. Event notifications have their own switch under Notifications."}
+          label="Notes from Raven"
+          description={`Raven uses this to send you event invitations and their updates from your ${data.labels.treePlural.toLowerCase()}, and notes from the person who runs this server, such as planned maintenance. Turn it off and you won’t get any of these, including the admin’s. The Events switch only decides whether they also show as a Windows notification.`}
           checked={on}
           onChange={setOn}
         />
@@ -609,7 +616,7 @@ function RavenMessagesSetting({ data }: { data: RavenShellData }) {
   );
 }
 
-function AudioVideoSettings({ data, media }: { data: RavenShellData; media: RavenMediaAdapterState }) {
+function AudioVideoSettings({ data, media, onNavigate }: { data: RavenShellData; media: RavenMediaAdapterState; onNavigate?: (view: RavenView) => void }) {
   const nest = data.labels.nestSingular.toLowerCase();
   const [joinMuted, setJoinMuted] = useAppliedPreference(data.preferences.alwaysJoinMuted, (value) => data.updatePreferences({ alwaysJoinMuted: value }));
   const [joinCameraOff, setJoinCameraOff] = useAppliedPreference(data.preferences.joinWithCameraOff, (value) => data.updatePreferences({ joinWithCameraOff: value }));
@@ -624,6 +631,18 @@ function AudioVideoSettings({ data, media }: { data: RavenShellData; media: Rave
           <SettingsToggleRow label="Never join already sharing" description="A screen share you started earlier does not carry into the next call." checked={joinNoShare} onChange={setJoinNoShare} />
         </SettingsRows>
       </SettingsSection>
+
+      {onNavigate ? (
+        <SettingsSection title="Mixer">
+          <SettingsRows>
+            <SettingsRow
+              label="Levels and processing for every source"
+              description="Each sound you send and hear, with its own level and processing."
+              control={<Button variant="secondary" onClick={() => onNavigate({ kind: "mixer" })}>Open Mixer</Button>}
+            />
+          </SettingsRows>
+        </SettingsSection>
+      ) : null}
 
       <PushToTalkSettings />
 

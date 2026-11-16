@@ -57,6 +57,8 @@ pub struct VoiceOverlayButtons {
     pub mute: bool,
     pub deafen: bool,
     pub away: bool,
+    /// "I'd like to speak". Off until chosen, so the card stays as it was.
+    pub hand: bool,
 }
 
 impl Default for VoiceOverlayButtons {
@@ -65,6 +67,7 @@ impl Default for VoiceOverlayButtons {
             mute: true,
             deafen: true,
             away: true,
+            hand: false,
         }
     }
 }
@@ -381,6 +384,8 @@ pub struct VoiceOverlaySnapshot {
     pub local_muted_hint: bool,
     /// False against a server that predates the shared call state.
     pub away_supported: bool,
+    /// False against a server that predates raised hands.
+    pub hand_supported: bool,
     /// Knocks and messages that could still be on the card. The overlay decides how long each shows.
     pub heads_up: Vec<VoiceOverlayHeadsUp>,
     pub participants: Vec<VoiceOverlayParticipant>,
@@ -432,6 +437,8 @@ pub struct VoiceOverlayParticipant {
     pub deafened: bool,
     /// "Back in a bit": a marker with no time or duration.
     pub away: bool,
+    /// "I'd like to speak": place in line, 0 when the hand is down. Never a time.
+    pub hand_order: u16,
     pub screen_sharing: bool,
     /// Others watching this person's screen share, by user id.
     pub watchers: Vec<String>,
@@ -458,6 +465,9 @@ pub enum VoiceOverlayAction {
     Deafen,
     Away {
         away: bool,
+    },
+    Hand {
+        hand: bool,
     },
     /// Open or dismiss a knock shown as a heads-up line.
     #[serde(rename_all = "camelCase")]
@@ -1929,6 +1939,7 @@ mod tests {
                 mute: true,
                 deafen: false,
                 away: true,
+                hand: false,
             },
             scroll_volume: false,
             anchor: Some(VoiceOverlayAnchor {
@@ -2078,6 +2089,7 @@ mod tests {
                     mute: false,
                     deafen: true,
                     away: false,
+                    hand: true,
                 }),
                 scroll_volume: Some(false),
             },
@@ -2103,6 +2115,7 @@ mod tests {
                 mute: false,
                 deafen: true,
                 away: false,
+                hand: true,
             }
         );
         assert!(!settings.scroll_volume);
@@ -2207,6 +2220,7 @@ mod tests {
                 mute: false,
                 deafen: true,
                 away: true,
+                hand: false,
             }
         );
         assert!(settings.scroll_volume);
