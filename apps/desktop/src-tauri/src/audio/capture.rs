@@ -4,7 +4,7 @@ use std::{
     panic::AssertUnwindSafe,
     sync::{
         atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicU8, Ordering},
-        mpsc::{sync_channel, Receiver, RecvTimeoutError, SyncSender},
+        mpsc::{sync_channel, Receiver, RecvTimeoutError, SyncSender, TrySendError},
         Arc, Mutex, OnceLock,
     },
     thread,
@@ -52,6 +52,9 @@ const CAPTURE_RETRY_DELAYS: [Duration; 3] = [
     Duration::from_secs(3),
 ];
 const CAPTURE_SUPERVISE_TICK: Duration = Duration::from_millis(100);
+/// Longest stopping a microphone waits for its thread to close the device. The thread
+/// wakes on the stop at once, so this is only reached while a device open is still running.
+const CAPTURE_STOP_WAIT: Duration = Duration::from_millis(500);
 /// A running input stream that delivers no block for this long is reopened. WASAPI can
 /// stop signalling an endpoint without ever reporting an error (cpal waits on it with no
 /// timeout), which otherwise leaves the microphone silent until the device is switched.
@@ -233,7 +236,10 @@ impl LiveControls {
     }
 
     fn set_sink(&self, sink: Option<Arc<dyn ProcessedSampleSink>>) {
-        *lock_recovering(&self.sink) = sink;
+        // Swap under the lock, drop the old sink after it: the capture thread takes this
+        // lock every block, so it is held only for the swap.
+        let previous = std::mem::replace(&mut *lock_recovering(&self.sink), sink);
+        drop(previous);
     }
 
     fn push_to_sink(&self, samples: &[f32], channels: usize, sample_rate: u32) {
@@ -509,6 +515,8 @@ struct CpalInputRuntime {
     signature: CaptureConfigSignature,
     state: AudioSourceRuntimeState,
     stop_sender: SyncSender<()>,
+    /// The capture thread, which closes the device before it ends.
+    thread: Option<thread::JoinHandle<()>>,
 }
 
 impl AudioSourceRuntime for CpalInputRuntime {
@@ -516,8 +524,21 @@ impl AudioSourceRuntime for CpalInputRuntime {
         self.source_id
     }
 
+    /// Ask the capture thread to stop and wait, briefly, for it to close the device, so a
+    /// restart does not find it still held (an exclusive ALSA device then reports busy).
+    /// A thread stuck in a slow device open is left to finish on its own.
     fn stop(&mut self) {
         let _ = self.stop_sender.try_send(());
+        let Some(thread) = self.thread.take() else {
+            return;
+        };
+        let deadline = Instant::now() + CAPTURE_STOP_WAIT;
+        while !thread.is_finished() && Instant::now() < deadline {
+            thread::sleep(Duration::from_millis(5));
+        }
+        if thread.is_finished() {
+            let _ = thread.join();
+        }
     }
 
     fn runtime_state(&self) -> AudioSourceRuntimeState {
@@ -734,7 +755,7 @@ fn start_microphone_capture(
     let source = request.source.clone();
     let controls = Arc::clone(&request.controls);
     let render_reference = Arc::clone(&request.render_reference);
-    thread::Builder::new()
+    let thread = thread::Builder::new()
         .name("raven-mic-capture".into())
         .spawn(move || {
             run_microphone_capture(
@@ -761,6 +782,7 @@ fn start_microphone_capture(
         signature,
         state,
         stop_sender,
+        thread: Some(thread),
     }))
 }
 
@@ -1256,6 +1278,14 @@ fn handle_input_block(
             processing.suppression_report = None;
         }
     }
+    // Logged by the event pump, never here on the device thread.
+    if let Some(notice) = processing.suppression_notice.take() {
+        if let Err(TrySendError::Full(CaptureEvent::Notice(notice))) =
+            sender.try_send(CaptureEvent::Notice(notice))
+        {
+            processing.suppression_notice = Some(notice);
+        }
+    }
     if last_meter.elapsed() >= METER_INTERVAL {
         analysis.voice_probability = processing
             .voice
@@ -1326,6 +1356,8 @@ struct SourceProcessingConfig {
     studio_too_slow: bool,
     /// A change in what runs, until the capture event for it is sent.
     suppression_report: Option<NoiseSuppressionRuntime>,
+    /// Why the suppressor last changed on its own, until the event pump has it to log.
+    suppression_notice: Option<CaptureNotice>,
     safety: ChannelSafetyRuntime,
     /// The chain's and the safety limiter's delay. The suppressor's is added when reported.
     latency_samples: u32,
@@ -1418,6 +1450,7 @@ impl SourceProcessingConfig {
             suppression_fallback,
             studio_too_slow: false,
             suppression_report: None,
+            suppression_notice: None,
             safety,
             latency_samples: 0,
             processor_cpu_estimate: None,
@@ -1605,11 +1638,10 @@ impl SourceProcessingConfig {
             return;
         };
         if let Some((mean, worst)) = stage.hop_cost() {
-            eprintln!(
-                "[audio-engine] Studio is too slow here ({:.1} ms per 10 ms on average, {:.1} ms at worst); Strong takes over",
-                mean.as_secs_f32() * 1000.0,
-                worst.as_secs_f32() * 1000.0
-            );
+            self.suppression_notice = Some(CaptureNotice::StudioTooSlow {
+                mean_ms: mean.as_secs_f32() * 1000.0,
+                worst_ms: worst.as_secs_f32() * 1000.0,
+            });
         }
         stage.fall_back_to_standby(depth);
         self.running_suppression = NoiseSuppressionMode::Strong;
@@ -1621,8 +1653,8 @@ impl SourceProcessingConfig {
 
     /// A suppressor that errors is dropped for the rest of this capture so the microphone
     /// keeps working: Strong stands in for Studio, and sonora's own suppressor for Strong.
-    fn fall_back_after_error(&mut self, error: &SuppressorError) {
-        eprintln!("[audio-engine] noise suppression stopped: {error}");
+    fn fall_back_after_error(&mut self, error: SuppressorError) {
+        self.suppression_notice = Some(CaptureNotice::SuppressorStopped(error.0));
         let depth = self.settings.noise_suppression_depth;
         let Some(stage) = self.suppressor.as_mut() else {
             return;
@@ -1982,7 +2014,7 @@ fn process_source_samples(
     }
     if let Some(stage) = processing.suppressor.as_mut() {
         match stage.process(samples) {
-            Err(error) => processing.fall_back_after_error(&error),
+            Err(error) => processing.fall_back_after_error(error),
             Ok(())
                 if stage.overran()
                     && processing.running_suppression == NoiseSuppressionMode::Studio =>
@@ -2076,6 +2108,13 @@ fn spawn_capture_event_pump(
 ) {
     thread::spawn(move || {
         while let Ok(event) = receiver.recv() {
+            let event = match event {
+                CaptureEvent::Notice(notice) => {
+                    notice.log();
+                    continue;
+                }
+                event => event,
+            };
             let emission = {
                 let Ok(mut engine) = shared_state.write() else {
                     break;
@@ -2126,6 +2165,7 @@ fn spawn_capture_event_pump(
                         source.runtime.noise_suppression = Some(runtime);
                         CaptureEmission::State(engine.snapshot())
                     }
+                    CaptureEvent::Notice(_) => continue,
                 }
             };
             match emission {
@@ -2154,6 +2194,27 @@ enum CaptureEvent {
     Runtime(AudioSourceRuntimeState),
     /// The microphone switched noise suppression mode, or its suppressor stopped.
     Suppression(NoiseSuppressionRuntime),
+    /// Something worth a line in the log, raised on the device thread, which never logs.
+    Notice(CaptureNotice),
+}
+
+#[derive(Debug)]
+enum CaptureNotice {
+    StudioTooSlow { mean_ms: f32, worst_ms: f32 },
+    SuppressorStopped(String),
+}
+
+impl CaptureNotice {
+    fn log(&self) {
+        match self {
+            Self::StudioTooSlow { mean_ms, worst_ms } => eprintln!(
+                "[audio-engine] Studio is too slow here ({mean_ms:.1} ms per 10 ms on average, {worst_ms:.1} ms at worst); Strong takes over"
+            ),
+            Self::SuppressorStopped(error) => {
+                eprintln!("[audio-engine] noise suppression stopped: {error}")
+            }
+        }
+    }
 }
 
 fn should_capture_source(source: &AudioSourceState, demand: CaptureDemand) -> bool {
@@ -3606,9 +3667,35 @@ pub mod platform {
         }
 
         fn command_available(command: &str) -> bool {
-            std::env::var_os("PATH")
-                .map(|paths| std::env::split_paths(&paths).any(|path| path.join(command).is_file()))
-                .unwrap_or(false)
+            system_tool(command).is_absolute()
+        }
+
+        /// Directories searched for the PipeWire and GStreamer tools before `PATH`, so a
+        /// writable directory early in `PATH` cannot stand in for them.
+        const SYSTEM_TOOL_DIRS: [&str; 4] = [
+            "/usr/bin",
+            "/bin",
+            "/usr/local/bin",
+            "/run/current-system/sw/bin",
+        ];
+
+        /// The absolute path of a system tool: from the system directories first, then
+        /// from an absolute entry in `PATH`. A tool found nowhere comes back as its bare
+        /// name, which fails to launch with the usual "not found".
+        pub(crate) fn system_tool(name: &str) -> std::path::PathBuf {
+            let system = SYSTEM_TOOL_DIRS
+                .iter()
+                .map(|dir| std::path::Path::new(dir).join(name));
+            let from_path = std::env::var_os("PATH")
+                .map(|paths| std::env::split_paths(&paths).collect::<Vec<_>>())
+                .unwrap_or_default()
+                .into_iter()
+                .filter(|dir| dir.is_absolute())
+                .map(|dir| dir.join(name));
+            system
+                .chain(from_path)
+                .find(|candidate| candidate.is_file())
+                .unwrap_or_else(|| std::path::PathBuf::from(name))
         }
 
         #[derive(Debug)]
@@ -3713,7 +3800,7 @@ pub mod platform {
         }
 
         fn spawn_pw_record(target: Option<&str>) -> Result<(Child, ChildStdout), CaptureError> {
-            let mut command = Command::new("pw-record");
+            let mut command = Command::new(system_tool("pw-record"));
             command
                 .arg("--record")
                 .arg("--raw")
@@ -3802,7 +3889,7 @@ pub mod platform {
         }
 
         pub fn list_output_devices() -> Option<Vec<AudioOutputDevice>> {
-            let output = Command::new("pw-dump").output().ok()?;
+            let output = Command::new(system_tool("pw-dump")).output().ok()?;
             if !output.status.success() {
                 return None;
             }
@@ -3889,7 +3976,7 @@ pub mod platform {
         }
 
         fn default_sink_name() -> Option<String> {
-            let output = Command::new("pactl")
+            let output = Command::new(system_tool("pactl"))
                 .args(["get-default-sink"])
                 .output()
                 .ok()?;

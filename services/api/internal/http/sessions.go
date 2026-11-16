@@ -373,7 +373,7 @@ func (s *Server) expireStaleNestActivity() error {
 		 	SELECT nest_id, user_id, last_seen_at FROM nest_presence WHERE left_at IS NULL
 		 	UNION ALL
 		 	SELECT nest_id, user_id, last_seen_at FROM session_participants WHERE left_at IS NULL
-		 )
+		 ) AS activity
 		 GROUP BY nest_id, user_id`,
 	)
 	if err != nil {

@@ -2,7 +2,11 @@
 Description=Raven nightly backup
 After=docker.service
 Requires=docker.service
+# A failed backup is reported (raven-alert.sh), not left for someone to notice weeks later.
+OnFailure=raven-alert@%n.service
 
 [Service]
 Type=oneshot
+# Optional encryption and off-site copy; see backup-raven.sh. Absent means off.
+EnvironmentFile=-/etc/raven-backup.env
 ExecStart=/srv/raven/backup-raven.sh

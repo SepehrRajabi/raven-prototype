@@ -12,6 +12,10 @@ import (
 	"github.com/gofiber/fiber/v2"
 )
 
+// AuthSession is one signed-in device as its owner or an administrator sees it. ID is the
+// session's public id: it names the sign-in for listing and revoking and cannot be used to
+// act as anyone. The token a device sends as X-Session-ID is never returned by any route
+// and is stored only as a hash (see database.SessionTokenHash).
 type AuthSession struct {
 	ID             string  `json:"id"`
 	LatestIP       string  `json:"latestIp"`
@@ -25,19 +29,44 @@ type AuthSession struct {
 	Current        bool    `json:"current"`
 }
 
+const (
+	// sessionIdleLifetime is how long a sign-in lasts without being used. Every request
+	// pushes its expiry this far ahead, up to sessionMaxLifetime.
+	sessionIdleLifetime = 30 * 24 * time.Hour
+	// sessionMaxLifetime is how long a sign-in can last however often it is used. After
+	// it the device asks for the password again, so a token copied once does not stay
+	// good for as long as the device keeps using it.
+	sessionMaxLifetime = 90 * 24 * time.Hour
+	// sessionPurgeKeep is how long expired and revoked sign-ins are kept before the
+	// maintenance sweep deletes them.
+	sessionPurgeKeep = 7 * 24 * time.Hour
+	// sessionPurgeInterval is how often that sweep runs.
+	sessionPurgeInterval = time.Hour
+)
+
+// sessionNextExpiry is when a sign-in created at createdAt expires if it is used at now:
+// the idle lifetime from now, but never past the absolute lifetime. A creation time that
+// does not parse counts as now, so the session is not cut short by bad data.
+func sessionNextExpiry(createdAt string, now time.Time) time.Time {
+	next := now.UTC().Add(sessionIdleLifetime)
+	created, err := time.Parse(time.RFC3339Nano, createdAt)
+	if err != nil {
+		return next
+	}
+	if limit := created.UTC().Add(sessionMaxLifetime); limit.Before(next) {
+		return limit
+	}
+	return next
+}
+
 func (s *Server) logout(c *fiber.Ctx) error {
-	sessionID, _ := c.Locals("authSessionID").(string)
+	sessionID := authSessionID(c)
 	if sessionID == "" {
 		return c.SendStatus(fiber.StatusNoContent)
 	}
-	now := database.Now()
-	if _, err := s.db.Exec(`UPDATE auth_sessions SET revoked_at = ? WHERE id = ? AND revoked_at IS NULL`, now, sessionID); err != nil {
+	if err := s.revokeSession(sessionID, database.Now()); err != nil {
 		return err
 	}
-	if err := s.sessions.Delete(sessionID); err != nil {
-		return err
-	}
-	s.endSessionStreams(sessionID)
 	// Signing out is also leaving: show the account offline now rather than after the
 	// heartbeat window. Another signed-in device restores it with its next heartbeat.
 	if user := currentUser(c); user.ID != "" {
@@ -47,32 +76,36 @@ func (s *Server) logout(c *fiber.Ctx) error {
 	return c.SendStatus(fiber.StatusNoContent)
 }
 
-func (s *Server) listAuthSessions(c *fiber.Ctx) error {
-	user := currentUser(c)
-	currentID, _ := c.Locals("authSessionID").(string)
+// listSessions lists an account's live sign-ins, newest use first. currentID marks the
+// one the request came from.
+func (s *Server) listSessions(userID, currentID string) ([]AuthSession, error) {
 	rows, err := s.db.Query(
-		`SELECT id, latest_ip, user_agent, os, device_name, created_at, last_accessed_at, expires_at, revoked_at
+		`SELECT id, latest_ip, user_agent, os, device_name, created_at, last_accessed_at, expires_at
 		 FROM auth_sessions WHERE user_id = ? AND revoked_at IS NULL ORDER BY last_accessed_at DESC`,
-		user.ID,
+		userID,
 	)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	defer rows.Close()
 	sessions := []AuthSession{}
 	for rows.Next() {
 		var item AuthSession
-		var revokedAt sql.NullString
-		if err := rows.Scan(&item.ID, &item.LatestIP, &item.UserAgent, &item.OS, &item.DeviceName, &item.CreatedAt, &item.LastAccessedAt, &item.ExpiresAt, &revokedAt); err != nil {
-			return err
+		if err := rows.Scan(&item.ID, &item.LatestIP, &item.UserAgent, &item.OS, &item.DeviceName, &item.CreatedAt, &item.LastAccessedAt, &item.ExpiresAt); err != nil {
+			return nil, err
 		}
-		if revokedAt.Valid {
-			item.RevokedAt = &revokedAt.String
-		}
-		item.Current = item.ID == currentID
+		item.Current = currentID != "" && item.ID == currentID
 		if !sessionExpired(item.ExpiresAt) {
 			sessions = append(sessions, item)
 		}
+	}
+	return sessions, rows.Err()
+}
+
+func (s *Server) listAuthSessions(c *fiber.Ctx) error {
+	sessions, err := s.listSessions(currentUser(c).ID, authSessionID(c))
+	if err != nil {
+		return err
 	}
 	return c.JSON(fiber.Map{"sessions": sessions})
 }
@@ -90,17 +123,58 @@ func (s *Server) revokeAuthSession(c *fiber.Ctx) error {
 	if ownerID != user.ID {
 		return fiber.NewError(fiber.StatusNotFound, "session not found")
 	}
-	now := database.Now()
-	if _, err := s.db.Exec(`UPDATE auth_sessions SET revoked_at = ? WHERE id = ?`, now, sessionID); err != nil {
+	if err := s.revokeSession(sessionID, database.Now()); err != nil {
 		return err
 	}
-	if err := s.sessions.Delete(sessionID); err != nil {
+	return c.JSON(fiber.Map{"revoked": true, "current": sessionID == authSessionID(c)})
+}
+
+// revokeSession signs one sign-in out, named by its public id. Its stored session data
+// goes, and its live event streams and relay connections end at once rather than at
+// their next check.
+func (s *Server) revokeSession(sessionID, now string) error {
+	var tokenHash sql.NullString
+	err := s.db.QueryRow(`SELECT token_hash FROM auth_sessions WHERE id = ?`, sessionID).Scan(&tokenHash)
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return err
 	}
-	// A signed-out device must stop receiving at once, not at its next request.
+	if _, err := s.db.Exec(`UPDATE auth_sessions SET revoked_at = ? WHERE id = ? AND revoked_at IS NULL`, now, sessionID); err != nil {
+		return err
+	}
+	if tokenHash.Valid && tokenHash.String != "" {
+		if err := s.sessionStorage.DeleteHashed(tokenHash.String); err != nil {
+			return err
+		}
+	}
 	s.endSessionStreams(sessionID)
-	currentID, _ := c.Locals("authSessionID").(string)
-	return c.JSON(fiber.Map{"revoked": true, "current": sessionID == currentID})
+	return nil
+}
+
+// sessionForToken finds the live sign-in a token belongs to: its public id, its account
+// and when it expires. sql.ErrNoRows means there is none.
+func (s *Server) sessionForToken(token string) (sessionID, userID, expiresAt string, err error) {
+	if token == "" {
+		return "", "", "", sql.ErrNoRows
+	}
+	err = s.db.QueryRow(
+		`SELECT id, user_id, expires_at FROM auth_sessions WHERE token_hash = ? AND revoked_at IS NULL`,
+		database.SessionTokenHash(token),
+	).Scan(&sessionID, &userID, &expiresAt)
+	return sessionID, userID, expiresAt, err
+}
+
+// purgeSessions deletes sign-ins that can no longer be used, at most once an hour.
+func (s *Server) purgeSessions(now time.Time) error {
+	s.sessionPurgeMu.Lock()
+	due := now.Sub(s.sessionPurgedAt) >= sessionPurgeInterval
+	if due {
+		s.sessionPurgedAt = now
+	}
+	s.sessionPurgeMu.Unlock()
+	if !due {
+		return nil
+	}
+	return s.sessionStorage.PurgeSessions(now, sessionPurgeKeep)
 }
 
 func sessionExpired(value string) bool {

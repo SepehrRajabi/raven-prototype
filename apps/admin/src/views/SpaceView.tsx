@@ -23,6 +23,9 @@ type Pending =
 export function SpaceView({ api, spaceId }: { api: AdminApi; spaceId: string }) {
   const detail = useLoad(() => api.space(spaceId), spaceId);
   const [pending, setPending] = useState<Pending>(null);
+  // Members whose role change is on its way. Their menu waits for the answer, so two quick
+  // changes cannot come back in the wrong order.
+  const [savingRole, setSavingRole] = useState<ReadonlySet<string>>(() => new Set());
   const [error, setError] = useState("");
 
   if (detail.error && !detail.data) {
@@ -60,6 +63,11 @@ export function SpaceView({ api, spaceId }: { api: AdminApi; spaceId: string }) 
         }
       />
       {error ? <div className="mb-4"><Notice>{error}</Notice></div> : null}
+      {detail.error ? (
+        <div className="mb-4">
+          <Notice>Couldn’t refresh this page, so it may be out of date. {detail.error}</Notice>
+        </div>
+      ) : null}
       {!space.ownerId ? (
         <div className="mb-6">
           <Notice tone="warning">Nobody owns this space, so nobody in it can change its settings or roles. Make a member its owner below.</Notice>
@@ -105,11 +113,21 @@ export function SpaceView({ api, spaceId }: { api: AdminApi; spaceId: string }) 
                   <Select
                     aria-label={`Role of ${member.username}`}
                     value={member.role}
+                    disabled={savingRole.has(member.userId)}
                     onChange={(event) => {
+                      const userId = member.userId;
+                      setSavingRole((current) => new Set(current).add(userId));
                       api
-                        .setMemberRole(space.id, member.userId, event.target.value as "member" | "moderator")
+                        .setMemberRole(space.id, userId, event.target.value as "member" | "moderator")
                         .then(apply)
-                        .catch((cause: unknown) => setError(errorMessage(cause)));
+                        .catch((cause: unknown) => setError(errorMessage(cause)))
+                        .finally(() =>
+                          setSavingRole((current) => {
+                            const next = new Set(current);
+                            next.delete(userId);
+                            return next;
+                          }),
+                        );
                     }}
                   >
                     <option value="member">Member</option>

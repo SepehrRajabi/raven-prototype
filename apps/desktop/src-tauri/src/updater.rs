@@ -7,7 +7,11 @@
 //! - nothing is installed unless its signature matches the key built into this app (the
 //!   plugin verifies the bytes as part of the download);
 //! - a failed check, download or install leaves the current version running;
-//! - Raven never restarts while the shell reports it is busy (in a Nest, capturing).
+//! - Raven never restarts while the shell reports it is busy (in a Nest, capturing), or
+//!   while the native audio engine itself is in a call, whatever the page says;
+//! - the version a manifest announces must be the version the installer was signed for
+//!   (`requireSignedVersion`, checked by the plugin), so an older signed build cannot be
+//!   offered under a newer number.
 
 use serde::{Deserialize, Serialize};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -244,7 +248,7 @@ impl UpdaterRuntime {
             });
         });
 
-        let mut last_error = String::new();
+        let mut signature_failed = false;
         for attempt in 0..DOWNLOAD_ATTEMPTS {
             if attempt > 0 {
                 tokio::time::sleep(Duration::from_secs(2 * 3_u64.pow(attempt - 1))).await;
@@ -284,11 +288,16 @@ impl UpdaterRuntime {
                         "[raven] update download attempt {} failed: {error}",
                         attempt + 1
                     );
-                    last_error = error.to_string();
+                    // A download that fails the signature or signed-version check would
+                    // fail the same way again.
+                    if is_signature_failure(&error) {
+                        signature_failed = true;
+                        break;
+                    }
                 }
             }
         }
-        let message = if last_error.to_ascii_lowercase().contains("signature") {
+        let message = if signature_failed {
             "The download didn’t pass Raven’s signature check, so it wasn’t installed."
         } else {
             "The download didn’t finish. Your current version is unchanged."
@@ -306,6 +315,11 @@ impl UpdaterRuntime {
         let _operation = self.0.operation.lock().await;
         if self.0.busy.load(Ordering::SeqCst) {
             return Err(self.busy_message());
+        }
+        // The page reports calls through `updater_set_busy`; the engine's own state is
+        // checked as well, so a page that failed to report one cannot end a call.
+        if engine_in_call(&self.0.app) {
+            return Err("Raven can’t restart while you are in a call.".to_string());
         }
         let (found, bytes) = {
             let state = self.0.state.lock().expect("updater state poisoned");
@@ -358,6 +372,38 @@ impl UpdaterRuntime {
             format!("Raven can’t restart while {reason}.")
         }
     }
+}
+
+/// True while the native audio engine is joining, in, or rejoining a call.
+fn engine_in_call(app: &AppHandle) -> bool {
+    use crate::audio::{domain::AudioConnectionStatus, state::SharedAudioEngineState};
+    let Some(state) = app.try_state::<SharedAudioEngineState>() else {
+        return false;
+    };
+    let engine = state
+        .read()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    engine.capture_demand.call_active
+        || matches!(
+            engine.mixer.session.connection_status,
+            AudioConnectionStatus::Connecting
+                | AudioConnectionStatus::Connected
+                | AudioConnectionStatus::Reconnecting
+        )
+}
+
+/// Whether a download was refused for its signature: bad bytes, the wrong key, or a version
+/// other than the one it was signed for.
+fn is_signature_failure(error: &tauri_plugin_updater::Error) -> bool {
+    use tauri_plugin_updater::Error;
+    matches!(
+        error,
+        Error::Minisign(_)
+            | Error::Base64(_)
+            | Error::SignatureUtf8(_)
+            | Error::SignedVersionMismatch { .. }
+            | Error::MissingSignedVersion
+    )
 }
 
 /// Debug builds may point at another manifest (`RAVEN_UPDATE_ENDPOINT`) to rehearse an

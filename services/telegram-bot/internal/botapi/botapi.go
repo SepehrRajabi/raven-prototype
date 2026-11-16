@@ -23,15 +23,41 @@ type Client struct {
 	BaseURL string // default https://api.telegram.org
 	Token   string
 	HTTP    *http.Client
-	// Sleep waits out a 429; tests replace it.
-	Sleep func(time.Duration)
+	// Sleep waits out a 429 and returns ctx's error early when ctx ends; tests
+	// replace it.
+	Sleep func(context.Context, time.Duration) error
 }
+
+// ErrTooBig is returned by Download for a file larger than the limit it was given.
+var ErrTooBig = errors.New("telegram file download: file too big")
 
 func New(baseURL, token string) *Client {
 	if baseURL == "" {
 		baseURL = "https://api.telegram.org"
 	}
-	return &Client{BaseURL: strings.TrimRight(baseURL, "/"), Token: token, HTTP: &http.Client{}, Sleep: time.Sleep}
+	return &Client{BaseURL: strings.TrimRight(baseURL, "/"), Token: token, HTTP: &http.Client{}, Sleep: sleep}
+}
+
+// sleep waits for d, or until ctx ends.
+func sleep(ctx context.Context, d time.Duration) error {
+	t := time.NewTimer(d)
+	defer t.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-t.C:
+		return nil
+	}
+}
+
+// wait waits out a 429, ending early when ctx does.
+func (c *Client) wait(ctx context.Context, d time.Duration) error {
+	if c.Sleep != nil {
+		if err := c.Sleep(ctx, d); err != nil {
+			return err
+		}
+	}
+	return ctx.Err()
 }
 
 type User struct {
@@ -131,11 +157,8 @@ func (c *Client) call(ctx context.Context, method string, timeout time.Duration,
 		err := c.callOnce(ctx, method, timeout, build, out)
 		var apiErr *Error
 		if errors.As(err, &apiErr) && apiErr.Code == 429 && attempt < maxAttempts {
-			if c.Sleep != nil {
-				c.Sleep(time.Duration(apiErr.RetryAfter) * time.Second)
-			}
-			if ctx.Err() != nil {
-				return ctx.Err()
+			if err := c.wait(ctx, time.Duration(apiErr.RetryAfter)*time.Second); err != nil {
+				return err
 			}
 			continue
 		}
@@ -283,46 +306,52 @@ func (c *Client) SendDocument(ctx context.Context, chatID int64, path, filename 
 	}, nil)
 }
 
-// Download streams a file from getFile's file_path into dst.
-func (c *Client) Download(ctx context.Context, filePath, dst string) error {
+// Download streams a file from getFile's file_path into dst and returns its size. It
+// reads at most maxBytes whatever getFile reported; a larger file is removed and
+// ErrTooBig returned.
+func (c *Client) Download(ctx context.Context, filePath, dst string, maxBytes int64) (int64, error) {
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Minute)
 	defer cancel()
 	u := c.BaseURL + "/file/bot" + c.Token + "/" + strings.TrimPrefix((&url.URL{Path: filePath}).EscapedPath(), "/")
 	for attempt := 1; ; attempt++ {
 		req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
 		if err != nil {
-			return c.redact(err)
+			return 0, c.redact(err)
 		}
 		resp, err := c.HTTP.Do(req)
 		if err != nil {
-			return c.redact(err)
+			return 0, c.redact(err)
 		}
 		if resp.StatusCode == http.StatusTooManyRequests && attempt < maxAttempts {
 			ra, _ := strconv.Atoi(resp.Header.Get("Retry-After"))
 			resp.Body.Close()
-			if c.Sleep != nil {
-				c.Sleep(time.Duration(ra) * time.Second)
+			if err := c.wait(ctx, time.Duration(ra)*time.Second); err != nil {
+				return 0, err
 			}
 			continue
 		}
 		if resp.StatusCode != http.StatusOK {
 			resp.Body.Close()
-			return fmt.Errorf("telegram file download: status %d", resp.StatusCode)
+			return 0, fmt.Errorf("telegram file download: status %d", resp.StatusCode)
 		}
 		out, err := os.Create(dst)
 		if err != nil {
 			resp.Body.Close()
-			return err
+			return 0, err
 		}
-		_, err = io.Copy(out, resp.Body)
+		n, err := io.Copy(out, io.LimitReader(resp.Body, maxBytes+1))
 		resp.Body.Close()
 		if cerr := out.Close(); err == nil {
 			err = cerr
 		}
+		if err == nil && n > maxBytes {
+			os.Remove(dst)
+			return 0, ErrTooBig
+		}
 		if err != nil {
 			os.Remove(dst)
-			return c.redact(err)
+			return 0, c.redact(err)
 		}
-		return nil
+		return n, nil
 	}
 }

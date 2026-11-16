@@ -3,8 +3,10 @@ package bot
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
+	"os"
 	"path"
 	"strings"
 	"sync"
@@ -18,10 +20,20 @@ import (
 const (
 	maxAnimationSeconds = 10
 	maxDownloadBytes    = 20 << 20
-	packLimit           = 48 << 20
-	downloadSlots       = 4
+	downloadSlots       = 4 // downloads at once, for everyone
+	perUserDownloads    = 2 // of those, at most this many for one user
+	maxQueuedPerUser    = 30
+	maxQueuedTotal      = 1000
 	maxSkippedLines     = 20
 	defaultPackTitle    = "Telegram pack"
+)
+
+// packLimit keeps each file under Telegram's 50 MB upload limit; tests lower it.
+var packLimit int64 = 48 << 20
+
+const (
+	busyText    = "I'm still working through what you sent. Send the rest when the pack count updates."
+	tooManyText = "Too many people are making packs right now. Try again in a few minutes."
 )
 
 const startText = `I turn Telegram stickers and GIFs into a pack for Raven.
@@ -45,13 +57,28 @@ type Bot struct {
 	Store *drafts.Store
 	Log   *slog.Logger
 
-	sem    chan struct{}
-	qmu    sync.Mutex
-	queues map[int64]*[]func()
+	// sem holds the download slots. Goroutines blocked on a full channel are woken in
+	// arrival order, and each user takes at most perUserDownloads of them, so someone
+	// adding one sticker waits for one download, not for a whole set.
+	sem chan struct{}
+	// pending counts updates queued or running. When it is full, Run stops polling until
+	// some finish: Telegram keeps the rest.
+	pending chan struct{}
+	qmu     sync.Mutex
+	queues  map[int64]*userQueue
+}
+
+// userQueue is one user's updates, run one after another.
+type userQueue struct {
+	fns []func()
+	// told is set once the user has been told they are sending too fast; it resets
+	// when the queue drains.
+	told bool
 }
 
 func New(api *botapi.Client, store *drafts.Store, log *slog.Logger) *Bot {
-	return &Bot{API: api, Store: store, Log: log, sem: make(chan struct{}, downloadSlots), queues: map[int64]*[]func(){}}
+	return &Bot{API: api, Store: store, Log: log, sem: make(chan struct{}, downloadSlots),
+		pending: make(chan struct{}, maxQueuedTotal), queues: map[int64]*userQueue{}}
 }
 
 // Run long-polls until ctx ends.
@@ -76,13 +103,48 @@ func (b *Bot) Run(ctx context.Context) error {
 		}
 		for _, u := range ups {
 			offset = u.UpdateID + 1
-			u := u
-			if user, ok := updateUser(u); ok {
-				b.serial(user, func() { b.safeHandle(ctx, u) })
-			}
+			b.dispatch(ctx, u)
 		}
 	}
 	return nil
+}
+
+// dispatch queues one update behind the user's earlier ones. It waits while too many
+// updates are pending overall, and drops the update, telling the user once, when that
+// user already has a full queue.
+func (b *Bot) dispatch(ctx context.Context, u botapi.Update) {
+	user, ok := updateUser(u)
+	if !ok {
+		return
+	}
+	select {
+	case b.pending <- struct{}{}:
+	case <-ctx.Done():
+		return
+	}
+	accepted, tell := b.enqueue(user, func() {
+		defer func() { <-b.pending }()
+		b.safeHandle(ctx, u)
+	}, true)
+	if accepted {
+		return
+	}
+	<-b.pending
+	if tell {
+		go b.busy(ctx, u)
+	}
+}
+
+// busy tells the user an update was dropped because they sent too much at once.
+func (b *Bot) busy(ctx context.Context, u botapi.Update) {
+	switch {
+	case u.CallbackQuery != nil:
+		if err := b.API.AnswerCallbackQuery(ctx, u.CallbackQuery.ID, busyText); err != nil {
+			b.Log.Warn("answerCallbackQuery failed", "err", err)
+		}
+	case u.Message != nil:
+		b.say(ctx, u.Message.Chat.ID, busyText)
+	}
 }
 
 func updateUser(u botapi.Update) (int64, bool) {
@@ -100,36 +162,48 @@ func (b *Bot) waiting(user int64) int {
 	b.qmu.Lock()
 	defer b.qmu.Unlock()
 	if q, ok := b.queues[user]; ok {
-		return len(*q)
+		return len(q.fns)
 	}
 	return 0
 }
 
-// serial runs fns for one user one after another, in arrival order.
-func (b *Bot) serial(user int64, fn func()) {
+// serial runs fns for one user one after another, in arrival order. It is for the
+// bot's own work (the expiry sweep), which is never dropped.
+func (b *Bot) serial(user int64, fn func()) { b.enqueue(user, fn, false) }
+
+// enqueue adds fn to the user's queue. With limit set it refuses fn when
+// maxQueuedPerUser updates are already waiting; tell is then true the first time since
+// the queue last drained.
+func (b *Bot) enqueue(user int64, fn func(), limit bool) (accepted, tell bool) {
 	b.qmu.Lock()
 	if q, ok := b.queues[user]; ok {
-		*q = append(*q, fn)
+		if limit && len(q.fns) >= maxQueuedPerUser {
+			tell, q.told = !q.told, true
+			b.qmu.Unlock()
+			return false, tell
+		}
+		q.fns = append(q.fns, fn)
 		b.qmu.Unlock()
-		return
+		return true, false
 	}
-	q := &[]func(){fn}
+	q := &userQueue{fns: []func(){fn}}
 	b.queues[user] = q
 	b.qmu.Unlock()
 	go func() {
 		for {
 			b.qmu.Lock()
-			if len(*q) == 0 {
+			if len(q.fns) == 0 {
 				delete(b.queues, user)
 				b.qmu.Unlock()
 				return
 			}
-			f := (*q)[0]
-			*q = (*q)[1:]
+			f := q.fns[0]
+			q.fns = q.fns[1:]
 			b.qmu.Unlock()
 			f()
 		}
 	}()
+	return true, false
 }
 
 func (b *Bot) safeHandle(ctx context.Context, u botapi.Update) {
@@ -218,10 +292,8 @@ func (b *Bot) handleCommand(ctx context.Context, m *botapi.Message) {
 		b.clear(ctx, chat, user)
 		b.say(ctx, chat, "Cleared. Send stickers or GIFs to start a new pack.")
 	case "/title":
-		d, err := b.Store.Ensure(user)
-		if err != nil {
-			b.Log.Error("draft failed", "err", err)
-			b.say(ctx, chat, "Something went wrong. Try again.")
+		d := b.ensure(ctx, user, chat)
+		if d == nil {
 			return
 		}
 		if rest == "" {
@@ -240,6 +312,22 @@ func (b *Bot) handleCommand(ctx context.Context, m *botapi.Message) {
 	}
 }
 
+// ensure returns the user's draft, creating it, or tells the user why it can't.
+func (b *Bot) ensure(ctx context.Context, user, chat int64) *drafts.Draft {
+	d, err := b.Store.Ensure(user)
+	switch {
+	case errors.Is(err, drafts.ErrTooManyDrafts):
+		b.Log.Warn("draft limit reached", "limit", b.Store.Limits().Drafts)
+		b.say(ctx, chat, tooManyText)
+		return nil
+	case err != nil:
+		b.Log.Error("draft failed", "err", err)
+		b.say(ctx, chat, "Something went wrong. Try again.")
+		return nil
+	}
+	return d
+}
+
 func packTitle(d *drafts.Draft) string {
 	switch {
 	case d.Title != "":
@@ -254,10 +342,8 @@ func packTitle(d *drafts.Draft) string {
 // status offers the rest of the set.
 func (b *Bot) handleSticker(ctx context.Context, m *botapi.Message, user int64) {
 	st := m.Sticker
-	d, err := b.Store.Ensure(user)
-	if err != nil {
-		b.Log.Error("draft failed", "err", err)
-		b.say(ctx, m.Chat.ID, "Something went wrong. Try again.")
+	d := b.ensure(ctx, user, m.Chat.ID)
+	if d == nil {
 		return
 	}
 	if st.SetName != "" && st.Type != "custom_emoji" && !d.FullSets[st.SetName] && d.OfferSet != st.SetName {
@@ -385,10 +471,8 @@ type fetched struct {
 // addCandidates downloads what can be added and reports the new status.
 // wholeSetTitle is set when candidates are a whole sticker set.
 func (b *Bot) addCandidates(ctx context.Context, user, chat int64, cands []cand, wholeSetTitle string) {
-	d, err := b.Store.Ensure(user)
-	if err != nil {
-		b.Log.Error("draft failed", "err", err)
-		b.say(ctx, chat, "Something went wrong. Try again.")
+	d := b.ensure(ctx, user, chat)
+	if d == nil {
 		return
 	}
 	type job struct {
@@ -410,15 +494,23 @@ func (b *Bot) addCandidates(ctx context.Context, user, chat int64, cands []cand,
 			jobs = append(jobs, job{c, d.NextPath("")})
 		}
 	}
+	// At most perUserDownloads workers, so one big set never takes every slot.
 	results := make([]fetched, len(jobs))
+	next := make(chan int)
 	var wg sync.WaitGroup
-	for i := range jobs {
+	for range min(perUserDownloads, len(jobs)) {
 		wg.Add(1)
-		go func(i int) {
+		go func() {
 			defer wg.Done()
-			results[i] = b.fetch(ctx, jobs[i].c, jobs[i].base)
-		}(i)
+			for i := range next {
+				results[i] = b.fetch(ctx, d, jobs[i].c, jobs[i].base)
+			}
+		}()
 	}
+	for i := range jobs {
+		next <- i
+	}
+	close(next)
 	wg.Wait()
 	for i, r := range results {
 		if r.ok {
@@ -437,8 +529,18 @@ func (b *Bot) addCandidates(ctx context.Context, user, chat int64, cands []cand,
 	}
 }
 
-// fetch downloads one candidate to base+ext, 4 at a time.
-func (b *Bot) fetch(ctx context.Context, c cand, base string) fetched {
+// budgetSkip is the reason shown for an item the disk limits leave out.
+func (b *Bot) budgetSkip(err error) string {
+	if errors.Is(err, drafts.ErrDiskFull) {
+		b.Log.Warn("disk budget reached", "limit", b.Store.Limits().TotalBytes)
+		return "the bot is short of space right now, try again later"
+	}
+	return fmt.Sprintf("over the %d MB pack size limit", b.Store.Limits().DraftBytes>>20)
+}
+
+// fetch downloads one candidate into d at base+ext, downloadSlots at a time for
+// everyone. Its size is reserved against d's limits before the download.
+func (b *Bot) fetch(ctx context.Context, d *drafts.Draft, c cand, base string) fetched {
 	select {
 	case b.sem <- struct{}{}:
 		defer func() { <-b.sem }()
@@ -462,12 +564,36 @@ func (b *Bot) fetch(ctx context.Context, c cand, base string) fetched {
 			ext = e
 		}
 	}
+	// getFile's size is exact on Telegram's own API; without one, reserve the most a
+	// file may be.
+	reserved := f.FileSize
+	if reserved <= 0 {
+		reserved = maxDownloadBytes
+	}
+	if err := b.Store.Reserve(d, reserved); err != nil {
+		return fetched{reason: b.budgetSkip(err)}
+	}
 	dst := base + ext
-	if err := b.API.Download(ctx, f.FilePath, dst); err != nil {
+	n, err := b.API.Download(ctx, f.FilePath, dst, maxDownloadBytes)
+	if err != nil {
+		b.Store.Release(d, reserved)
+		if errors.Is(err, botapi.ErrTooBig) {
+			return fetched{reason: "bigger than 20 MB"}
+		}
 		b.Log.Warn("download failed", "err", err)
 		return fetched{reason: "download failed"}
 	}
-	return fetched{ok: true, item: ravenpack.Item{Path: dst, Ext: ext, Kind: c.kind, Title: c.title, Emoji: c.emoji, UniqueID: c.uniqueID}}
+	switch {
+	case n < reserved:
+		b.Store.Release(d, reserved-n)
+	case n > reserved:
+		if err := b.Store.Reserve(d, n-reserved); err != nil {
+			os.Remove(dst)
+			b.Store.Release(d, reserved)
+			return fetched{reason: b.budgetSkip(err)}
+		}
+	}
+	return fetched{ok: true, item: ravenpack.Item{Path: dst, Ext: ext, Kind: c.kind, Title: c.title, Emoji: c.emoji, UniqueID: c.uniqueID, Size: n}}
 }
 
 func statusText(d *drafts.Draft) string {
@@ -552,16 +678,41 @@ func (b *Bot) done(ctx context.Context, user, chat int64) {
 		b.say(ctx, chat, "Couldn't make the pack. Tap Make the pack to try again.")
 		return
 	}
-	for _, p := range packs {
-		if err := b.API.SendDocument(ctx, chat, p.Path, p.Filename); err != nil {
+	// Each file counts against the daily limit as it is sent. When sending stops partway,
+	// the items already sent leave the draft, so trying again sends only the rest.
+	sent := 0
+	for i, p := range packs {
+		stop := ""
+		if i > 0 && !b.Store.PackAllowed(user) {
+			stop = fmt.Sprintf("That's %d packs today, the daily limit. The other %s are kept: tap Make the pack tomorrow to get them.",
+				drafts.MaxPerDay, plural(len(d.Items)-sent, "item"))
+		} else if err := b.API.SendDocument(ctx, chat, p.Path, p.Filename); err != nil {
 			b.Log.Error("sendDocument failed", "err", err)
-			b.say(ctx, chat, "Couldn't send the pack. Nothing is lost: tap Make the pack to try again.")
+			stop = "Couldn't send the pack. Nothing is lost: tap Make the pack to try again."
+			if i > 0 {
+				stop = fmt.Sprintf("Couldn't send the rest of the pack. The other %s are kept: tap Make the pack to try again.",
+					plural(len(d.Items)-sent, "item"))
+			}
+		}
+		if stop != "" {
+			if i > 0 {
+				b.Store.DropSent(d, sent)
+				d.SentFiles += i
+				b.say(ctx, chat, fmt.Sprintf("Sent %d of %d files. %s", i, len(packs), stop))
+				b.status(ctx, chat, d)
+				return
+			}
+			b.say(ctx, chat, stop)
 			return
 		}
+		b.Store.RecordPacks(user, 1)
+		sent += p.Items
 	}
-	b.Store.RecordPacks(user, len(packs))
 	file := "Here's your pack"
-	if len(packs) > 1 {
+	switch {
+	case d.SentFiles > 0:
+		file = "Here's the rest of your pack"
+	case len(packs) > 1:
 		file = fmt.Sprintf("Here's your pack, in %d files to stay under Telegram's size limit", len(packs))
 	}
 	msg := fmt.Sprintf("%s (%s). Save it, then in Raven open Settings › GIFs and stickers › Import pack… and pick it.", file, plural(len(d.Items), "item"))

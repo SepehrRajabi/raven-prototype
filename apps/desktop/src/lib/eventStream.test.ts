@@ -199,3 +199,65 @@ describe("sharing one stream", () => {
     expect(told).toBe(2);
   });
 });
+
+describe("limits and restarts", () => {
+  test("an unfinished frame over the limit ends the connection, and the stream reconnects", async () => {
+    const { MAX_EVENT_FRAME_CHARS } = await import("./api");
+    let calls = 0;
+    const opens: boolean[] = [];
+    const frames: string[] = [];
+    globalThis.fetch = (async () => {
+      calls += 1;
+      if (calls === 1) {
+        // Never finished, and larger than any frame the server sends.
+        return new Response(new ReadableStream<Uint8Array>({
+          start(controller) {
+            controller.enqueue(new TextEncoder().encode(`event: chat\ndata: ${"x".repeat(MAX_EVENT_FRAME_CHARS + 10)}`));
+          },
+        }), { status: 200 });
+      }
+      return streamOf('event: chat\ndata: {"type":"after"}\n\n');
+    }) as typeof fetch;
+
+    const close = new ApiClient().openEventStream(
+      { onFrame: (frame) => frames.push(frame.data), onOpen: (reconnected) => opens.push(reconnected) },
+      { initialReconnectDelayMs: 1, maxReconnectDelayMs: 2 },
+    );
+    await waitFor(() => frames.length === 1);
+    close();
+    expect(opens).toEqual([false, true]);
+    expect(frames).toEqual(['{"type":"after"}']);
+  });
+
+  test("restart opens the stream again for its listeners when it is not up", () => {
+    let opened = 0;
+    let closed = 0;
+    const hub = new EventStreamHub(() => {
+      opened += 1;
+      return () => void (closed += 1);
+    });
+    hub.restart();
+    expect(opened).toBe(0);
+    const leave = hub.subscribe({});
+    expect(opened).toBe(1);
+    hub.restart();
+    expect(opened).toBe(2);
+    expect(closed).toBe(1);
+    leave();
+  });
+
+  test("restart leaves a stream that is up alone", () => {
+    let opened = 0;
+    let handlers: EventStreamHandlers | null = null;
+    const hub = new EventStreamHub((next) => {
+      opened += 1;
+      handlers = next;
+      return () => undefined;
+    });
+    const leave = hub.subscribe({});
+    handlers!.onOpen?.(false);
+    hub.restart();
+    expect(opened).toBe(1);
+    leave();
+  });
+});

@@ -131,11 +131,30 @@ pub struct RenderCursor {
 }
 
 impl RenderReference {
+    #[cfg(test)]
     pub(crate) fn push_stereo(&self, interleaved_stereo: &[f32], sample_rate: u32) {
         if interleaved_stereo.is_empty() || sample_rate == 0 {
             return;
         }
-        let mut ring = self.lock_ring();
+        Self::append(&mut self.lock_ring(), interleaved_stereo, sample_rate);
+    }
+
+    /// [`Self::push_stereo`] for the device callback: never waits. False when a capture
+    /// thread holds the ring, and the caller keeps the block to push with the next one.
+    fn try_push_stereo(&self, interleaved_stereo: &[f32], sample_rate: u32) -> bool {
+        if interleaved_stereo.is_empty() || sample_rate == 0 {
+            return true;
+        }
+        let mut ring = match self.ring.try_lock() {
+            Ok(ring) => ring,
+            Err(std::sync::TryLockError::WouldBlock) => return false,
+            Err(std::sync::TryLockError::Poisoned(_)) => self.lock_ring(),
+        };
+        Self::append(&mut ring, interleaved_stereo, sample_rate);
+        true
+    }
+
+    fn append(ring: &mut RenderRing, interleaved_stereo: &[f32], sample_rate: u32) {
         if ring.sample_rate != sample_rate {
             ring.samples.clear();
             ring.sample_rate = sample_rate;
@@ -555,6 +574,9 @@ struct BusRenderer {
     master_gain: f32,
     volume: VolumeRamp,
     limiter_gain: f32,
+    /// Played audio the echo reference was busy for, pushed ahead of the next block so
+    /// the canceller still sees one unbroken stream. Capacity is reserved up front.
+    reference_backlog: Vec<f32>,
 }
 
 impl BusRenderer {
@@ -576,7 +598,39 @@ impl BusRenderer {
             master_gain,
             volume: VolumeRamp::new(bus_volume),
             limiter_gain: 1.0,
+            reference_backlog: Vec::with_capacity(reference_backlog_cap(sample_rate)),
         }
+    }
+
+    /// Hand the played block to the echo reference without waiting on a capture thread
+    /// that is reading it. A busy ring keeps the block for the next callback; a backlog
+    /// that would outgrow its reserved space (the reader is stuck) drops its oldest audio,
+    /// which the reader treats like any other gap.
+    fn push_reference(&mut self, out: &[f32]) {
+        if self.reference_backlog.is_empty() {
+            if self.reference.try_push_stereo(out, self.sample_rate) {
+                return;
+            }
+        } else if self
+            .reference
+            .try_push_stereo(&self.reference_backlog, self.sample_rate)
+        {
+            self.reference_backlog.clear();
+            if self.reference.try_push_stereo(out, self.sample_rate) {
+                return;
+            }
+        }
+        let cap = self.reference_backlog.capacity();
+        let overflow = (self.reference_backlog.len() + out.len()).saturating_sub(cap);
+        if overflow > 0 {
+            let overflow = overflow.min(self.reference_backlog.len());
+            let overflow = overflow - overflow % BUS_CHANNELS;
+            self.reference_backlog.drain(..overflow);
+        }
+        let room = cap.saturating_sub(self.reference_backlog.len());
+        let take = out.len().min(room) - out.len().min(room) % BUS_CHANNELS;
+        self.reference_backlog
+            .extend_from_slice(&out[out.len() - take..]);
     }
 
     /// Match the callback's track list to the registry. A busy registry is retried on the
@@ -651,8 +705,14 @@ impl BusRenderer {
         }
         self.limiter_gain = limit_bus(out, self.limiter_gain, self.sample_rate);
         // The canceller must see exactly what reached the speaker, post mute and limiter.
-        self.reference.push_stereo(out, self.sample_rate);
+        self.push_reference(out);
     }
+}
+
+/// Space the render backlog reserves: 100 ms of stereo, far more than a capture thread
+/// holds the ring for.
+fn reference_backlog_cap(sample_rate: u32) -> usize {
+    (sample_rate as usize / 10).max(1) * BUS_CHANNELS
 }
 
 /// Glides the output volume to its target in a straight line over [`VOLUME_RAMP_MS`].
@@ -1564,6 +1624,44 @@ fn play_on_stream(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_busy_echo_reference_gets_the_block_with_the_next_one_in_order() {
+        let reference = Arc::new(RenderReference::default());
+        let mut renderer =
+            BusRenderer::new(Arc::new(MixBus::default()), Arc::clone(&reference), 48_000);
+        let first = vec![0.25_f32; 480 * BUS_CHANNELS];
+        let second = vec![0.5_f32; 480 * BUS_CHANNELS];
+        {
+            // A capture thread reading the ring: the callback must not wait for it.
+            let _reader = reference.ring.lock().unwrap();
+            renderer.push_reference(&first);
+        }
+        assert_eq!(renderer.reference_backlog.len(), first.len());
+        renderer.push_reference(&second);
+        assert!(renderer.reference_backlog.is_empty());
+
+        let ring = reference.ring.lock().unwrap();
+        assert_eq!(ring.written, 960);
+        let samples: Vec<f32> = ring.samples.iter().copied().collect();
+        assert_eq!(samples[..first.len()], first[..]);
+        assert_eq!(samples[first.len()..], second[..]);
+    }
+
+    #[test]
+    fn a_stuck_echo_reference_keeps_only_the_newest_audio_it_has_room_for() {
+        let reference = Arc::new(RenderReference::default());
+        let mut renderer =
+            BusRenderer::new(Arc::new(MixBus::default()), Arc::clone(&reference), 48_000);
+        let cap = renderer.reference_backlog.capacity();
+        let _reader = reference.ring.lock().unwrap();
+        for _ in 0..40 {
+            renderer.push_reference(&vec![0.1_f32; 480 * BUS_CHANNELS]);
+        }
+        assert!(renderer.reference_backlog.len() <= cap);
+        assert_eq!(renderer.reference_backlog.capacity(), cap);
+        assert_eq!(renderer.reference_backlog.len() % BUS_CHANNELS, 0);
+    }
 
     fn limits() -> PlayoutLimits {
         PlayoutLimits::for_rate(48_000)

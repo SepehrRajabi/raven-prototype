@@ -217,7 +217,7 @@ func chatSeed(t *testing.T, server *Server, sender chatPerson, conversationID st
 }
 
 func chatListen(server *Server, person chatPerson) *streamClient {
-	return server.events.subscribeSession(person.user.ID, person.token, true)
+	return server.events.subscribeSession(person.user.ID, testSessionPublicID(server, person.token), true)
 }
 
 // nextChatEvent returns the next chat event on a stream, skipping the other kind.
@@ -1100,8 +1100,9 @@ func TestStreamEndsWhenItsSessionIsSignedOut(t *testing.T) {
 	second := chatPerson{user: alice.user, token: loginTestUser(t, server, "alice")}
 	revoked := chatListen(server, second)
 	kept := chatListen(server, alice)
+	secondID := testSessionPublicID(server, second.token)
 
-	chatDo(t, server, http.MethodDelete, alice.token, "/v1/auth/sessions/"+second.token, nil, http.StatusOK)
+	chatDo(t, server, http.MethodDelete, alice.token, "/v1/auth/sessions/"+secondID, nil, http.StatusOK)
 	select {
 	case <-revoked.done:
 	case <-time.After(time.Second):
@@ -1112,7 +1113,7 @@ func TestStreamEndsWhenItsSessionIsSignedOut(t *testing.T) {
 		t.Fatal("the other device's stream must stay open")
 	default:
 	}
-	if server.authSessionActive(second.token, alice.user.ID) {
+	if server.authSessionActive(secondID, alice.user.ID) {
 		t.Fatal("the revoked session should no longer be valid")
 	}
 

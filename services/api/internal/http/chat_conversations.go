@@ -69,6 +69,7 @@ func chatSummarySQL(one bool) string {
 				SELECT 1 FROM chat_messages m
 				WHERE m.conversation_id = c.id AND m.seq > cm.read_seq AND m.seq >= cm.visible_from_seq
 				  AND m.sender_id <> cm.user_id AND m.kind = 'text' AND m.deleted_at IS NULL
+				  AND m.seq > c.last_seq - %[3]d
 				  AND m.body LIKE '%%<@u:' || cm.user_id || '>%%'
 				  AND NOT EXISTS (SELECT 1 FROM chat_message_hides h WHERE h.user_id = cm.user_id AND h.message_id = m.id)
 				LIMIT %[1]d
@@ -88,7 +89,7 @@ func chatSummarySQL(one bool) string {
 	 LEFT JOIN users pmu ON pmu.id = pm.sender_id
 	 LEFT JOIN tree_members pmt ON pmt.tree_id = b.tree_id AND pmt.user_id = pmu.id
 	 LEFT JOIN user_preferences pmp ON pmp.user_id = pmu.id
-	 ORDER BY b.last_activity_ms DESC, b.id`, chatUnreadCap, filter)
+	 ORDER BY b.last_activity_ms DESC, b.id`, chatUnreadCap, filter, chatMentionScan)
 }
 
 // chatSummaries lists the caller's conversations, newest activity first. With onlyID it
@@ -1170,26 +1171,22 @@ func (s *Server) markChatRead(c *fiber.Ctx) error {
 }
 
 // chatReadAudience is who may be shown the reader's position now: the other members of
-// the conversation whose own switch for the category is on.
+// the conversation whose own switch for the category is on. It is one query, joined with
+// everyone's settings, rather than a lookup per member.
 func (s *Server) chatReadAudience(q chatQuerier, access chatAccess, category, readerID string) ([]string, error) {
-	members, err := s.chatAudience(q, access, "")
-	if err != nil {
-		return nil, err
+	switchOn := chatReadSwitchSQL(category, "s")
+	if access.Kind == chatKindNest {
+		return stringColumnTx(q,
+			`SELECT tm.user_id FROM tree_members tm
+			 LEFT JOIN chat_user_settings s ON s.user_id = tm.user_id
+			 WHERE tm.tree_id = ? AND tm.state = 'joined' AND tm.user_id <> ? AND `+switchOn,
+			access.TreeID, readerID)
 	}
-	ids := []string{}
-	for _, member := range members {
-		if member.UserID == readerID {
-			continue
-		}
-		on, err := chatReadSwitchOn(q, category, member.UserID)
-		if err != nil {
-			return nil, err
-		}
-		if on {
-			ids = append(ids, member.UserID)
-		}
-	}
-	return ids, nil
+	return stringColumnTx(q,
+		`SELECT cm.user_id FROM chat_members cm
+		 LEFT JOIN chat_user_settings s ON s.user_id = cm.user_id
+		 WHERE cm.conversation_id = ? AND cm.state = 'joined' AND cm.user_id <> ? AND `+switchOn,
+		access.ConversationID, readerID)
 }
 
 type chatSeenReader struct {

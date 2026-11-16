@@ -17,6 +17,10 @@ Object.defineProperty(globalThis, "localStorage", {
       if (throwing) throw new Error("blocked");
       store.set(key, value);
     },
+    removeItem: (key: string) => {
+      if (throwing) throw new Error("blocked");
+      store.delete(key);
+    },
   },
 });
 
@@ -91,31 +95,44 @@ describe("orderTrees", () => {
 });
 
 describe("last visited", () => {
+  const S = "https://raven.example";
   test("starts empty", () => {
-    expect(readLastVisited("u1")).toEqual({});
+    expect(readLastVisited(S, "u1")).toEqual({});
   });
 
   test("visiting a tree keeps the last nest, and the other way round", () => {
-    writeLastVisited("u1", { nestId: "n1" });
-    writeLastVisited("u1", { treeId: "t1" });
-    expect(readLastVisited("u1")).toEqual({ nestId: "n1", treeId: "t1" });
+    writeLastVisited(S, "u1", { nestId: "n1" });
+    writeLastVisited(S, "u1", { treeId: "t1" });
+    expect(readLastVisited(S, "u1")).toEqual({ nestId: "n1", treeId: "t1" });
   });
 
   test("is kept per account", () => {
-    writeLastVisited("u1", { nestId: "n1" });
-    expect(readLastVisited("u2")).toEqual({});
+    writeLastVisited(S, "u1", { nestId: "n1" });
+    expect(readLastVisited(S, "u2")).toEqual({});
+  });
+
+  test("is kept per server, since two servers can issue the same user id", () => {
+    writeLastVisited(S, "u1", { nestId: "n1" });
+    expect(readLastVisited("https://other.example", "u1")).toEqual({});
+  });
+
+  test("an entry an older version kept by user id alone is taken over once", () => {
+    store.set("raven.lastVisited.u1", JSON.stringify({ treeId: "t-old" }));
+    expect(readLastVisited(S, "u1")).toEqual({ treeId: "t-old" });
+    expect(store.has("raven.lastVisited.u1")).toBe(false);
+    expect(readLastVisited("https://other.example", "u1")).toEqual({});
   });
 
   test("ignores a value it cannot read", () => {
-    store.set("raven.lastVisited.u1", "{nope");
-    expect(readLastVisited("u1")).toEqual({});
-    store.set("raven.lastVisited.u1", JSON.stringify({ nestId: 4, treeId: "t" }));
-    expect(readLastVisited("u1")).toEqual({ treeId: "t" });
+    store.set(`raven.lastVisited.${S}|u1`, "{nope");
+    expect(readLastVisited(S, "u1")).toEqual({});
+    store.set(`raven.lastVisited.${S}|u1`, JSON.stringify({ nestId: 4, treeId: "t" }));
+    expect(readLastVisited(S, "u1")).toEqual({ treeId: "t" });
   });
 
   test("survives storage that throws", () => {
     throwing = true;
-    expect(() => writeLastVisited("u1", { nestId: "n1" })).not.toThrow();
-    expect(readLastVisited("u1")).toEqual({});
+    expect(() => writeLastVisited(S, "u1", { nestId: "n1" })).not.toThrow();
+    expect(readLastVisited(S, "u1")).toEqual({});
   });
 });

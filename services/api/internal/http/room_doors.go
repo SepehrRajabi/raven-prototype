@@ -62,7 +62,7 @@ const (
 )
 
 func knockEntryCutoff() string {
-	return time.Now().UTC().Add(-knockEntryWindow).Format(time.RFC3339Nano)
+	return database.Timestamp(time.Now().Add(-knockEntryWindow))
 }
 
 // doorDecisionIn is the one answer to whether a room's door lets someone through. Temporary
@@ -93,7 +93,7 @@ func (s *Server) doorDecisionIn(q chatQuerier, userID string, nest Nest) (doorDe
 	if err := q.QueryRow(
 		`SELECT COUNT(*) FROM session_participants
 		 WHERE nest_id = ? AND user_id = ? AND status = 'disconnected' AND left_at >= ?`,
-		nest.ID, userID, time.Now().UTC().Add(-doorRejoinGrace).Format(time.RFC3339Nano),
+		nest.ID, userID, database.Timestamp(time.Now().Add(-doorRejoinGrace)),
 	).Scan(&dropped); err != nil {
 		return doorRefused, err
 	}

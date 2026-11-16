@@ -167,7 +167,7 @@ func TestLegacyProfileKnocksKeepTheLongestWait(t *testing.T) {
 		{ToUserID: &userID, Status: "pending", ExpiresAt: now.Add(2 * time.Minute).Format(time.RFC3339Nano)},
 	}
 	states := profileKnockStates(knocks, now)
-	if len(states) != 1 || states[0].State != "pending" || states[0].RetryAt != now.Add(3*time.Minute).Format(time.RFC3339Nano) {
+	if len(states) != 1 || states[0].State != "pending" || !sameInstant(states[0].RetryAt, now.Add(3*time.Minute).Format(time.RFC3339Nano)) {
 		t.Fatalf("legacy duplicates made the button available too early: %+v", states)
 	}
 }

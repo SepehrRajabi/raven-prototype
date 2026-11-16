@@ -12,10 +12,13 @@ pub mod audio;
 mod diagnostics;
 pub mod media_hotkeys;
 mod fullscreen_window;
+mod ipc_scope;
+mod picked_paths;
 mod notifications;
 mod pip_window;
 pub mod overlay;
 pub mod push_to_talk;
+mod secrets;
 mod thumbnail_toolbar;
 pub mod tray;
 pub mod updater;
@@ -87,7 +90,7 @@ pub fn run() {
         .manage(push_to_talk::new_push_to_talk_state())
         .manage(tray::new_tray_state())
         .manage(workshop::new_workshop_state())
-        .invoke_handler(tauri::generate_handler![
+        .invoke_handler(ipc_scope::guard(tauri::generate_handler![
             attachments::attachment_prepare,
             attachments::attachment_read,
             attachments::attachment_discard,
@@ -218,12 +221,15 @@ pub fn run() {
             updater::updater_install,
             updater::updater_set_busy,
             diagnostics::diagnostics_log_ui_error,
+            secrets::secret_get,
+            secrets::secret_set,
+            secrets::secret_delete,
             workshop::workshop_publish,
             workshop::workshop_stop,
             workshop::workshop_connect,
             workshop::workshop_disconnect,
             workshop::workshop_stop_all
-        ])
+        ]))
         .setup(|app| {
             attachments::initialize(app.handle());
             library::initialize(app.handle());
@@ -257,6 +263,7 @@ pub fn run() {
             Ok(())
         })
         .on_window_event(|window, event| {
+            picked_paths::on_window_event(window, event);
             if let WindowEvent::CloseRequested { api, .. } = event {
                 if window.label() == "main" {
                     tray::handle_main_close_requested(window, api);

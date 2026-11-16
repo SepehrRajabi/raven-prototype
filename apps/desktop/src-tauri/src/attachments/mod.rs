@@ -281,6 +281,12 @@ pub async fn attachment_prepare(
             .get("X-Raven-Attachment")
             .and_then(|h| std::str::from_utf8(h.as_bytes()).ok()),
     )?;
+    // A path must be one the person dropped on the window this session.
+    if let Input::Path(options) = &input {
+        if !crate::picked_paths::is_granted(&options.path) {
+            return Err(AttachmentError::Io);
+        }
+    }
     tauri::async_runtime::spawn_blocking(move || prepare_input(&root, input))
         .await
         .map_err(|_| AttachmentError::Damaged)?

@@ -71,6 +71,10 @@ func (g CallGrants) Permission() *livekit.ParticipantPermission {
 	}
 }
 
+// DefaultLiveKitTokenTTL is how long a call token can be used to connect when the caller
+// does not say.
+const DefaultLiveKitTokenTTL = 5 * time.Minute
+
 type LiveKitTokenInput struct {
 	APIKey    string
 	APISecret string
@@ -83,8 +87,11 @@ type LiveKitTokenInput struct {
 }
 
 func SignLiveKitToken(input LiveKitTokenInput) (string, error) {
+	// A token is checked only when someone connects with it, and removing someone from
+	// a call cannot take back a token they already hold, so it stays short. LiveKit
+	// refreshes the token of a connected client by itself.
 	if input.ValidFor <= 0 {
-		input.ValidFor = 2 * time.Hour
+		input.ValidFor = DefaultLiveKitTokenTTL
 	}
 
 	canPublish := input.Grants.CanPublish

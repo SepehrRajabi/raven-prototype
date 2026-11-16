@@ -1,7 +1,10 @@
 package http
 
 import (
+	"bytes"
 	"encoding/json"
+	"image"
+	"image/png"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -11,7 +14,17 @@ import (
 	profilemedia "raven/services/api/internal/media"
 )
 
+// testPNG has a PNG's signature and nothing else: a broken image.
 var testPNG = []byte{0x89, 'P', 'N', 'G', '\r', '\n', 0x1a, '\n', 0, 0, 0, 0}
+
+// testAvatarPNG is a real 2x2 PNG.
+var testAvatarPNG = func() []byte {
+	var b bytes.Buffer
+	if err := png.Encode(&b, image.NewRGBA(image.Rect(0, 0, 2, 2))); err != nil {
+		panic(err)
+	}
+	return b.Bytes()
+}()
 
 func getAvatar(t *testing.T, server *Server, path, ifNoneMatch string) *http.Response {
 	t.Helper()
@@ -34,7 +47,7 @@ func TestAvatarCachingRevalidatesUnversionedAndPinsVersioned(t *testing.T) {
 	alice := currentTestUser(t, server, "alice")
 	path := "/v1/media/users/" + alice.ID + "/avatar"
 
-	postImage(t, server, aliceToken, "/v1/profile/avatar", "image/png", testPNG, http.StatusOK)
+	postImage(t, server, aliceToken, "/v1/profile/avatar", "image/png", testAvatarPNG, http.StatusOK)
 	first := getAvatar(t, server, path, "")
 	if first.StatusCode != http.StatusOK {
 		t.Fatalf("got %d", first.StatusCode)
@@ -60,7 +73,7 @@ func TestAvatarCachingRevalidatesUnversionedAndPinsVersioned(t *testing.T) {
 	}
 
 	// A new picture is a new object key, so the old tag no longer matches.
-	postImage(t, server, aliceToken, "/v1/profile/avatar", "image/png", testPNG, http.StatusOK)
+	postImage(t, server, aliceToken, "/v1/profile/avatar", "image/png", testAvatarPNG, http.StatusOK)
 	changed := getAvatar(t, server, path, etag)
 	if changed.StatusCode != http.StatusOK {
 		t.Fatalf("stale If-None-Match got %d, want 200", changed.StatusCode)
@@ -76,7 +89,7 @@ func TestAvatarCachingRevalidatesUnversionedAndPinsVersioned(t *testing.T) {
 	if err := json.Unmarshal(treeBody, &treePayload); err != nil {
 		t.Fatal(err)
 	}
-	postImage(t, server, aliceToken, "/v1/trees/"+treePayload.Tree.ID+"/avatar", "image/png", testPNG, http.StatusOK)
+	postImage(t, server, aliceToken, "/v1/trees/"+treePayload.Tree.ID+"/avatar", "image/png", testAvatarPNG, http.StatusOK)
 	tree := getAvatar(t, server, "/v1/media/trees/"+treePayload.Tree.ID+"/avatar", "")
 	if tree.Header.Get("Cache-Control") != "no-cache" || tree.Header.Get("ETag") == "" {
 		t.Fatalf("tree avatar headers: %v", tree.Header)
@@ -114,7 +127,7 @@ func TestAvatarChangeReachesOnlyPeopleWhoCanSeeThem(t *testing.T) {
 	}
 	daveStream := server.events.subscribe(dave.ID)
 
-	postImage(t, server, aliceToken, "/v1/profile/avatar", "image/png", testPNG, http.StatusOK)
+	postImage(t, server, aliceToken, "/v1/profile/avatar", "image/png", testAvatarPNG, http.StatusOK)
 	for name, stream := range streams {
 		select {
 		case frame := <-stream.frames:
@@ -134,4 +147,39 @@ func TestAvatarChangeReachesOnlyPeopleWhoCanSeeThem(t *testing.T) {
 		t.Fatalf("dave, who shares nothing with alice, was sent %s", frame.data)
 	case <-time.After(100 * time.Millisecond):
 	}
+}
+
+// A profile image must decode, and one over 1024 pixels a side is stored scaled down,
+// so no reader decodes a huge picture to draw an avatar.
+func TestAvatarDimensionsAreBounded(t *testing.T) {
+	server, aliceToken := newTestServer(t)
+	media := &memoryProfileMedia{objects: map[string]profilemedia.Object{}}
+	server.profileMedia = media
+	postImage(t, server, aliceToken, "/v1/profile/avatar", "image/png", testPNG, http.StatusUnsupportedMediaType)
+
+	var large bytes.Buffer
+	if err := png.Encode(&large, image.NewGray(image.Rect(0, 0, 4000, 2000))); err != nil {
+		t.Fatal(err)
+	}
+	if large.Len() > maxProfileImageBytes {
+		t.Fatalf("test image is %d bytes", large.Len())
+	}
+	postImage(t, server, aliceToken, "/v1/profile/avatar", "image/png", large.Bytes(), http.StatusOK)
+	alice := currentTestUser(t, server, "alice")
+	var key string
+	if err := server.db.QueryRow(`SELECT avatar_object_key FROM users WHERE id = ?`, alice.ID).Scan(&key); err != nil {
+		t.Fatal(err)
+	}
+	stored := media.objects[key]
+	config, _, err := image.DecodeConfig(bytes.NewReader(stored.Bytes))
+	if err != nil || config.Width != 1024 || config.Height != 512 {
+		t.Fatalf("stored %s %dx%d (%v)", stored.ContentType, config.Width, config.Height, err)
+	}
+
+	// Pictures beyond what is decoded at all are refused.
+	var huge bytes.Buffer
+	if err := png.Encode(&huge, image.NewGray(image.Rect(0, 0, 9000, 10))); err != nil {
+		t.Fatal(err)
+	}
+	postImage(t, server, aliceToken, "/v1/profile/avatar", "image/png", huge.Bytes(), http.StatusRequestEntityTooLarge)
 }

@@ -73,16 +73,19 @@ export function useCachedUrl(key: string | null, load: () => Promise<string>, en
       return;
     }
     let live = true;
-    let release: (() => void) | null = null;
+    // Held from before the load starts: two loads finishing together over the budget
+    // could otherwise evict and revoke this URL before it is shown.
+    let release: (() => void) | null = mediaCache.hold(key);
     setFailed(false);
     loadRef.current().then(
       (next) => {
         if (!live) return;
-        release = mediaCache.hold(key);
         setUrl(next);
       },
       (error: unknown) => {
         if (!live) return;
+        release?.();
+        release = null;
         if (error instanceof AttachmentGoneError) setGone(true);
         else setFailed(true);
       },

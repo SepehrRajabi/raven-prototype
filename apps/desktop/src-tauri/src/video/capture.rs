@@ -2000,6 +2000,7 @@ mod screen {
 mod screen {
     use std::io::Read;
     use std::os::fd::{AsRawFd, OwnedFd, RawFd};
+    use std::os::unix::process::CommandExt;
     use std::process::{Child, ChildStdout, Command, Stdio};
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::{Arc, Mutex};
@@ -2008,6 +2009,7 @@ mod screen {
     use ashpd::desktop::screencast::{CursorMode, Screencast, SourceType, Stream};
     use ashpd::desktop::PersistMode;
 
+    use crate::audio::capture::platform::linux::system_tool;
     use crate::video::convert::GstI420Layout;
     use crate::video::domain::{
         DisplayTarget, VideoQualityProfile, VideoSourceKind, VideoSourceRuntimeState,
@@ -2038,7 +2040,7 @@ mod screen {
         portal.block_on(Screencast::new()).map_err(|error| {
             format!("Screen sharing needs a working xdg-desktop-portal ScreenCast service: {error}")
         })?;
-        let pipewire_plugin = Command::new("gst-inspect-1.0")
+        let pipewire_plugin = Command::new(system_tool("gst-inspect-1.0"))
             .arg("pipewiresrc")
             .stdin(Stdio::null())
             .stdout(Stdio::null())
@@ -2222,14 +2224,21 @@ mod screen {
         profile: &VideoQualityProfile,
     ) -> Result<(Child, ChildStdout), VideoCaptureError> {
         let fd = selection.fd.as_raw_fd();
-        clear_cloexec(fd)?;
         let node_id = selection.stream.pipe_wire_node_id();
         let fps = profile.fps.round().clamp(1.0, 120.0) as u32;
         let caps = format!(
             "video/x-raw,format=I420,width={},height={},framerate={}/1",
             profile.width, profile.height, fps
         );
-        let mut child = Command::new("gst-launch-1.0")
+        let mut command = Command::new(system_tool("gst-launch-1.0"));
+        // The PipeWire fd stays close-on-exec in Raven, so no other child spawned meanwhile
+        // inherits the screen capture; only this child's copy is made inheritable.
+        // SAFETY: the closure runs in the forked child before exec and calls only `fcntl`,
+        // which is async-signal-safe.
+        unsafe {
+            command.pre_exec(move || clear_cloexec(fd));
+        }
+        let mut child = command
             .arg("-q")
             .arg("pipewiresrc")
             .arg(format!("fd={fd}"))
@@ -2264,18 +2273,17 @@ mod screen {
         Ok((child, stdout))
     }
 
-    fn clear_cloexec(fd: RawFd) -> Result<(), VideoCaptureError> {
+    /// Make `fd` survive exec. Called only in the child between fork and exec; a failure
+    /// fails the spawn, which is reported like any other launch error.
+    fn clear_cloexec(fd: RawFd) -> std::io::Result<()> {
+        // SAFETY: plain flag reads and writes on a descriptor this process owns.
         let flags = unsafe { libc::fcntl(fd, libc::F_GETFD) };
         if flags < 0 {
-            return Err(VideoCaptureError::StreamFailed {
-                message: "failed to inspect PipeWire file-descriptor flags".to_string(),
-            });
+            return Err(std::io::Error::last_os_error());
         }
-        let result = unsafe { libc::fcntl(fd, libc::F_SETFD, flags & !libc::FD_CLOEXEC) };
-        if result < 0 {
-            return Err(VideoCaptureError::StreamFailed {
-                message: "failed to pass PipeWire file descriptor to GStreamer".to_string(),
-            });
+        // SAFETY: as above.
+        if unsafe { libc::fcntl(fd, libc::F_SETFD, flags & !libc::FD_CLOEXEC) } < 0 {
+            return Err(std::io::Error::last_os_error());
         }
         Ok(())
     }

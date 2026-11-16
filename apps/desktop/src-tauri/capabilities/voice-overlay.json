@@ -1,0 +1,7 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "voice-overlay",
+  "description": "The voice overlay's Raven commands; its window permissions are in auxiliary.json",
+  "windows": ["voice-overlay"],
+  "permissions": ["voice-overlay-commands"]
+}

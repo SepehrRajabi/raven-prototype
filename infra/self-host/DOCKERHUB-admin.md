@@ -21,13 +21,18 @@ docker compose run --rm api user create --username alice --password '...' --role
 
 ## How it is served
 
-- Static files only (nginx), port `80`. Health check: `GET /healthz`.
+- Static files only (nginx), port `8080`. Health check: `GET /healthz`. nginx runs as an
+  unprivileged user (uid 101), not root. Images before this change listened on port `80`:
+  if your compose file or proxy points at the container's port `80`, change it to `8080`
+  (the bundled `infra/self-host/compose.yaml` maps `127.0.0.1:8080:8080`).
 - The dashboard calls the API on **its own origin**. Your reverse proxy must serve the
   dashboard and pass `/v1/admin/`, `/v1/auth/` and `/v1/media/` to the API on the same host.
   `infra/self-host/nginx.example.conf` has a ready server block.
 - Put a second password in front of it at the proxy (`auth_basic` in the example). Signing in
   and every permission check still happen in the API.
-- Sends strict security headers (no framing, same-origin only content security policy).
+- Sends strict security headers on every file: no framing, a same-origin content security
+  policy, and a permissions policy that turns off camera, microphone, location and other
+  device access. Hashed asset files are cached for a year; the page itself is never cached.
 - Built for `linux/amd64` and `linux/arm64`. Tags: `X.Y.Z` (a release) and `latest`. Use the
   same tag as `raven-api`.
 

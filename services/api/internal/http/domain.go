@@ -3,6 +3,8 @@ package http
 import (
 	"database/sql"
 	"errors"
+	"fmt"
+	"math"
 	"os"
 	"strconv"
 	"strings"
@@ -248,6 +250,10 @@ func (s *Server) createTree(c *fiber.Ctx) error {
 	if err := c.BodyParser(&body); err != nil {
 		return fiber.NewError(fiber.StatusBadRequest, "invalid Tree payload")
 	}
+	// The count and the creation share a lock on the account, so two requests at once
+	// cannot both take the last place under the limit.
+	unlock := s.spaceLocks.lock(user.ID)
+	defer unlock()
 	if err := s.requireSpaceCreation(user); err != nil {
 		return err
 	}
@@ -451,7 +457,12 @@ func (s *Server) joinTree(c *fiber.Ctx) error {
 	if tree.Visibility != "public" {
 		return fiber.NewError(fiber.StatusForbidden, "this Tree is private")
 	}
+	// Someone the tree's moderators removed cannot walk straight back in through the free
+	// door: it stays shut to them for treeRemovalCooldown, as a vote does for a call.
 	if tree.JoinPolicy == "free" {
+		if err := s.requireNotRecentlyRemoved(tree.ID, actor.ID); err != nil {
+			return err
+		}
 		member, _, err := s.addTreeMemberCore(tree.ID, actor.ID, treeRoleMember)
 		if err != nil {
 			return err
@@ -464,6 +475,38 @@ func (s *Server) joinTree(c *fiber.Ctx) error {
 	}
 	s.publishTree(tree.ID, "tree.join_requested", actor.ID)
 	return c.JSON(fiber.Map{"status": "waiting", "tree": tree, "joinRequest": request})
+}
+
+// treeRemovalCooldown is how long someone removed from a free-join tree is kept from
+// joining it again. It matches being voted out of a call, and nobody can lift it early.
+const treeRemovalCooldown = 15 * time.Minute
+
+// requireNotRecentlyRemoved refuses someone the tree's moderators took out less than
+// treeRemovalCooldown ago. Leaving on one's own never holds anyone off.
+func (s *Server) requireNotRecentlyRemoved(treeID, userID string) error {
+	var state string
+	var leftAt sql.NullString
+	err := s.db.QueryRow(`SELECT state, left_at FROM tree_members WHERE tree_id = ? AND user_id = ?`, treeID, userID).Scan(&state, &leftAt)
+	if errors.Is(err, sql.ErrNoRows) || (err == nil && (state != "removed" || !leftAt.Valid)) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	removedAt, err := time.Parse(time.RFC3339Nano, leftAt.String)
+	if err != nil {
+		return err
+	}
+	remaining := time.Until(removedAt.Add(treeRemovalCooldown))
+	if remaining <= 0 {
+		return nil
+	}
+	minutes := int(math.Ceil(remaining.Minutes()))
+	unit := "minutes"
+	if minutes == 1 {
+		unit = "minute"
+	}
+	return fiber.NewError(fiber.StatusForbidden, fmt.Sprintf("You were removed from this space. You can join again in %d %s.", minutes, unit))
 }
 
 func (s *Server) listTreeJoinRequests(c *fiber.Ctx) error {
@@ -511,11 +554,19 @@ func (s *Server) resolveTreeJoinRequest(c *fiber.Ctx, status string) error {
 	); err != nil {
 		return err
 	}
-	if _, err := tx.Exec(
+	resolved, err := tx.Exec(
 		`UPDATE tree_join_requests SET status = ?, resolved_at = ?, resolved_by_user_id = ? WHERE id = ? AND status = 'pending'`,
 		status, now, actor.ID, request.ID,
-	); err != nil {
+	)
+	if err != nil {
 		return err
+	}
+	// Someone else answered it first. Letting this answer go on would let a rejected
+	// person in, or record an answer nobody gave.
+	if count, err := resolved.RowsAffected(); err != nil {
+		return err
+	} else if count == 0 {
+		return fiber.NewError(fiber.StatusConflict, "This request was already answered.")
 	}
 	if status == "accepted" {
 		if _, err := tx.Exec(
@@ -1156,6 +1207,9 @@ func (s *Server) createKnock(c *fiber.Ctx) error {
 		}
 		nestID = &nest.ID
 	}
+	if utf8.RuneCountInString(strings.TrimSpace(body.Message)) > knockReplyMaxRunes {
+		return fiber.NewError(fiber.StatusBadRequest, "a knock message can be at most "+strconv.Itoa(knockReplyMaxRunes)+" characters")
+	}
 	if toUserID == nil && nestID == nil {
 		return fiber.NewError(fiber.StatusBadRequest, "knock requires a user or Nest target")
 	}
@@ -1313,7 +1367,7 @@ func (s *Server) resolveKnock(c *fiber.Ctx, status, reply string, replyUntil tim
 	}
 	var storedReply, storedUntil, storedMessage any
 	if reply != "" {
-		storedReply, storedUntil = reply, replyUntil.Format(time.RFC3339Nano)
+		storedReply, storedUntil = reply, database.Timestamp(replyUntil)
 	}
 	if replyMessage != "" {
 		storedMessage = replyMessage
@@ -1324,11 +1378,19 @@ func (s *Server) resolveKnock(c *fiber.Ctx, status, reply string, replyUntil tim
 		return err
 	}
 	defer tx.Rollback()
-	if _, err := tx.Exec(
+	resolved, err := tx.Exec(
 		`UPDATE knocks SET status = ?, resolved_at = ?, resolved_by_user_id = ?, reply = ?, reply_until = ?, reply_message = ? WHERE id = ? AND status = 'pending'`,
 		status, now, actor.ID, storedReply, storedUntil, storedMessage, knock.ID,
-	); err != nil {
+	)
+	if err != nil {
 		return err
+	}
+	// Two answers at once: only the first counts, so a decline cannot be followed by an
+	// admission.
+	if count, err := resolved.RowsAffected(); err != nil {
+		return err
+	} else if count == 0 {
+		return fiber.NewError(fiber.StatusConflict, "knock is not pending")
 	}
 	if status == "accepted" && knock.NestID != nil {
 		if _, err := tx.Exec(
@@ -1786,7 +1848,7 @@ func (s *Server) upsertPresence(user User, state, reachability string, activeNes
 
 func (s *Server) insertKnock(fromUserID string, toUserID, nestID *string, message string) (Knock, error) {
 	now := database.Now()
-	expiresAt := time.Now().UTC().Add(knockTTL()).Format(time.RFC3339Nano)
+	expiresAt := database.Timestamp(time.Now().Add(knockTTL()))
 	var messageValue any
 	if message != "" {
 		messageValue = message
@@ -1925,6 +1987,17 @@ func (s *Server) canResolveKnock(userID string, knock Knock) (bool, error) {
 	if err != nil || moderator || knock.FromUserID == userID {
 		return moderator, err
 	}
+	// "Someone inside lets you in" is how a knock-first room of a tree works, and there
+	// the tree decides who may be in at all. A nest outside a tree admits people only
+	// through its creator and moderators (resolveJoinRequest), so a guest in its call
+	// does not get to admit others by accepting their knock.
+	nest, err := s.findNest(*knock.NestID)
+	if err != nil {
+		return false, err
+	}
+	if !nestBelongsToTree(nest) {
+		return false, nil
+	}
 	var inside int
 	err = s.db.QueryRow(
 		`SELECT COUNT(*) FROM session_participants WHERE nest_id = ? AND user_id = ? AND left_at IS NULL`,
@@ -2027,7 +2100,7 @@ func temporaryNestExpiryFrom(now string) string {
 	if err != nil {
 		parsed = time.Now().UTC()
 	}
-	return parsed.Add(temporaryNestEmptyTTL()).Format(time.RFC3339Nano)
+	return database.Timestamp(parsed.Add(temporaryNestEmptyTTL()))
 }
 
 func temporaryNestEmptyTTL() time.Duration {

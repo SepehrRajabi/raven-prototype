@@ -6,7 +6,7 @@ import type { AdminUser, CapabilityMode, SessionUser, UserCapability, UserDetail
 import { ImageViewer } from "../components/ImageViewer";
 import { SendMessageDialog } from "../components/SendMessageDialog";
 import { Badge, Button, ConfirmDialog, Dialog, Field, Input, List, Loading, Notice, PageHeader, Row, Section, Select, TemporaryPasswordDialog } from "../components/ui";
-import { CAPABILITY_LIMITS, CAPABILITY_TEXT, describeEffective, formatAgo, formatDate, formatDateTime } from "../lib/format";
+import { CAPABILITY_LIMITS, capabilityText, describeEffective, formatAgo, formatDate, formatDateTime } from "../lib/format";
 import { IMAGE_TYPES, imageProblem } from "../lib/image";
 import { routeHref } from "../lib/route";
 import { errorMessage, useLoad } from "../lib/useLoad";
@@ -18,6 +18,7 @@ export function UserView({ api, userId, me }: { api: AdminApi; userId: string; m
   const [pending, setPending] = useState<Pending>(null);
   const [temporaryPassword, setTemporaryPassword] = useState("");
   const [messaging, setMessaging] = useState(false);
+  const [signingOut, setSigningOut] = useState<ReadonlySet<string>>(() => new Set());
   const [error, setError] = useState("");
 
   if (detail.error && !detail.data) {
@@ -32,6 +33,7 @@ export function UserView({ api, userId, me }: { api: AdminApi; userId: string; m
   const { user, capabilities, sessions, spaces } = detail.data;
   const isSelf = user.id === me.id;
   const isAdmin = user.role === "admin";
+  const deleted = user.deleted;
   const apply = (next: UserDetail) => {
     detail.set(next);
     setError("");
@@ -45,27 +47,38 @@ export function UserView({ api, userId, me }: { api: AdminApi; userId: string; m
         description={
           <span className="flex flex-wrap items-center gap-2">
             @{user.username}
-            {isAdmin ? <Badge>Admin</Badge> : null}
-            {user.status === "suspended" ? <Badge tone="destructive">Suspended</Badge> : <Badge tone="live">Active</Badge>}
-            {user.mustChangePassword ? <Badge tone="warning">Temporary password</Badge> : null}
+            {isAdmin && !deleted ? <Badge>Admin</Badge> : null}
+            <StatusBadge user={user} />
+            {user.mustChangePassword && !deleted ? <Badge tone="warning">Temporary password</Badge> : null}
             {isSelf ? <Badge>You</Badge> : null}
           </span>
         }
         actions={
-          <>
-            {user.status === "active" ? (
-              <Button size="sm" onClick={() => setMessaging(true)}>
-                Send a message
+          deleted ? undefined : (
+            <>
+              {user.status === "active" ? (
+                <Button size="sm" onClick={() => setMessaging(true)}>
+                  Send a message
+                </Button>
+              ) : null}
+              <Button size="sm" onClick={() => setPending("rename")}>
+                Edit name
               </Button>
-            ) : null}
-            <Button size="sm" onClick={() => setPending("rename")}>
-              Edit name
-            </Button>
-          </>
+            </>
+          )
         }
       />
       {error ? <div className="mb-4"><Notice>{error}</Notice></div> : null}
-      {user.status === "suspended" ? (
+      {detail.error ? (
+        <div className="mb-4">
+          <Notice>Couldn’t refresh this page, so it may be out of date. {detail.error}</Notice>
+        </div>
+      ) : null}
+      {deleted ? (
+        <div className="mb-6">
+          <Notice tone="neutral">This account was deleted by its owner. Only a placeholder is kept for the audit log, so nothing here can be changed.</Notice>
+        </div>
+      ) : user.status === "suspended" ? (
         <div className="mb-6">
           <Notice tone="warning">This account is suspended{user.statusReason ? `: ${user.statusReason}` : ""}. It cannot sign in.</Notice>
         </div>
@@ -79,20 +92,22 @@ export function UserView({ api, userId, me }: { api: AdminApi; userId: string; m
         {detail.data.invitedBy ? <Fact label="Invited by" value={`${detail.data.invitedBy.displayName} (@${detail.data.invitedBy.username})`} /> : null}
       </dl>
 
-      <Section
-        title="Permissions"
-        description={
-          isAdmin
-            ? "Administrators can do everything. These apply only if the account is made an ordinary user."
-            : "Default follows the server setting. Allow and Don’t allow apply to this account whatever the default is."
-        }
-      >
-        <List>
-          {capabilities.map((capability) => (
-            <CapabilityRow key={capability.capability} api={api} userId={user.id} capability={capability} isAdmin={isAdmin} onChanged={apply} onError={setError} />
-          ))}
-        </List>
-      </Section>
+      {deleted ? null : (
+        <Section
+          title="Permissions"
+          description={
+            isAdmin
+              ? "Administrators can do everything. These apply only if the account is made an ordinary user."
+              : "Default follows the server setting. Allow and Don’t allow apply to this account whatever the default is."
+          }
+        >
+          <List>
+            {capabilities.map((capability) => (
+              <CapabilityRow key={capability.capability} api={api} userId={user.id} capability={capability} isAdmin={isAdmin} onChanged={apply} onError={setError} />
+            ))}
+          </List>
+        </Section>
+      )}
 
       <Section title="Spaces" description="Managed from each space’s page.">
         <List empty="Not in any space.">
@@ -106,86 +121,108 @@ export function UserView({ api, userId, me }: { api: AdminApi; userId: string; m
         </List>
       </Section>
 
-      <Section
-        title="Signed-in devices"
-        actions={
-          sessions.length > 0 ? (
-            <Button size="sm" onClick={() => setPending("sign-out")}>
-              {isSelf ? "Sign out other devices" : "Sign out everywhere"}
-            </Button>
-          ) : null
-        }
-      >
-        <List empty="Not signed in anywhere.">
-          {sessions.map((session) => (
-            <Row key={session.id}>
-              <div className="min-w-0 flex-1">
-                <p className="truncate font-medium">
-                  {session.deviceName} <span className="font-normal text-muted-foreground">· {session.os}</span>
-                </p>
-                <p className="truncate text-small text-subtle">
-                  {session.latestIp || "Unknown address"} · signed in {formatDateTime(session.createdAt)}
-                </p>
-              </div>
-              <span className="text-small text-subtle">{formatAgo(session.lastAccessedAt)}</span>
-              <Button
-                size="sm"
-                variant="ghost"
-                aria-label={`Sign out ${session.deviceName}`}
-                onClick={() => {
-                  api
-                    .revokeSession(user.id, session.id)
-                    .then(() => detail.reload())
-                    .catch((cause: unknown) => setError(errorMessage(cause)));
-                }}
-              >
-                Sign out
-              </Button>
-            </Row>
-          ))}
-        </List>
-      </Section>
+      {deleted ? null : (
+        <>
+          <Section
+            title="Signed-in devices"
+            actions={
+              sessions.length > 0 ? (
+                <Button size="sm" onClick={() => setPending("sign-out")}>
+                  {isSelf ? "Sign out other devices" : "Sign out everywhere"}
+                </Button>
+              ) : null
+            }
+          >
+            <List empty="Not signed in anywhere.">
+              {sessions.map((session) => (
+                <Row key={session.id}>
+                  <div className="min-w-0 flex-1">
+                    <p className="truncate font-medium">
+                      {session.deviceName} <span className="font-normal text-muted-foreground">· {session.os}</span>
+                    </p>
+                    <p className="truncate text-small text-subtle">
+                      {session.latestIp || "Unknown address"} · signed in {formatDateTime(session.createdAt)}
+                    </p>
+                  </div>
+                  {session.current ? (
+                    // Signing this one out would end the dashboard session itself; Sign out in
+                    // the sidebar does that on purpose.
+                    <Badge>This device</Badge>
+                  ) : (
+                    <>
+                      <span className="text-small text-subtle">{formatAgo(session.lastAccessedAt)}</span>
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        aria-label={`Sign out ${session.deviceName}`}
+                        disabled={signingOut.has(session.id)}
+                        onClick={() => {
+                          setSigningOut((current) => new Set(current).add(session.id));
+                          api
+                            .revokeSession(user.id, session.id)
+                            .then(() => detail.reload())
+                            .catch((cause: unknown) => setError(errorMessage(cause)))
+                            .finally(() =>
+                              setSigningOut((current) => {
+                                const next = new Set(current);
+                                next.delete(session.id);
+                                return next;
+                              }),
+                            );
+                        }}
+                      >
+                        Sign out
+                      </Button>
+                    </>
+                  )}
+                </Row>
+              ))}
+            </List>
+          </Section>
 
-      <Section title="Account">
-        <List>
-          <ProfilePicture key={user.updatedAt} api={api} user={user} onChanged={detail.reload} onError={setError} />
-          <Row>
-            <div className="min-w-0 flex-1">
-              <p className="font-medium">Password</p>
-              <p className="text-small text-muted-foreground">Make a temporary password to pass on. They are signed out and choose a new one.</p>
-            </div>
-            <Button size="sm" disabled={isSelf} title={isSelf ? "Change your own password in the Raven app." : undefined} onClick={() => setPending("reset")}>
-              Reset password
-            </Button>
-          </Row>
-          <Row>
-            <div className="min-w-0 flex-1">
-              <p className="font-medium">{isAdmin ? "Administrator" : "Ordinary user"}</p>
-              <p className="text-small text-muted-foreground">{isAdmin ? "Can use this dashboard." : "Cannot use this dashboard."}</p>
-            </div>
-            <Button size="sm" disabled={isSelf} onClick={() => setPending("role")}>
-              {isAdmin ? "Remove administrator" : "Make administrator"}
-            </Button>
-          </Row>
-          <Row>
-            <div className="min-w-0 flex-1">
-              <p className="font-medium">{user.status === "suspended" ? "Reactivate" : "Suspend"}</p>
-              <p className="text-small text-muted-foreground">
-                {user.status === "suspended" ? "Let this account sign in again." : "Sign them out everywhere, end their calls and stop them signing in. Nothing they made is removed."}
-              </p>
-            </div>
-            {user.status === "suspended" ? (
-              <Button size="sm" onClick={() => setPending("reactivate")}>
-                Reactivate
-              </Button>
-            ) : (
-              <Button size="sm" variant="destructive" disabled={isSelf} onClick={() => setPending("suspend")}>
-                Suspend
-              </Button>
-            )}
-          </Row>
-        </List>
-      </Section>
+          <Section title="Account">
+            <List>
+              <ProfilePicture key={user.updatedAt} api={api} user={user} onChanged={detail.reload} onError={setError} />
+              <Row>
+                <div className="min-w-0 flex-1">
+                  <p className="font-medium">Password</p>
+                  <p className="text-small text-muted-foreground">Make a temporary password to pass on. They are signed out and choose a new one.</p>
+                </div>
+                <Button size="sm" disabled={isSelf} title={isSelf ? "Change your own password in the Raven app." : undefined} onClick={() => setPending("reset")}>
+                  Reset password
+                </Button>
+              </Row>
+              <Row>
+                <div className="min-w-0 flex-1">
+                  <p className="font-medium">{isAdmin ? "Administrator" : "Ordinary user"}</p>
+                  <p className="text-small text-muted-foreground">{isAdmin ? "Can use this dashboard." : "Cannot use this dashboard."}</p>
+                </div>
+                <Button size="sm" disabled={isSelf} onClick={() => setPending("role")}>
+                  {isAdmin ? "Remove administrator" : "Make administrator"}
+                </Button>
+              </Row>
+              <Row>
+                <div className="min-w-0 flex-1">
+                  <p className="font-medium">{user.status === "suspended" ? "Reactivate" : "Suspend"}</p>
+                  <p className="text-small text-muted-foreground">
+                    {user.status === "suspended" ? "Let this account sign in again." : "Sign them out everywhere, end their calls and stop them signing in. Nothing they made is removed."}
+                  </p>
+                </div>
+                {user.status === "suspended" ? (
+                  <Button size="sm" onClick={() => setPending("reactivate")}>
+                    Reactivate
+                  </Button>
+                ) : (
+                  <Button size="sm" variant="destructive" disabled={isSelf} onClick={() => setPending("suspend")}>
+                    Suspend
+                  </Button>
+                )}
+              </Row>
+            </List>
+          </Section>
+
+        </>
+      )}
 
       {messaging ? <SendMessageDialog api={api} title={`Message ${user.displayName}`} audiences={[{ label: user.displayName, to: [user.id] }]} onClose={() => setMessaging(false)} /> : null}
       {pending === "suspend" ? <SuspendDialog api={api} detail={detail.data} onClose={() => setPending(null)} onDone={apply} /> : null}
@@ -230,6 +267,12 @@ export function UserView({ api, userId, me }: { api: AdminApi; userId: string; m
       {temporaryPassword ? <TemporaryPasswordDialog username={user.username} password={temporaryPassword} onClose={() => setTemporaryPassword("")} /> : null}
     </>
   );
+}
+
+function StatusBadge({ user }: { user: AdminUser }) {
+  if (user.deleted) return <Badge>Deleted</Badge>;
+  if (user.status === "suspended") return <Badge tone="destructive">Suspended</Badge>;
+  return <Badge tone="live">Active</Badge>;
 }
 
 function Back() {
@@ -328,7 +371,7 @@ interface CapabilityRowProps {
 }
 
 function CapabilityRow({ api, userId, capability, isAdmin, onChanged, onError }: CapabilityRowProps) {
-  const text = CAPABILITY_TEXT[capability.capability];
+  const text = capabilityText(capability.capability);
   const [busy, setBusy] = useState(false);
   const [limit, setLimit] = useState(capability.limit === null ? "" : String(capability.limit));
   const save = async (mode: CapabilityMode, nextLimit: string) => {
@@ -357,7 +400,7 @@ function CapabilityRow({ api, userId, capability, isAdmin, onChanged, onError }:
     <Row>
       <div className="min-w-0 flex-1 py-1">
         <p className="font-medium">{text.title}</p>
-        <p className="text-small text-muted-foreground">{text.description}</p>
+        {text.description ? <p className="text-small text-muted-foreground">{text.description}</p> : null}
         <p className={capability.effective || isAdmin ? "mt-1 text-caption text-subtle" : "mt-1 text-caption text-warning"}>{describeEffective(capability, isAdmin)}</p>
       </div>
       {showLimit ? (

@@ -5,6 +5,8 @@ import { audioCommands } from "@/lib/audio";
 import { clearAvatarVersions, noteAvatarVersion } from "@/lib/avatarVersions";
 import { ENTRY_CONNECTING_TTL_MS } from "@/lib/callArrivals";
 import { rememberActiveNest } from "@/lib/crashRecovery";
+import { forgetDrafts } from "@/lib/chat/drafts";
+import { mediaCache } from "@/lib/chat/media";
 import { forgetUnsentMessages } from "@/lib/chat/outbox";
 import { subscribeNestUpdates } from "@/lib/eventStream";
 import { stopAllSessions } from "@/lib/workshop";
@@ -20,6 +22,8 @@ import { answerToast, answerUntil, knockAnswers, newKnockAnswers } from "./knock
  * itself goes as soon as the person is connected (`entryNoticePhase`).
  */
 const ENTRY_NOTICE_TTL_MS = ENTRY_CONNECTING_TTL_MS;
+/** One empty list for every "nothing yet", so it compares equal from render to render. */
+const NONE: never[] = [];
 /** Every this many presence heartbeats, also refresh the people shown from Trees. */
 const TREE_PRESENCE_REFRESH_EVERY = 4;
 
@@ -49,6 +53,35 @@ function isNestGone(error: unknown) {
   return error instanceof ApiError && (error.status === 403 || error.status === 404 || error.status === 410);
 }
 
+/** The server's answer with the fields an older server leaves out filled in. */
+export function withServerPropertyDefaults(properties: ServerProperties): ServerProperties {
+  return {
+    ...api.fallbackServerProperties(),
+    ...properties,
+    properties: properties.properties ?? {},
+  };
+}
+
+export type LastGoodProperties = { baseUrl: string; properties: ServerProperties } | null;
+
+/**
+ * What to show after asking a server for its properties. A failed fetch keeps what that
+ * server last said, so one blip does not take chat away or send calls to a guessed
+ * address. The defaults stand in only before the server has answered once.
+ */
+export function resolveServerProperties(
+  baseUrl: string,
+  fetched: ServerProperties | null,
+  lastGood: LastGoodProperties,
+): { properties: ServerProperties; lastGood: LastGoodProperties } {
+  if (fetched) {
+    const properties = withServerPropertyDefaults(fetched);
+    return { properties, lastGood: { baseUrl, properties } };
+  }
+  if (lastGood?.baseUrl === baseUrl) return { properties: lastGood.properties, lastGood };
+  return { properties: api.fallbackServerProperties(), lastGood };
+}
+
 function messageFromError(error: unknown, fallback = "Request failed") {
   return error instanceof Error && error.message ? error.message : fallback;
 }
@@ -71,6 +104,12 @@ export function useRavenShellData(): RavenShellData {
   const [passwordChangeRequired, setPasswordChangeRequired] = useState(false);
   const [entryNotices, setEntryNotices] = useState<NestEntryNotice[]>([]);
   const refreshPromiseRef = useRef<Promise<void> | null>(null);
+  const dataRef = useRef<RavenShellData | null>(null);
+  // The last properties the server answered with, and which server that was.
+  const lastGoodPropertiesRef = useRef<{ baseUrl: string; properties: ServerProperties } | null>(null);
+  // Who is signed in, for clean-up that runs after `home` is cleared.
+  const signedInRef = useRef("");
+  signedInRef.current = home?.user.id ?? "";
   // Home is fetched from several places at once (live events, the heartbeat, a refresh
   // after an action). Each fetch takes a ticket when it starts, and a reply is dropped if a
   // fetch that started later has already been applied, so an older snapshot never
@@ -153,17 +192,11 @@ export function useRavenShellData(): RavenShellData {
   }, []);
 
   const refreshServerProperties = useCallback(async () => {
-    let next: ServerProperties;
-    try {
-      const properties = await api.serverProperties();
-      next = {
-        ...api.fallbackServerProperties(),
-        ...properties,
-        properties: properties.properties ?? {},
-      };
-    } catch {
-      next = api.fallbackServerProperties();
-    }
+    const baseUrl = api.getBaseUrl();
+    const fetched = await api.serverProperties().catch(() => null);
+    const resolved = resolveServerProperties(baseUrl, fetched, lastGoodPropertiesRef.current);
+    lastGoodPropertiesRef.current = resolved.lastGood;
+    const next = resolved.properties;
     setServerProperties(next);
     setApiServerUrl(api.getBaseUrl());
     setApiServerHistory(api.getServerHistory());
@@ -531,9 +564,13 @@ export function useRavenShellData(): RavenShellData {
 
   // Forgets this sign-in and everything shown for it.
   const forgetSignIn = useCallback(() => {
+    // Only this account's unsent messages go; other saved accounts keep theirs.
+    forgetUnsentMessages(localStorage, api.getBaseUrl(), signedInRef.current);
     api.clearSession();
     setPasswordChangeRequired(false);
-    forgetUnsentMessages(localStorage);
+    // Module-level state that outlives the page's React tree: drafts and loaded images.
+    forgetDrafts();
+    mediaCache.clear();
     clearAvatarVersions();
     seenKnocksRef.current = null;
     setServerUnreachable(false);
@@ -560,15 +597,16 @@ export function useRavenShellData(): RavenShellData {
   }, [forgetSignIn]);
 
   /** Per-server state is spread across module singletons, so switching reloads the page. */
-  const switchAccount = useCallback((account: SavedAccount) => {
-    api.activateAccount(account);
+  const switchAccount = useCallback(async (account: SavedAccount) => {
     rememberActiveNest(null);
+    // The session must be saved before the page goes, or the reload starts signed out.
+    await api.activateAccount(account);
     window.location.reload();
   }, []);
 
-  const addAccount = useCallback(() => {
-    api.beginAddAccount();
+  const addAccount = useCallback(async () => {
     rememberActiveNest(null);
+    await api.beginAddAccount();
     window.location.reload();
   }, []);
 
@@ -602,7 +640,10 @@ export function useRavenShellData(): RavenShellData {
       setBusy(true);
       setError("");
       try {
-        api.clearSession();
+        // Leaving this server without signing out would leave its session valid for
+        // weeks. Sign out on the server first; the saved entry goes with it.
+        if (api.getSessionId()) await api.logout().catch(() => undefined);
+        forgetSignIn();
         api.setBaseUrl(url, true);
         setHome(null);
         setTreeDetails({});
@@ -617,7 +658,7 @@ export function useRavenShellData(): RavenShellData {
         setLoading(false);
       }
     },
-    [refreshServerProperties],
+    [forgetSignIn, refreshServerProperties],
   );
 
   const joinNest = useCallback(
@@ -712,13 +753,14 @@ export function useRavenShellData(): RavenShellData {
     [refresh],
   );
 
-  const activeNests = home?.activeNests ?? [];
-  const temporaryNests = home?.temporaryNests ?? [];
-  const trees = home?.trees ?? [];
-  const friends = home?.friends ?? [];
-  const incomingFriendRequests = home?.incomingFriendRequests ?? [];
-  const outgoingFriendRequests = home?.outgoingFriendRequests ?? [];
-  const preferences = home?.user.preferences ?? defaultPreferences(home?.user.username);
+  const activeNests = home?.activeNests ?? NONE;
+  const temporaryNests = home?.temporaryNests ?? NONE;
+  const trees = home?.trees ?? NONE;
+  const friends = home?.friends ?? NONE;
+  const incomingFriendRequests = home?.incomingFriendRequests ?? NONE;
+  const outgoingFriendRequests = home?.outgoingFriendRequests ?? NONE;
+  const signedOutPreferences = useMemo(() => defaultPreferences(home?.user.username), [home?.user.username]);
+  const preferences = home?.user.preferences ?? signedOutPreferences;
   const labels = useMemo(() => labelsForPreference(preferences.uiLabels), [preferences.uiLabels]);
 
   const people = useMemo(() => derivePeople(home, treeDetails), [home, treeDetails]);
@@ -891,7 +933,7 @@ export function useRavenShellData(): RavenShellData {
     return () => window.clearTimeout(timer);
   }, [home, refresh]);
 
-  return {
+  const next: RavenShellData = {
     user: home?.user ?? null,
     preferences,
     labels,
@@ -970,6 +1012,16 @@ export function useRavenShellData(): RavenShellData {
     replyToKnock,
     clearKnockAnswer,
   };
+  // The same object while every field is the same, so what depends on `data` (memos,
+  // memoized rows) does not recompute on renders that changed nothing here.
+  if (!dataRef.current || !shallowEqual(dataRef.current, next)) dataRef.current = next;
+  return dataRef.current;
+}
+
+function shallowEqual<T extends object>(a: T, b: T) {
+  const keys = Object.keys(a) as Array<keyof T>;
+  if (keys.length !== Object.keys(b).length) return false;
+  return keys.every((key) => Object.is(a[key], b[key]));
 }
 
 export function derivePeople(home: HomeState | null, treeDetails: Record<string, TreeDetails>): ShellPerson[] {

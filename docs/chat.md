@@ -383,6 +383,11 @@ picker offers emoji through Unicode 15.0, matching the bundled font.
   one row and the open conversation, not the shell.
 - The message list is virtualized (`react-virtuoso`) over a sliding window of at most 600
   loaded messages. Older pages load on scroll; a replied-to message can be jumped to.
+  The read position comes from the rows actually inside the scroller's viewport
+  (`lib/chat/visibility.ts`), checked on range changes and once per frame while
+  scrolling, not from the range Virtuoso renders, which reaches 600 px past it.
+- A conversation that appears while the list is being fetched (a DM just opened, an
+  event) is kept when that list lacks it and fetched again on its own; a 404 removes it.
 - Message text is never treated as HTML. Each line gets its own direction (`dir="auto"`),
   names are isolated with `<bdi>`, bidirectional control characters are stripped from web
   addresses, and IRANYekanX is bundled as the Persian and Arabic font behind Geist.
@@ -397,7 +402,12 @@ picker offers emoji through Unicode 15.0, matching the bundled font.
   made per attachment), upload each variant the server reports missing (read back from
   the native outbox), then send with `attachmentIds`. The outbox in `localStorage` is
   format 2 and keeps that progress, so a retry or a restart resumes; format 1 still
-  loads. A 404 on upload or a 422 on send means the server purged the uploads: they are
+  loads. It is kept per account, under `raven.chat.outbox.<server URL>|<user id>`, since
+  two servers can issue the same user id; an outbox saved by an older version under the
+  user id alone is taken over by the first account with that id to open. It is read
+  once when the store starts, and saving before the first list load keeps those saved
+  messages beside anything sent meanwhile. Signing out removes only that account's
+  outbox, and also clears drafts and the media cache. A 404 on upload or a 422 on send means the server purged the uploads: they are
   made again once. Upload 413 and 415 are final, in words. The store's startup sweep
   (`attachment_sweep`, keeping every handle any account's outbox needs) finishes before
   the tray prepares anything. A sent or discarded message discards its native files.
@@ -429,7 +439,7 @@ limits are in `docs/plans/gifs-stickers/README.md`.
 | Method and path | Behavior |
 |---|---|
 | `POST /v1/library/assets` | `{clientUploadId, kind, contentType, size, sha256, target: {scope, treeId?}, title?, keywords?, collectionId?}`. A ready asset with the same hash gives the item at once; otherwise returns `{item, upload: true}` (`201`, or `200` on retry). A failed asset with the same hash answers `422` with its failure text. |
-| `PUT /v1/library/assets/:id/original` | Raw bytes, at most 20 MB. Anyone who added the asset may upload it; size, hash and sniffed type must match. TGS and already-fitting WebP stickers become `ready` here; everything else is `processing` and converted by ffmpeg in the background. |
+| `PUT /v1/library/assets/:id/original` | Raw bytes, at most 20 MB. Anyone who added the asset may upload it while it waits for its file. The bytes must match the hash; their type is read from the bytes (it must be one the server takes for the kind) and their size from the upload, replacing whatever the first declaration said, so a wrong declaration can't keep a file out. TGS and WebP stickers that already fit become `ready` here (a WebP only when every picture in it decodes); everything else is `processing` and converted by ffmpeg in the background. |
 | `GET /v1/library/assets/:id/:variant` | `play` or `poster`, for an item of your own, a public item, a set of a space you belong to, or a message you can read. Immutable cache headers, ETag, `nosniff`. TGS `play` is the decompressed Lottie JSON (`application/json`). |
 | `GET /v1/library/items?scope=&treeId=&collectionId=&cursor=` | Browse a personal library or a space set. |
 | `PATCH /v1/library/items/:id`, `PATCH /v1/library/items` | Title, keywords, collection, favourite, public; bulk edit up to 200 ids. Only personal items with a title can be public; an item saved from a space set needs that space's `savedStickersPublishable`. |
@@ -453,13 +463,34 @@ the server) only TGS and WebP stickers can be added.
 An asset is purged when no item and no message refers to it. Maintenance checks this
 every run, and removes assets that never became ready within 24 hours.
 
+Limits per person, which a server operator can change (see self-hosting): a library (a
+person's own, or a space's set) holds at most 1000 items (`RAVEN_LIBRARY_MAX_ITEMS`),
+and the GIFs and stickers a person uploaded take at most 512 MB stored
+(`RAVEN_LIBRARY_UPLOAD_MB`). Adding a file someone else already uploaded costs no bytes.
+Past either, adding answers `413` with "This library is full. Remove some GIFs or
+stickers first." or "You've uploaded as many GIFs and stickers as this server allows.
+Remove some you added first."
+
+ffmpeg and ffprobe run with an empty environment, so the API's database and storage
+credentials are not visible to them, and through `/bin/sh` with `ulimit` limits of 120 s
+CPU, 4 GB address space and 128 MB per written file. macOS does not enforce the address
+space limit; it is skipped there.
+
 ## Limits and safety
 
 - Up to 10 attachments per message. Images require `full` (up to 10 MiB) and `preview`
   (up to 512 KiB), using JPEG, PNG, GIF or WebP. Width and height are required, each at
   most 16,384 pixels and together at most 100 megapixels. Upload checks use only
   `image.DecodeConfig`: full dimensions must match the declaration (a 90° swap is
-  accepted), and preview dimensions may not exceed full dimensions.
+  accepted), and preview dimensions may not exceed full dimensions or 1024 pixels a
+  side (`previewMaxSide`; the desktop makes previews of at most 960). Every reader
+  decodes the preview in the list, so this bounds what one message costs them. An
+  attachment's name and placeholder may not contain control characters.
+- Unsent attachments count against a per-person limit: the declared bytes of everything
+  a person has uploaded but not sent, 256 MB by default (`RAVEN_CHAT_PENDING_MB`, see
+  self-hosting). Past it, declaring another answers `413` "You have too many images
+  waiting to be sent. Send them, or try again tomorrow." Unsent uploads expire after a
+  day, and sending frees the room.
 - `properties.chat.attachments` announces version 1, supported kinds/variant byte
   limits, dimensions, sources and max-per-message from the server's rule map. It is
   omitted when object storage is unavailable; clients then hide attachment controls.
@@ -481,7 +512,17 @@ every run, and removes assets that never became ready within 24 hours.
   30 per minute, react 60 per minute, delete 60 per minute, open a direct message 60 per minute, add members 60
   per hour, rename 30 per hour, create a group 20 per hour.
 - A message is at most 4096 characters and 16 KB. Invalid UTF-8, NUL and control
-  characters are refused. ZWNJ and other joiners are kept.
+  characters are refused. ZWNJ and other joiners are kept. The same applies to a poll's
+  question, answers and feedback.
+- A saved or forwarded quiz keeps its correct answers and feedback, but its asker stays
+  the original's sender, not the person who copied it. The copier sees the answers in
+  the copy only once they answer it there, or if they asked the original. Only the
+  original asker can end a copied quiz, so a copy in a conversation they are not in
+  stays open.
+- `mentionCount` in the conversation list looks at the latest 1000 sequence numbers of
+  a conversation only, so a busy conversation nobody opens costs every list a bounded
+  scan. A mention further back than that is not counted (the unread count still is,
+  capped at 99+).
 - A reply must point at a message in the same conversation that the sender may see.
 - Someone who is not in a conversation gets the same `404` for every route as for a
   conversation that does not exist.

@@ -96,10 +96,9 @@ function Assert-Version {
     "apps/desktop/package.json"              = (Get-Content -Raw (Join-Path $Desktop "package.json") | ConvertFrom-Json).version
     "apps/desktop/src-tauri/tauri.conf.json" = (Get-Content -Raw (Join-Path $Desktop "src-tauri\tauri.conf.json") | ConvertFrom-Json).version
     "apps/desktop/src-tauri/Cargo.toml"      = [regex]::Match((Get-Content -Raw (Join-Path $Desktop "src-tauri\Cargo.toml")), '(?m)^version\s*=\s*"([^"]+)"').Groups[1].Value
-    "packages/shared/package.json"           = (Get-Content -Raw (Join-Path $Root "packages\shared\package.json") | ConvertFrom-Json).version
   }
   foreach ($entry in $declared.GetEnumerator()) {
-    if ($entry.Value -ne $Version) { throw "$($entry.Key) says version $($entry.Value), not $Version. Set the same version in all four files first." }
+    if ($entry.Value -ne $Version) { throw "$($entry.Key) says version $($entry.Value), not $Version. Set the same version in all three files first." }
   }
 }
 
@@ -143,7 +142,9 @@ function Invoke-Sign {
   $env:TAURI_SIGNING_PRIVATE_KEY_PASSWORD = [System.Net.NetworkCredential]::new("", $secure).Password
   try {
     Remove-Item -LiteralPath "$Artifact.sig" -ErrorAction SilentlyContinue
-    Invoke-Native (Get-TauriCli) @("signer", "sign", $Artifact) $Desktop | Out-Null
+    # --app-version binds the signature to this version; the app refuses an update whose
+    # manifest announces any other (requireSignedVersion in tauri.conf.json).
+    Invoke-Native (Get-TauriCli) @("signer", "sign", "--app-version", $Version, $Artifact) $Desktop | Out-Null
   }
   finally {
     Remove-Item Env:TAURI_SIGNING_PRIVATE_KEY_PATH, Env:TAURI_SIGNING_PRIVATE_KEY_PASSWORD -ErrorAction SilentlyContinue
@@ -151,12 +152,13 @@ function Invoke-Sign {
   Assert-Signature $Artifact
 }
 
-# Checks the artifact against the public key built into the app, exactly as Raven will.
+# Checks the artifact against the public key built into the app, and that the signature is
+# bound to this version, exactly as Raven will.
 function Assert-Signature {
   param([string]$Artifact)
   if (-not (Test-Path -LiteralPath "$Artifact.sig")) { throw "$Artifact has no signature." }
   $manifest = Join-Path $Root "tools\release\signature-verify\Cargo.toml"
-  Invoke-Native "cargo" @("run", "--quiet", "--locked", "--manifest-path", $manifest, "--", $Artifact, "$Artifact.sig", $PublicKey) | Out-Null
+  Invoke-Native "cargo" @("run", "--quiet", "--locked", "--manifest-path", $manifest, "--", $Artifact, "$Artifact.sig", $PublicKey, $Version) | Out-Null
 }
 
 function Build-Windows {
@@ -325,11 +327,11 @@ function Invoke-Publish {
   if ((Get-Content -Raw -LiteralPath $manifest | ConvertFrom-Json).platforms."windows-x86_64".url -notlike "$PublicBase/*") {
     throw "This build was made for a different destination. Rebuild with the same -Scratch value you publish with."
   }
+  # A rehearsal (build -AllowDirty) snapshots uncommitted work; it must never reach the
+  # updater. Only a -Scratch publish, which nobody's Raven checks, may ship one.
+  if (-not $Scratch) { Get-ReleaseCommit $stage | Out-Null }
   # Refuse early, before friends are told about a version that cannot reach GitHub.
-  if ($GitHub) {
-    Get-ReleaseCommit $stage | Out-Null
-    Assert-GitHubAccess
-  }
+  if ($GitHub) { Assert-GitHubAccess }
   # Server images first, so they exist before any client that needs them is offered.
   if ($Docker) { Invoke-Images }
 
@@ -432,9 +434,15 @@ $(Get-DownloadPage)
 PAGE
 chmod 0644 .index.html.new
 mv .index.html.new index.html
-# Keep the newest $KeepVersions versions (and always the live one); the disk here is small.
+# Keep the newest $KeepVersions versions, always the live one, and the one
+# latest.previous.json names, so rolling back never points at a deleted folder. The disk
+# here is small.
+previous=''
+if [ -f latest.previous.json ]; then
+  previous=`$(sed -n 's/.*"version"[[:space:]]*:[[:space:]]*"\([0-9][0-9A-Za-z.+-]*\)".*/\1/p' latest.previous.json | head -n 1)
+fi
 ls -1d [0-9]*/ 2>/dev/null | tr -d / | sort -V | head -n -$KeepVersions | while read -r old; do
-  [ "`$old" = '$Version' ] || rm -rf -- "`$old"
+  [ "`$old" = '$Version' ] || [ "`$old" = "`$previous" ] || rm -rf -- "`$old"
 done
 "@ | Out-Null
 }
@@ -596,6 +604,14 @@ function Invoke-Images {
   if ($LASTEXITCODE -ne 0 -or -not $stageInWsl) { throw "Could not reach the WSL distro '$WslDistro'." }
   $tags = if ($NoLatest) { "" } else { " -t $ImageNamespace/raven-`$name:latest" }
   $output = if ($DryRun) { "--output type=image,push=false" } else { "--push" }
+  # Optional Go module proxy list for the API image, for networks where proxy.golang.org
+  # refuses downloads (see infra/homelab/api.Dockerfile). Off unless set.
+  $goProxy = ""
+  if ($env:RAVEN_GOPROXY) {
+    if ($env:RAVEN_GOPROXY -notmatch '^[A-Za-z0-9:/._|,-]+$') { throw "RAVEN_GOPROXY may hold only URLs separated by '|' or ','." }
+    $goProxy = " --build-arg 'GOPROXY=$($env:RAVEN_GOPROXY)'"
+    Write-Host "  Go modules through: $($env:RAVEN_GOPROXY)"
+  }
   $script = @"
 set -euo pipefail
 command -v docker >/dev/null || { echo 'Docker is not installed in this WSL distro. See docs/releasing.md.' >&2; exit 3; }
@@ -607,7 +623,7 @@ mkdir -p "`$base/source"
 tar -xf '$stageInWsl/source.tar' -C "`$base/source"
 cd "`$base/source"
 for name in api admin; do
-  docker buildx build --builder raven-multi --platform linux/amd64,linux/arm64     -f infra/homelab/`$name.Dockerfile --build-arg RAVEN_VERSION=$Version     -t $ImageNamespace/raven-`$name:$Version$tags $output .
+  docker buildx build --builder raven-multi --platform linux/amd64,linux/arm64     -f infra/homelab/`$name.Dockerfile --build-arg RAVEN_VERSION=$Version$goProxy     -t $ImageNamespace/raven-`$name:$Version$tags $output .
 done
 if [ '$DryRun' = 'False' ]; then
   for name in api admin; do

@@ -23,6 +23,18 @@ func normalizeChatBody(raw string) (string, error) {
 	return body, err
 }
 
+// chatHasControl finds C0 control characters and DEL, which no chat text keeps. NUL in
+// particular cannot be stored in a PostgreSQL text column at all. Newline and tab are
+// allowed where lines are.
+func chatHasControl(text string, lines bool) bool {
+	for _, r := range text {
+		if (r < 0x20 && !(lines && (r == '\n' || r == '\t'))) || r == 0x7f {
+			return true
+		}
+	}
+	return false
+}
+
 // normalizeChatCaption validates text while leaving the empty-body decision to the caller.
 func normalizeChatCaption(raw string) (string, error) {
 	if len(raw) > chatMaxBodyBytes {
@@ -33,12 +45,8 @@ func normalizeChatCaption(raw string) (string, error) {
 	}
 	body := strings.ReplaceAll(raw, "\r\n", "\n")
 	body = strings.ReplaceAll(body, "\r", "\n")
-	for _, r := range body {
-		// C0 controls other than newline and tab, and DEL. NUL in particular cannot be
-		// stored in a PostgreSQL text column at all.
-		if (r < 0x20 && r != '\n' && r != '\t') || r == 0x7f {
-			return "", fiber.NewError(fiber.StatusBadRequest, "That message contains text Raven cannot store.")
-		}
+	if chatHasControl(body, true) {
+		return "", fiber.NewError(fiber.StatusBadRequest, "That message contains text Raven cannot store.")
 	}
 	body = strings.TrimSpace(body)
 	if utf8.RuneCountInString(body) > chatMaxBodyRunes {

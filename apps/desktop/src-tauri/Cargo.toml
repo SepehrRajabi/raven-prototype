@@ -6,7 +6,9 @@ authors = ["Raven"]
 license = ""
 repository = ""
 edition = "2021"
-rust-version = "1.77.2"
+# The oldest Rust that builds the locked dependencies (kstring 2.0.5, through tract for
+# Studio noise suppression); Raven's own code needs 1.82 (`Option::is_none_or`).
+rust-version = "1.96"
 
 [package.metadata]
 
@@ -42,6 +44,9 @@ sha2 = "0.11"
 zip = { version = "9", default-features = false, features = ["deflate-flate2"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+# Sign-in sessions in the OS credential store (Keychain, Credential Manager, Secret
+# Service). The Secret Service client is pure Rust (zbus), so Linux builds need no libdbus.
+keyring = { version = "=3.6.3", features = ["apple-native", "windows-native", "async-secret-service", "tokio", "crypto-rust"] }
 thiserror = "2"
 uuid = { version = "1", features = ["serde", "v4"] }
 rustls = { version = "0.23", default-features = false, features = ["ring", "std"] }
@@ -75,6 +80,9 @@ sonora-agc2 = "0.3"
 sonora-simd = "0.3"
 # RNNoise in pure Rust: the "Strong" noise suppression mode.
 nnnoiseless = { version = "0.5", default-features = false }
+# Lock-free hop queues between the audio thread and the Studio worker. Already in the
+# tree through libwebrtc.
+rtrb = "0.3.6"
 # DeepFilterNet 3: the "Studio" mode. Vendored and trimmed to the inference path; see
 # vendor/deep_filter/README.md. ndarray is the version its API takes.
 deep_filter = { path = "vendor/deep_filter", optional = true }

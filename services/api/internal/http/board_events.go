@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"log"
 	"strings"
+	"sync"
 	"time"
 	_ "time/tzdata" // occurrences are computed in the creator's zone, wherever the API runs
 	"unicode/utf8"
@@ -87,14 +88,24 @@ type EventNotice struct {
 }
 
 func (s *Server) registerEventRoutes(service fiber.Router) {
+	// One limit for every change to a board's events, per person: each can message every
+	// invitee.
+	limit := s.userLimiter("board events", boardChangesPerMinute, time.Minute, boardTooQuickly)
 	service.Get("/trees/:id/events", s.chatRoute("list events", s.getTreeEvents))
-	service.Post("/trees/:id/events", s.chatRoute("create event", s.createTreeEvent))
+	service.Post("/trees/:id/events", limit, s.chatRoute("create event", s.createTreeEvent))
 	// Registered before ":eventId" so "order" is not read as an event id.
-	service.Post("/trees/:id/events/order", s.chatRoute("order events", s.orderTreeEvents))
-	service.Post("/trees/:id/events/:eventId/pin", s.chatRoute("pin event", s.pinTreeEvent))
-	service.Post("/trees/:id/events/:eventId", s.chatRoute("edit event", s.editTreeEvent))
-	service.Delete("/trees/:id/events/:eventId", s.chatRoute("delete event", s.deleteTreeEvent))
+	service.Post("/trees/:id/events/order", limit, s.chatRoute("order events", s.orderTreeEvents))
+	service.Post("/trees/:id/events/:eventId/pin", limit, s.chatRoute("pin event", s.pinTreeEvent))
+	service.Post("/trees/:id/events/:eventId", limit, s.chatRoute("edit event", s.editTreeEvent))
+	service.Delete("/trees/:id/events/:eventId", limit, s.chatRoute("delete event", s.deleteTreeEvent))
 }
+
+const (
+	// boardChangesPerMinute bounds how often one person changes a board's events, notes
+	// or rules. Arranging a board by hand stays well under it.
+	boardChangesPerMinute = 30
+	boardTooQuickly       = "You’re changing the board too quickly. Try again in a moment."
+)
 
 const treeEventColumns = `e.id, e.tree_id, e.title, e.description, e.host_user_id, e.nest_id, e.conversation_id,
 	COALESCE(n.name, c.name, ''), e.starts_at, e.ends_at, e.duration_minutes, e.rrule, e.tz, e.invite_all,
@@ -553,7 +564,7 @@ func (s *Server) createTreeEvent(c *fiber.Ctx) error {
 	recipients = withoutID(recipients, user.ID)
 	s.publishEventNotice("event.invited", stored, recipients)
 	if stored.SendInviteMessage {
-		s.sendEventMessages(stored, recipients, false)
+		s.queueEventMessages(func() { s.sendEventMessages(stored, recipients, false) })
 	}
 	stored.InviteeIDs = invitees
 	return c.Status(fiber.StatusCreated).JSON(fiber.Map{"event": stored})
@@ -697,25 +708,28 @@ func (s *Server) editTreeEvent(c *fiber.Ctx) error {
 	}
 	s.publishEventNotice("event.invited", stored, added)
 
-	messaged, err := s.eventMessageRecipients(stored.ID)
-	if err != nil {
-		return err
-	}
-	if stored.SendInviteMessage {
-		s.sendEventMessages(stored, withoutID(newInvitees, user.ID), true)
-	}
-	// People no longer invited learn it is off for them.
-	still := map[string]bool{}
-	for _, id := range newInvitees {
-		still[id] = true
-	}
-	dropped := []string{}
-	for _, id := range messaged {
-		if !still[id] {
-			dropped = append(dropped, id)
+	s.queueEventMessages(func() {
+		messaged, err := s.eventMessageRecipients(stored.ID)
+		if err != nil {
+			log.Printf("board events: message recipients of %s: %v", stored.ID, err)
+			return
 		}
-	}
-	s.cancelEventMessages(stored, dropped)
+		if stored.SendInviteMessage {
+			s.sendEventMessages(stored, withoutID(newInvitees, user.ID), true)
+		}
+		// People no longer invited learn it is off for them.
+		still := map[string]bool{}
+		for _, id := range newInvitees {
+			still[id] = true
+		}
+		dropped := []string{}
+		for _, id := range messaged {
+			if !still[id] {
+				dropped = append(dropped, id)
+			}
+		}
+		s.cancelEventMessages(stored, dropped)
+	})
 	stored.InviteeIDs = invitees
 	return c.JSON(fiber.Map{"event": stored})
 }
@@ -738,13 +752,6 @@ func (s *Server) deleteTreeEvent(c *fiber.Ctx) error {
 // removeTreeEvent deletes an event and tells the space. When it is called off rather
 // than over, everyone Raven wrote to about it is told it was cancelled.
 func (s *Server) removeTreeEvent(event TreeEvent, cancelled bool) error {
-	var messaged []string
-	if cancelled {
-		var err error
-		if messaged, err = s.eventMessageRecipients(event.ID); err != nil {
-			return err
-		}
-	}
 	if _, err := s.db.Exec(`DELETE FROM tree_event_invitees WHERE event_id = ?`, event.ID); err != nil {
 		return err
 	}
@@ -755,7 +762,17 @@ func (s *Server) removeTreeEvent(event TreeEvent, cancelled bool) error {
 		return err
 	}
 	s.publishTree(event.treeID, "tree.updated")
-	s.cancelEventMessages(event, messaged)
+	if cancelled {
+		// Raven's messages are found by their key, which outlives the event's rows.
+		s.queueEventMessages(func() {
+			messaged, err := s.eventMessageRecipients(event.ID)
+			if err != nil {
+				log.Printf("board events: message recipients of %s: %v", event.ID, err)
+				return
+			}
+			s.cancelEventMessages(event, messaged)
+		})
+	}
 	return nil
 }
 
@@ -930,6 +947,68 @@ func (s *Server) eventMessageRecipients(eventID string) ([]string, error) {
 		ids = append(ids, id)
 	}
 	return ids, rows.Err()
+}
+
+// eventMessageQueue runs Raven's messages about events after the request that caused
+// them, so a board edit in a large space does not hold its request open for one
+// transaction per invitee. Jobs run one at a time in the order they were queued, so a
+// later edit or cancellation never lands before an earlier one. The queue is in memory:
+// messages still waiting when the API stops are not sent.
+type eventMessageQueue struct {
+	mu      sync.Mutex
+	idle    *sync.Cond
+	jobs    []func()
+	running bool
+}
+
+// eventMessageQueues holds each server's queue, beside the code that uses it.
+var eventMessageQueues sync.Map
+
+func (s *Server) eventMessages() *eventMessageQueue {
+	if q, ok := eventMessageQueues.Load(s); ok {
+		return q.(*eventMessageQueue)
+	}
+	fresh := &eventMessageQueue{}
+	fresh.idle = sync.NewCond(&fresh.mu)
+	q, _ := eventMessageQueues.LoadOrStore(s, fresh)
+	return q.(*eventMessageQueue)
+}
+
+func (s *Server) queueEventMessages(job func()) {
+	q := s.eventMessages()
+	q.mu.Lock()
+	q.jobs = append(q.jobs, job)
+	if q.running {
+		q.mu.Unlock()
+		return
+	}
+	q.running = true
+	q.mu.Unlock()
+	go func() {
+		for {
+			q.mu.Lock()
+			if len(q.jobs) == 0 {
+				q.running = false
+				q.idle.Broadcast()
+				q.mu.Unlock()
+				return
+			}
+			next := q.jobs[0]
+			q.jobs = q.jobs[1:]
+			q.mu.Unlock()
+			next()
+		}
+	}()
+}
+
+// waitEventMessages returns once every queued message about events has been written.
+func (s *Server) waitEventMessages() {
+	q := s.eventMessages()
+	q.mu.Lock()
+	for q.running {
+		q.idle.Wait()
+	}
+	q.mu.Unlock()
 }
 
 // sendEventMessages writes or rewrites Raven's message to each person. edited marks it

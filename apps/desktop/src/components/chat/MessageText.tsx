@@ -5,12 +5,17 @@ import { api } from "@/lib/api";
 import { emojiOnlyCount, parseMessage, type Inline } from "@/lib/chat/format";
 import { useHighlightedCode } from "@/lib/chat/highlight";
 import { removedNestText, type MentionResolver, type MentionTarget } from "@/lib/chat/mentions";
+import { isWebAddress } from "@/lib/chat/webAddress";
 import { cn } from "@/lib/utils";
 import { NestGlyph, PresenceDot } from "@/shells/ravenv1/atoms";
 import type { Presence } from "@/shells/ravenv1/state";
 
 /** Opens a web address in the person's browser, never inside Raven's own window. */
 export function openAddress(href: string) {
+  if (!isWebAddress(href)) {
+    toast({ title: "Couldn’t open the link", description: "Raven opens only web addresses (http and https).", tone: "error" });
+    return;
+  }
   // Not inside the desktop app (a browser preview): a new tab is the browser.
   if (!isTauri()) {
     window.open(href, "_blank", "noopener,noreferrer");

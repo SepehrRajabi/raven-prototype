@@ -17,8 +17,7 @@ The files are served at `https://updates.rvn.bluehour.cloud`.
 ## Releasing a version
 
 1. Set the same version in `apps/desktop/package.json`,
-   `apps/desktop/src-tauri/tauri.conf.json`, `apps/desktop/src-tauri/Cargo.toml` and
-   `packages/shared/package.json`.
+   `apps/desktop/src-tauri/tauri.conf.json` and `apps/desktop/src-tauri/Cargo.toml`.
 2. Optionally write `docs/release-notes/<version>.md`. The app shows it as "What's new". `build`
    also puts the notes of every older file in `docs/release-notes/` in `latest.json`, so someone
    several versions behind sees everything they are getting.
@@ -45,6 +44,8 @@ The files are served at `https://updates.rvn.bluehour.cloud`.
    .\release.ps1 publish -Version 0.1.1
    ```
 
+   It first refuses a build that was not made from a commit on this branch (a rehearsal
+   built with `-AllowDirty`); only a `-Scratch` publish accepts one.
    This uploads the installers, checks their hashes on the Raven host, switches `latest.json`, then
    downloads everything back through the public address and compares it with what was
    built. Every Raven that is open notices within six hours, or at once with **Settings →
@@ -81,7 +82,16 @@ It builds with buildx in WSL, from the commit this version's installers were bui
 With no build of that version on this PC it builds the last commit instead, which needs a
 clean tree. `-DryRun` always builds the last commit. `-NoLatest` skips `:latest`. Run
 `docker login` inside WSL once; the password stays in WSL's Docker config. It prints each
-pushed image's digest. Paste `infra/self-host/DOCKERHUB-api.md` and `DOCKERHUB-admin.md`
+pushed image's digest. After pushing, set the release as the `RAVEN_IMAGE_TAG` default in
+`infra/self-host/compose.yaml` and `.env.example`, so a new self-host install starts on a
+named release rather than whatever `latest` is that day.
+
+The API image fetches Go modules from `proxy.golang.org`, then from their source
+repositories. If this PC's network is refused downloads there, set a fallback before the
+command, for example `$env:RAVEN_GOPROXY = "https://proxy.golang.org|https://goproxy.cn|direct"`.
+`go.sum` and Go's checksum database still check every module, but the fallback proxy sees
+which modules are fetched and the build depends on it being up. It is off unless set.
+Paste `infra/self-host/DOCKERHUB-api.md` and `DOCKERHUB-admin.md`
 into their Docker Hub repository pages when it changes.
 
 ## GitHub release
@@ -127,7 +137,8 @@ To stop a bad version spreading in the meantime, point `latest.json` back at an 
 
 Raven only installs versions newer than the one it is running, so this downgrades nobody.
 Someone already on the bad version reinstalls the older installer by hand; `repoint`
-prints its links. The newest five versions are kept on the Raven host for this.
+prints its links. The newest five versions are kept on the Raven host for this, plus
+the live one and the one `latest.previous.json` names.
 
 A published version never changes. If a build was wrong, bump the version.
 
@@ -144,6 +155,13 @@ That is the only server-side update setting.
 - Raven installs nothing unless its signature matches the public key built into the app
   (`apps/desktop/src-tauri/updater/raven-updater.key.pub`). A cut-off or altered download
   fails that check and is thrown away.
+- Each signature is bound to its version (`tauri signer sign --app-version`), and the app
+  sets `requireSignedVersion`: an update is refused unless `latest.json` announces exactly
+  the version the installer was signed for. Whoever controls the update host cannot offer
+  an older signed build under a newer number. `release.ps1` checks the signed version
+  before anything is uploaded. Releases signed before this change carry no
+  version, so an app that requires one will not install them; that only matters when
+  repointing to one of them, which the updater refuses anyway as not newer.
 - A failed check, download or install leaves the running version untouched. The app then
   offers the installer as a plain download.
 - Installers are uploaded and hash-checked before `latest.json` moves, and `latest.json`
@@ -197,12 +215,73 @@ The Compose file, edge config and firewall scripts are kept in `infra/raven/`.
 - The `edge` service (nginx, `/srv/raven/edge-nginx.conf`) proxies `updates.rvn.bluehour.cloud`
   to it, and `mimir`, `admin` and `rtc` to the API, the dashboard and LiveKit.
 - `latest.json` is served with `Cache-Control: no-cache`; versioned files are cacheable.
-- Port 80 is open only to ArvanCloud's CDN ranges, and 7881/tcp and 50002-50100/udp to
-  everyone. The rules are `raven-firewall.service`; see `infra/raven/firewall/`.
+- Ports 80 and 443 are open only to ArvanCloud's CDN ranges, and 7881/tcp and
+  50002-50100/udp to everyone. The rules are `raven-firewall.service`; see
+  `infra/raven/firewall/`. Nothing listens on 443 until origin TLS is switched on (below).
+- The edge takes the client's address from `X-Forwarded-For` only past ArvanCloud's
+  ranges (nginx `set_real_ip_from`), and sends the API that one address, so a client
+  cannot pick the address used for sign-in throttling and shown beside sessions. The
+  ranges are copied into `edge-nginx.conf`; `raven-firewall-refresh` names any it finds
+  missing there when ArvanCloud's list changes. After a deploy, check that the sessions
+  list shows people's own addresses, not ArvanCloud's.
+- The edge adds `Strict-Transport-Security` (one year, without subdomains),
+  `X-Content-Type-Options: nosniff` and `X-Frame-Options: DENY`.
 - Profile pictures and chat images are files in `/srv/raven/media` (no object store).
-- A nightly backup (04:41 UTC, 14 days) of the database and media is in `/srv/raven/backups`.
-  It is on the same machine, so it is not protection against losing the host.
+- A nightly backup (04:41 UTC, 14 days) of the database and media is in `/srv/raven/backups`;
+  see [Backups](#backups).
 - The data as it was when Raven left Vala is in `/srv/raven/pre-migration/` (root only).
+
+### Backups
+
+`raven-backup.timer` runs `/srv/raven/backup-raven.sh` nightly. It dumps the database,
+checks the dump with `pg_restore --list`, archives `/srv/raven/media`, checks the archive
+with `tar -t`, and deletes backups older than 14 days. By default the backups stay
+unencrypted on this machine (root only), which does not protect against losing the host.
+Two optional steps, set in `/etc/raven-backup.env` (mode 600), change that:
+
+```sh
+# Encrypt each backup to these age public keys and remove the plaintext.
+RAVEN_BACKUP_AGE_RECIPIENTS=/etc/raven-backup.recipients
+# Copy the night's encrypted files to another machine with rsync over ssh.
+RAVEN_BACKUP_OFFSITE=backup@offsite.example:/srv/raven-backups/
+RAVEN_BACKUP_SSH="ssh -i /root/.ssh/raven-backup -o BatchMode=yes"
+```
+
+Encryption needs `apt install age`. Keep the matching private key off this host: anyone
+with it can read every message in the backups. The off-site copy is refused unless
+encryption is on. The script does not delete old copies off-site; the destination keeps
+its own retention.
+
+When the backup fails, `OnFailure=` starts `raven-alert@raven-backup.service`
+(`raven-alert.sh`). It logs an error and writes `/srv/raven/backups/FAILED-<unit>` with
+the unit's last log lines; delete that file once the cause is fixed. To be told
+elsewhere, set `RAVEN_ALERT_COMMAND` in `/etc/raven-alert.env` to a command that reads the
+message on stdin (a mail command, or a curl to a webhook you run). It sends the host name,
+the unit and its log lines, never message content.
+
+Restore drill: `/srv/raven/restore-check-raven.sh` restores the newest backup into a
+throwaway Postgres container with no network, counts users, spaces and messages, reads
+the media archive back, and removes what it made. With encrypted backups, bring the age
+key for the drill: `RAVEN_BACKUP_AGE_IDENTITY=/path/to/key`. Run it after changing the
+backup setup and from time to time; a backup that has never been restored is unproven.
+
+Install or update these with:
+
+```bash
+install -m 755 backup-raven.sh raven-alert.sh restore-check-raven.sh /srv/raven/
+install -m 644 raven-backup.service raven-backup.timer raven-alert@.service /etc/systemd/system/
+systemctl daemon-reload && systemctl enable --now raven-backup.timer
+```
+
+### Origin TLS
+
+The CDN reaches the edge over plain HTTP, so traffic between an ArvanCloud PoP and this
+host (sign-ins, session tokens, the admin password, chat) is unencrypted on that stretch.
+`edge-nginx.conf` and `compose.yaml` carry the switch to HTTPS, commented out: an origin
+certificate in `/srv/raven/tls/`, the `ssl_certificate` lines and a `listen 443 ssl;` per
+server, the `443:443/tcp` port and the `tls` volume, then the origin protocol set to HTTPS
+in the ArvanCloud panel. The steps are at the top of `edge-nginx.conf`. Port 80 can be
+closed to the named hosts once traffic arrives on 443.
 
 ### Deploying the API and these services
 

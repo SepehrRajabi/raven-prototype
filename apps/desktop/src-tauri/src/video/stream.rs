@@ -176,6 +176,8 @@ impl VideoFrameService {
             .spawn(move || {
                 for connection in listener.incoming() {
                     let Ok(stream) = connection else {
+                        // Out of descriptors, say: wait rather than spin a core.
+                        thread::sleep(Duration::from_millis(50));
                         continue;
                     };
                     // Each viewer holds a thread; refuse past a bound any local

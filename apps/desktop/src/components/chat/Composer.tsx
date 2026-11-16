@@ -16,6 +16,7 @@ import { fieldClassName } from "@/components/ui/input";
 import { Tooltip } from "@/components/ui/tooltip";
 import { messageExcerpt, summaryOf, type AttachmentLimits } from "@/lib/chat/attachments";
 import { addToTray, chatTray } from "@/lib/chat/composerTray";
+import { draftMentions, drafts } from "@/lib/chat/drafts";
 import { excerptOf } from "@/lib/chat/reducer";
 import { trayReady, type TraySource } from "@/lib/chat/tray";
 import type { ChatMessage, PreparedAttachment } from "@/lib/chat/types";
@@ -31,10 +32,6 @@ const MAX_LENGTH = 4096;
 const COUNT_FROM = MAX_LENGTH - 300;
 const MAX_HEIGHT = 188;
 
-/** What was being written in each conversation, kept while the app is open. */
-const drafts = new Map<string, string>();
-/** The mentions picked into each draft, so a restored draft still sends them as mentions. */
-const draftMentions = new Map<string, PickedMention[]>();
 
 export interface ComposerProps {
   conversationId: string;

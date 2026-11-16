@@ -1,6 +1,7 @@
 package database
 
 import (
+	"context"
 	"database/sql"
 	"errors"
 	"fmt"
@@ -109,15 +110,41 @@ func open(driver, source string) (*DB, error) {
 		db.SetMaxIdleConns(maxOpen)
 		db.SetConnMaxIdleTime(5 * time.Minute)
 	}
-	if err := migrate(db); err != nil {
-		_ = db.Close()
-		return nil, err
-	}
-	if err := migrateVersioned(db, driver); err != nil {
+	if err := migrateLocked(db, driver); err != nil {
 		_ = db.Close()
 		return nil, err
 	}
 	return &DB{DB: db, driver: driver}, nil
+}
+
+// migrationLockKey is the Postgres advisory lock taken while migrations run. Any 64-bit
+// number works as long as it stays the same; this one is "raven" in ASCII.
+const migrationLockKey int64 = 0x726176656e
+
+// migrateLocked runs the migrations. On Postgres two API processes starting together
+// would otherwise both see a migration as not yet applied and race to apply it, so the
+// whole run holds a session advisory lock: the second process waits, then finds
+// everything applied. SQLite is one file opened by one process, and its migrations take
+// the write lock anyway.
+func migrateLocked(db *sql.DB, driver string) error {
+	if driver == "pgx" {
+		ctx := context.Background()
+		conn, err := db.Conn(ctx)
+		if err != nil {
+			return err
+		}
+		defer conn.Close()
+		if _, err := conn.ExecContext(ctx, `SELECT pg_advisory_lock($1)`, migrationLockKey); err != nil {
+			return fmt.Errorf("migration lock: %w", err)
+		}
+		defer func() {
+			_, _ = conn.ExecContext(context.Background(), `SELECT pg_advisory_unlock($1)`, migrationLockKey)
+		}()
+	}
+	if err := migrate(db); err != nil {
+		return err
+	}
+	return migrateVersioned(db, driver)
 }
 
 func (db *DB) Driver() string {
@@ -476,17 +503,35 @@ func migrate(db *sql.DB) error {
 	return nil
 }
 
+// isDuplicateColumn recognises the error an ALTER TABLE ... ADD COLUMN gives when the
+// column is already there: SQLite says "duplicate column name", Postgres
+// `column "x" of relation "y" already exists` (SQLSTATE 42701). Any other "already
+// exists" error, such as a table or index, is a real failure.
 func isDuplicateColumn(err error) bool {
 	if err == nil {
 		return false
 	}
 	message := strings.ToLower(err.Error())
-	return strings.Contains(message, "duplicate column") ||
-		strings.Contains(message, "already exists")
+	if strings.Contains(message, "duplicate column") || strings.Contains(message, "sqlstate 42701") {
+		return true
+	}
+	return strings.Contains(message, "column") && strings.Contains(message, "of relation") && strings.Contains(message, "already exists")
+}
+
+// TimestampLayout is how every stored time is written: UTC, with all nine fractional
+// digits. Times are stored as text and compared as text, so the width has to be fixed.
+// time.RFC3339Nano drops trailing zeros, which made "…:05Z" sort after "…:05.1Z" and
+// ".5Z" after ".55Z", so rows written within one second could come back out of order.
+// time.Parse with time.RFC3339Nano reads both forms, so older rows still parse.
+const TimestampLayout = "2006-01-02T15:04:05.000000000Z07:00"
+
+// Timestamp formats t the way the database stores times.
+func Timestamp(t time.Time) string {
+	return t.UTC().Format(TimestampLayout)
 }
 
 func Now() string {
-	return time.Now().UTC().Format(time.RFC3339Nano)
+	return Timestamp(time.Now())
 }
 
 func NormalizeRole(role string) (string, error) {

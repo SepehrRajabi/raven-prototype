@@ -4,7 +4,8 @@
 #   forward : traffic that arrives on the uplink and is DNATed into a container. Docker
 #             publishes ports in its own chains and bypasses INPUT, so this is where they
 #             are really filtered. ct original proto-dst is the port as the client sent it.
-#             80/tcp only from ArvanCloud's CDN ranges, 7881/tcp and the 50002-50100/udp
+#             80/tcp and 443/tcp only from ArvanCloud's CDN ranges (443 is for origin
+#             TLS, and only answers once edge publishes it), 7881/tcp and the 50002-50100/udp
 #             media range from anywhere, everything else dropped.
 # Docker never touches this table, so a Docker restart leaves it alone.
 set -euo pipefail
@@ -37,6 +38,7 @@ table inet raven_fw {
     iifname != "$uplink" accept
     ct state established,related accept
     meta l4proto tcp ct original proto-dst 80 ip saddr @arvan4 accept
+    meta l4proto tcp ct original proto-dst 443 ip saddr @arvan4 accept
     meta l4proto tcp ct original proto-dst 7881 accept
     meta l4proto udp ct original proto-dst 50002-50100 accept
     counter drop

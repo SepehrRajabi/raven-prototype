@@ -12,7 +12,11 @@ Authenticated routes require:
 X-Session-ID: <opaque-session-id>
 ```
 
-The login response returns the session ID in the `X-Session-ID` response header. Raven account sessions are stateful, stored in the configured Raven database, and use a rolling 30-day expiration.
+The login response returns the session token in the `X-Session-ID` response header. Raven account sessions are stateful and stored in the configured Raven database. Each request extends a session to 30 days from that request, but never past 90 days from sign-in; after that the device has to sign in again.
+
+The token works like a password, so the server never stores or returns it after sign-in: the database keeps only its SHA-256 hash. Every session also has a separate public `id`, which session lists and revoke routes use. That id can sign a device out but cannot be used as `X-Session-ID`.
+
+Request bodies are limited to 1 MB, except chat attachment variants (`PUT …/attachments/:id/variants/:variant`) and library originals (`PUT /v1/library/assets/:id/original`). A body over 4 MB on any other route is refused with `413` before it is read in full. A request has 30 seconds to arrive (10 minutes for the two upload routes), and an idle keep-alive connection is closed after 2 minutes. Route paths are case-sensitive: `/v1/Admin/users` is `404`.
 
 ## Profile Knocks
 
@@ -94,7 +98,7 @@ with `state` one of `open`, `used`, `expired`, `revoked`. `POST` answers `201` w
 `{ "invite": …, "code": "ABCDE-12345" }`; the code is never shown again. `DELETE` withdraws an
 open invite (`204`).
 
-Active-session records include the device label, operating system, latest IP address, user agent, creation time, last access, expiration, and whether the entry is the current session. Deleting a session immediately invalidates its server-side state.
+Active-session records include the public `id`, the device label, operating system, latest IP address, user agent, creation time, last access, expiration, and `current: true` on the session the request came from. `DELETE /v1/auth/sessions/:id` takes that public id and immediately invalidates the session's server-side state, its event streams and its relay connections. Expired sessions, and sessions revoked more than 7 days ago, are deleted from the database once an hour.
 
 ## Server Properties
 
@@ -134,6 +138,14 @@ GET  /v1/media/server/avatar
 ```
 
 Upload requests contain the raw image body and its matching image `Content-Type`. Read routes proxy the private S3 object without exposing storage credentials.
+
+The image must decode (`415` "use a JPEG, PNG, GIF, or WebP image" otherwise). One over 1024 pixels on a side is scaled down to fit 1024 and stored as a JPEG, or a PNG when it has transparency; animation and metadata are dropped. One over 8192 pixels on a side or 16 megapixels is refused with `413`. Pictures the desktop app sends (512 pixels) are stored as sent.
+
+## Space board
+
+Changes to a space's events, pinned notes and house rules (`POST`/`DELETE` under `/v1/trees/:id/events`, `/notes` and `/rules`) are limited to 30 a minute per person for each of the three, answering `429` "You’re changing the board too quickly. Try again in a moment." Reading is not limited.
+
+Raven's messages about an event (the invitation, "Updated", "Cancelled") are written after the request has answered, by one background queue that keeps their order. A client may see the event change before the messages arrive. The queue is in memory: messages still waiting when the API stops are not sent.
 
 ## Admin API
 
@@ -175,6 +187,8 @@ POST   /v1/admin/spaces/:id/rooms
 POST   /v1/admin/spaces/:id/rooms/:roomId
 DELETE /v1/admin/spaces/:id/rooms/:roomId
 ```
+
+`GET /v1/admin/audit` returns `{ "events": [...], "next": <cursor or null> }`, newest first. Pass `next` back unchanged as `before` for the following page; `null` means there are no more. The cursor names the last entry's time and id, so entries that share a timestamp are neither skipped nor repeated. A plain timestamp in `before` still works and returns entries strictly older than it.
 
 Creating a user takes `{ "username", "displayName", "role" }` and answers with the
 account and a `temporaryPassword`, shown this once; the account must replace it at first
@@ -237,6 +251,8 @@ Realtime token response:
 ```
 
 Only users with joined Nest membership can request a realtime token. Pass `?identity=audio` or `?identity=video` for the tokens of the desktop app's native audio and video sidecars (`<user-id>#audio`, `<user-id>#video`).
+
+A token can be used to connect for 5 minutes. LiveKit checks it only when connecting and refreshes the token of a connected client by itself, so clients fetch a new token for every join and rejoin rather than keeping one. Every 30 seconds the API lists the participants of each Raven room in LiveKit, removes those whose person may no longer be in that call (removed, suspended, voted out, no longer a joined member, or the nest ended), and applies server mute and deafen again where a participant's permissions differ from them.
 
 ## Presence and entering a Nest
 

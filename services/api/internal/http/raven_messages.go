@@ -257,7 +257,8 @@ func (s *Server) adminSendMessage(c *fiber.Ctx) error {
 			skipped++
 		}
 	}
-	detail := map[string]any{"sent": sent, "skipped": skipped, "everyone": everyone, "text": text}
+	// The text stays out: audit detail never holds message text (audit.go).
+	detail := map[string]any{"sent": sent, "skipped": skipped, "everyone": everyone}
 	s.audit(auditActorFor(actor), "admin.message_sent", "server", "", "", detail)
 	return c.JSON(fiber.Map{"sent": sent, "skipped": skipped})
 }

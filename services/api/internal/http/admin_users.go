@@ -267,30 +267,14 @@ func (s *Server) adminUserCapabilities(userID, role string) ([]AdminCapability, 
 	return capabilities, nil
 }
 
-func (s *Server) adminUserSessions(userID string) ([]AuthSession, error) {
-	rows, err := s.db.Query(
-		`SELECT id, latest_ip, user_agent, os, device_name, created_at, last_accessed_at, expires_at
-		 FROM auth_sessions WHERE user_id = ? AND revoked_at IS NULL ORDER BY last_accessed_at DESC`,
-		userID,
-	)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	sessions := []AuthSession{}
-	for rows.Next() {
-		var item AuthSession
-		if err := rows.Scan(&item.ID, &item.LatestIP, &item.UserAgent, &item.OS, &item.DeviceName, &item.CreatedAt, &item.LastAccessedAt, &item.ExpiresAt); err != nil {
-			return nil, err
-		}
-		if !sessionExpired(item.ExpiresAt) {
-			sessions = append(sessions, item)
-		}
-	}
-	return sessions, rows.Err()
+// adminUserSessions lists someone's sign-ins for an administrator. Each carries its
+// public id only, which can revoke it but not use it. currentSessionID is the
+// administrator's own sign-in, marked current when they look at their own account.
+func (s *Server) adminUserSessions(userID, currentSessionID string) ([]AuthSession, error) {
+	return s.listSessions(userID, currentSessionID)
 }
 
-func (s *Server) adminUserDetail(userID string) (fiber.Map, error) {
+func (s *Server) adminUserDetail(userID, currentSessionID string) (fiber.Map, error) {
 	user, err := s.adminUser(userID)
 	if err != nil {
 		return nil, err
@@ -299,7 +283,7 @@ func (s *Server) adminUserDetail(userID string) (fiber.Map, error) {
 	if err != nil {
 		return nil, err
 	}
-	sessions, err := s.adminUserSessions(user.ID)
+	sessions, err := s.adminUserSessions(user.ID, currentSessionID)
 	if err != nil {
 		return nil, err
 	}
@@ -345,7 +329,7 @@ func (s *Server) adminUserDetail(userID string) (fiber.Map, error) {
 }
 
 func (s *Server) adminGetUser(c *fiber.Ctx) error {
-	detail, err := s.adminUserDetail(c.Params("id"))
+	detail, err := s.adminUserDetail(c.Params("id"), authSessionID(c))
 	if err != nil {
 		return err
 	}
@@ -435,7 +419,7 @@ func (s *Server) adminUpdateUser(c *fiber.Ctx) error {
 	if _, renamed := changed["displayName"]; renamed {
 		s.publishNameChange(target.ID)
 	}
-	detail, err := s.adminUserDetail(target.ID)
+	detail, err := s.adminUserDetail(target.ID, authSessionID(c))
 	if err != nil {
 		return err
 	}
@@ -469,7 +453,7 @@ func (s *Server) adminSuspendUser(c *fiber.Ctx) error {
 		}
 		s.audit(auditActorFor(actor), "user.suspended", "user", target.ID, target.Username, map[string]any{"reason": reason})
 	}
-	detail, err := s.adminUserDetail(target.ID)
+	detail, err := s.adminUserDetail(target.ID, authSessionID(c))
 	if err != nil {
 		return err
 	}
@@ -488,7 +472,7 @@ func (s *Server) adminReactivateUser(c *fiber.Ctx) error {
 		}
 		s.audit(auditActorFor(actor), "user.reactivated", "user", target.ID, target.Username, nil)
 	}
-	detail, err := s.adminUserDetail(target.ID)
+	detail, err := s.adminUserDetail(target.ID, authSessionID(c))
 	if err != nil {
 		return err
 	}
@@ -579,7 +563,7 @@ func (s *Server) adminSetUserCapabilities(c *fiber.Ctx) error {
 	}
 	s.audit(auditActorFor(actor), "user.capabilities_changed", "user", target.ID, target.Username, changed)
 	s.capabilitiesChangedFor(target.ID)
-	detail, err := s.adminUserDetail(target.ID)
+	detail, err := s.adminUserDetail(target.ID, authSessionID(c))
 	if err != nil {
 		return err
 	}

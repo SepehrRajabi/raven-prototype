@@ -181,7 +181,9 @@ pub fn run_capture(
                 .grabber
                 .GetCurrentBuffer(&mut size, ptr::null_mut())
                 .is_ok()
-                && size > 0;
+                && size > 0
+                // Larger than any format this graph can deliver at its size: not a frame.
+                && (size as usize) <= max_frame_bytes(&graph);
             if ready {
                 buf.resize(size as usize, 0);
                 if graph
@@ -296,6 +298,8 @@ unsafe fn build_graph_for(
     if !connected.pbFormat.is_null() {
         CoTaskMemFree(Some(connected.pbFormat as *const c_void));
     }
+    // The media type holds a reference in `pUnk` when the filter set one; release it.
+    ManuallyDrop::drop(&mut connected.pUnk);
     if width == 0 || height == 0 {
         return Ok(None);
     }
@@ -322,7 +326,20 @@ unsafe fn dimensions(mt: &AM_MEDIA_TYPE) -> (u32, u32, bool) {
     // Positive height means a bottom-up DIB (the usual case for RGB).
     let bottom_up = header.bmiHeader.biHeight > 0;
     let height = header.bmiHeader.biHeight.unsigned_abs();
+    // A driver reporting an absurd size would otherwise size the frame buffers from it.
+    if width > MAX_DIMENSION || height > MAX_DIMENSION {
+        return (0, 0, true);
+    }
     (width, height, bottom_up)
+}
+
+/// Largest width or height accepted from a camera (8K is 7680 x 4320).
+const MAX_DIMENSION: u32 = 8192;
+
+/// Upper bound for one delivered frame: four bytes per pixel covers every format tried,
+/// plus row padding.
+fn max_frame_bytes(graph: &Graph) -> usize {
+    graph.width as usize * graph.height as usize * 4 + 4 * graph.height as usize
 }
 
 unsafe fn find_source(device_path: &str) -> Option<IBaseFilter> {

@@ -11,6 +11,7 @@ use std::{
     pin::Pin,
     sync::{Arc, Mutex},
     task::{ready, Context, Poll},
+    time::Duration,
 };
 
 use futures_util::{
@@ -34,6 +35,11 @@ use super::link::DatagramError;
 /// The first byte of the datagram stream.
 pub const DATAGRAM_TAG: u8 = 0xD6;
 const DATAGRAM_QUEUE: usize = 256;
+/// A WebSocket ping this often, like QUIC's keep-alive on the other route.
+const PING_INTERVAL: Duration = Duration::from_secs(15);
+/// With nothing at all from the relay for this long (no data, no pong), the session is
+/// treated as lost, as QUIC's idle timeout does. Covers a half-open TCP connection.
+const IDLE_TIMEOUT: Duration = Duration::from_secs(30);
 
 pub type WssStream = Compat<yamux::Stream>;
 pub type WssTx = WriteHalf<WssStream>;
@@ -63,7 +69,7 @@ pub async fn open(url: &str, tls: Arc<rustls::ClientConfig>) -> io::Result<WssSe
         .await
         .map_err(io_err)?;
     let reason = Arc::new(Mutex::new(None::<String>));
-    let io = WsIo { ws, pending: Vec::new(), pos: 0, reason: reason.clone() };
+    let io = WsIo::new(ws, reason.clone());
     let conn = yamux::Connection::new(io, yamux::Config::default(), yamux::Mode::Client);
     let (open_tx, open_rx) = mpsc::channel(8);
     // Unbounded: the relay caps how many flows it opens, and dropping one here would
@@ -238,10 +244,43 @@ struct WsIo {
     pending: Vec<u8>,
     pos: usize,
     reason: Arc<Mutex<Option<String>>>,
+    ping: tokio::time::Interval,
+    last_heard: tokio::time::Instant,
+}
+
+impl WsIo {
+    fn new(ws: Ws, reason: Arc<Mutex<Option<String>>>) -> Self {
+        let now = tokio::time::Instant::now();
+        let mut ping = tokio::time::interval_at(now + PING_INTERVAL, PING_INTERVAL);
+        ping.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+        Self { ws, pending: Vec::new(), pos: 0, reason, ping, last_heard: now }
+    }
+
+    /// Sends a ping when one is due and ends the session after [`IDLE_TIMEOUT`] of silence.
+    /// yamux polls reads for as long as the session lives, so this runs from `poll_read`.
+    fn keep_alive(&mut self, cx: &mut Context<'_>) -> io::Result<()> {
+        while self.ping.poll_tick(cx).is_ready() {
+            if self.last_heard.elapsed() >= IDLE_TIMEOUT {
+                return Err(io::Error::new(io::ErrorKind::TimedOut, "the relay stopped answering"));
+            }
+            // A full send buffer means data is moving; the next tick tries again.
+            if let Poll::Ready(Ok(())) = Pin::new(&mut self.ws).poll_ready(cx) {
+                Pin::new(&mut self.ws).start_send(Message::Ping(Vec::new().into())).map_err(io_err)?;
+                // Pending is fine: the waker is registered and the next poll finishes it.
+                if let Poll::Ready(Err(error)) = Pin::new(&mut self.ws).poll_flush(cx) {
+                    return Err(io_err(error));
+                }
+            }
+        }
+        Ok(())
+    }
 }
 
 impl FAsyncRead for WsIo {
     fn poll_read(mut self: Pin<&mut Self>, cx: &mut Context<'_>, buf: &mut [u8]) -> Poll<io::Result<usize>> {
+        if self.pos >= self.pending.len() {
+            self.keep_alive(cx)?;
+        }
         loop {
             if self.pos < self.pending.len() {
                 let n = buf.len().min(self.pending.len() - self.pos);
@@ -250,7 +289,11 @@ impl FAsyncRead for WsIo {
                 self.pos += n;
                 return Poll::Ready(Ok(n));
             }
-            match ready!(Pin::new(&mut self.ws).poll_next(cx)) {
+            let next = ready!(Pin::new(&mut self.ws).poll_next(cx));
+            if matches!(next, Some(Ok(_))) {
+                self.last_heard = tokio::time::Instant::now();
+            }
+            match next {
                 Some(Ok(Message::Binary(data))) => {
                     self.pending = data.to_vec();
                     self.pos = 0;

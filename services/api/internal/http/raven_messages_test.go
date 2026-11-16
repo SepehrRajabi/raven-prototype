@@ -72,6 +72,9 @@ func TestAdminMessageReachesRavenContact(t *testing.T) {
 	if n := countRows(t, s, `SELECT COUNT(*) FROM admin_audit_events WHERE action = 'admin.message_sent'`); n != 1 {
 		t.Fatalf("audit rows = %d", n)
 	}
+	if n := countRows(t, s, `SELECT COUNT(*) FROM admin_audit_events WHERE action = 'admin.message_sent' AND detail_json LIKE '%Maintenance%'`); n != 0 {
+		t.Fatal("the audit row holds the message text")
+	}
 
 	// Named people: a stranger's id and a suspended account are not counted.
 	raw = postJSON(t, s, admin, "/v1/admin/messages", map[string]any{"to": []string{alice.user.ID, bob.user.ID, carol.user.ID, "nobody"}, "text": "again"}, http.StatusOK)

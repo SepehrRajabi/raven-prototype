@@ -7,6 +7,7 @@
 //! noise that was just removed.
 
 use std::collections::VecDeque;
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicU8, Ordering};
 use std::sync::mpsc::{sync_channel, SyncSender};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, OnceLock};
 use std::thread;
@@ -50,6 +51,18 @@ pub(crate) trait VoiceSuppressor: Send {
     fn guarded(&self) -> bool {
         false
     }
+
+    /// True once a suppressor that runs elsewhere has missed too many hops to keep: its
+    /// stage then falls back, as for an overrun.
+    fn fell_behind(&self) -> bool {
+        false
+    }
+
+    /// What a hop costs where the work is really done, mean and worst, when that is not
+    /// on the audio thread.
+    fn work_cost(&self) -> Option<(Duration, Duration)> {
+        None
+    }
 }
 
 /// The suppressor a mode needs on top of sonora, or `None` when sonora alone does the work.
@@ -87,7 +100,7 @@ pub(crate) fn build_studio(
     #[cfg(feature = "studio-noise-suppression")]
     {
         Ok(StudioSuppressors {
-            studio: Box::new(studio::Studio::new(depth)?),
+            studio: Box::new(Offloaded::start(Box::new(studio::Studio::new(depth)?))?),
             standby: Box::new(RnNoise::new(depth)),
         })
     }
@@ -214,6 +227,265 @@ mod studio {
         fn guarded(&self) -> bool {
             true
         }
+    }
+}
+
+/// Hops of headroom the worker gets: a hop handed over now comes back this many hops
+/// later. Two covers devices that deliver 20 ms per callback, so the worker always has at
+/// least one whole callback period for each hop.
+const OFFLOAD_HEADROOM_HOPS: usize = 2;
+/// Hops that may wait in each direction between the audio thread and the worker.
+const OFFLOAD_QUEUE_HOPS: usize = 8;
+/// The worker's first hops are slow (tract settles in): late ones then are not counted.
+const OFFLOAD_WARM_UP_HOPS: usize = 100;
+/// Falls back once this many hops were late within the last [`OFFLOAD_WINDOW_HOPS`].
+const OFFLOAD_LATE_LIMIT: usize = 3;
+const OFFLOAD_WINDOW_HOPS: usize = 200;
+
+/// What the audio thread and the worker share besides the two queues.
+struct OffloadShared {
+    stop: AtomicBool,
+    failed: Mutex<Option<String>>,
+    has_failed: AtomicBool,
+    /// The depth to apply, as `depth_code`; the worker applies it before its next hop.
+    depth: AtomicU8,
+    /// Mean (smoothed) and worst cost of a hop on the worker, in nanoseconds.
+    mean_nanos: AtomicU64,
+    worst_nanos: AtomicU64,
+}
+
+fn depth_code(depth: NoiseSuppressionDepth) -> u8 {
+    match depth {
+        NoiseSuppressionDepth::Gentle => 1,
+        NoiseSuppressionDepth::Balanced => 2,
+        NoiseSuppressionDepth::Full => 3,
+    }
+}
+
+fn depth_from_code(code: u8) -> Option<NoiseSuppressionDepth> {
+    match code {
+        1 => Some(NoiseSuppressionDepth::Gentle),
+        2 => Some(NoiseSuppressionDepth::Balanced),
+        3 => Some(NoiseSuppressionDepth::Full),
+        _ => None,
+    }
+}
+
+/// Runs a heavy suppressor (Studio) on a thread of its own, so its cost no longer lands
+/// on the device callback, where a slow hop glitches the whole microphone.
+///
+/// The audio thread hands each hop to the worker through a lock-free queue and takes back
+/// the hop it handed over [`OFFLOAD_HEADROOM_HOPS`] earlier; nothing on the audio thread
+/// waits. A hop the worker has not finished in time is replaced by the uncleaned signal,
+/// delayed to line up, and its late result is thrown away when it arrives. Too many late
+/// hops and [`VoiceSuppressor::fell_behind`] says so, and the stage falls back to Strong.
+/// The price is the headroom: 20 ms more delay than running the model inline.
+pub(crate) struct Offloaded {
+    to_worker: rtrb::Producer<[f32; HOP_SAMPLES]>,
+    from_worker: rtrb::Consumer<[f32; HOP_SAMPLES]>,
+    worker: thread::Thread,
+    shared: Arc<OffloadShared>,
+    inner_latency: usize,
+    /// Whether each hop handed over is in the worker's queue (a full queue refuses one),
+    /// oldest first.
+    in_flight: VecDeque<bool>,
+    /// Results still to come for hops already given up on as late.
+    stale: usize,
+    /// The input, delayed to line up with the worker's output, for late hops.
+    dry: VecDeque<f32>,
+    hops: usize,
+    late: VecDeque<bool>,
+    late_count: usize,
+}
+
+impl Offloaded {
+    /// Start the worker and move `inner` to it. Spawns a thread: never on the audio thread.
+    pub(crate) fn start(inner: Box<dyn VoiceSuppressor>) -> Result<Self, SuppressorError> {
+        let (to_worker, mut worker_input) = rtrb::RingBuffer::new(OFFLOAD_QUEUE_HOPS);
+        let (mut worker_output, from_worker) = rtrb::RingBuffer::new(OFFLOAD_QUEUE_HOPS);
+        let shared = Arc::new(OffloadShared {
+            stop: AtomicBool::new(false),
+            failed: Mutex::new(None),
+            has_failed: AtomicBool::new(false),
+            depth: AtomicU8::new(0),
+            mean_nanos: AtomicU64::new(0),
+            worst_nanos: AtomicU64::new(0),
+        });
+        let inner_latency = inner.latency_samples();
+        let worker_shared = Arc::clone(&shared);
+        let handle = thread::Builder::new()
+            .name("raven-studio".into())
+            .spawn(move || {
+                let mut inner = inner;
+                let shared = worker_shared;
+                let mut output = [0.0; HOP_SAMPLES];
+                let mut measured = 0_u64;
+                while !shared.stop.load(Ordering::Acquire) {
+                    let Ok(input) = worker_input.pop() else {
+                        thread::park_timeout(Duration::from_millis(50));
+                        continue;
+                    };
+                    if let Some(depth) = depth_from_code(shared.depth.swap(0, Ordering::AcqRel)) {
+                        inner.set_depth(depth);
+                    }
+                    let started = Instant::now();
+                    if let Err(error) = inner.process_hop(&input, &mut output) {
+                        *shared.failed.lock().unwrap_or_else(|p| p.into_inner()) = Some(error.0);
+                        shared.has_failed.store(true, Ordering::Release);
+                        break;
+                    }
+                    let cost = started.elapsed().as_nanos().min(u64::MAX as u128) as u64;
+                    measured += 1;
+                    if measured > OFFLOAD_WARM_UP_HOPS as u64 {
+                        // A mean over roughly the last 200 hops.
+                        let mean = shared.mean_nanos.load(Ordering::Relaxed);
+                        let mean = if mean == 0 {
+                            cost
+                        } else {
+                            mean - mean / 200 + cost / 200
+                        };
+                        shared.mean_nanos.store(mean, Ordering::Relaxed);
+                        shared.worst_nanos.fetch_max(cost, Ordering::Relaxed);
+                    }
+                    // The audio thread takes every hop it is owed, so a full queue only
+                    // means it has stopped; the hop is then not needed.
+                    let _ = worker_output.push(output);
+                }
+                // The model is freed here, on this thread, never on the audio thread.
+                drop(inner);
+            })
+            .map_err(|error| {
+                SuppressorError(format!("could not start the Studio thread: {error}"))
+            })?;
+        let delay = OFFLOAD_HEADROOM_HOPS * HOP_SAMPLES + inner_latency;
+        Ok(Self {
+            to_worker,
+            from_worker,
+            worker: handle.thread().clone(),
+            shared,
+            inner_latency,
+            in_flight: VecDeque::with_capacity(OFFLOAD_HEADROOM_HOPS + 2),
+            stale: 0,
+            dry: {
+                // Room for one more hop, so the audio thread never grows it.
+                let mut dry = VecDeque::with_capacity(delay + HOP_SAMPLES);
+                dry.extend(std::iter::repeat_n(0.0, delay));
+                dry
+            },
+            hops: 0,
+            late: VecDeque::with_capacity(OFFLOAD_WINDOW_HOPS + 1),
+            late_count: 0,
+        })
+    }
+
+    fn note(&mut self, late: bool) {
+        self.hops += 1;
+        if self.hops <= OFFLOAD_WARM_UP_HOPS + OFFLOAD_HEADROOM_HOPS {
+            return;
+        }
+        self.late.push_back(late);
+        self.late_count += usize::from(late);
+        if self.late.len() > OFFLOAD_WINDOW_HOPS && self.late.pop_front() == Some(true) {
+            self.late_count -= 1;
+        }
+    }
+}
+
+impl VoiceSuppressor for Offloaded {
+    fn process_hop(
+        &mut self,
+        input: &[f32; HOP_SAMPLES],
+        output: &mut [f32; HOP_SAMPLES],
+    ) -> Result<(), SuppressorError> {
+        if self.shared.has_failed.load(Ordering::Acquire) {
+            let message = self
+                .shared
+                .failed
+                .try_lock()
+                .ok()
+                .and_then(|failed| failed.clone())
+                .unwrap_or_else(|| "Studio failed".to_string());
+            return Err(SuppressorError(message));
+        }
+        self.dry.extend(input.iter().copied());
+        let queued = self.to_worker.push(*input).is_ok();
+        self.in_flight.push_back(queued);
+        if queued {
+            self.worker.unpark();
+        }
+        let mut dry = [0.0; HOP_SAMPLES];
+        for (slot, sample) in dry.iter_mut().zip(self.dry.drain(..HOP_SAMPLES)) {
+            *slot = sample;
+        }
+        if self.in_flight.len() <= OFFLOAD_HEADROOM_HOPS {
+            // Still filling the headroom: what comes out is the delay's silence.
+            *output = dry;
+            return Ok(());
+        }
+        let expected = self.in_flight.pop_front().unwrap_or(false);
+        // Results for hops already given up on come first; drop the ones that are here.
+        while self.stale > 0 && self.from_worker.pop().is_ok() {
+            self.stale -= 1;
+        }
+        let on_time = if !expected {
+            false
+        } else if self.stale > 0 {
+            // Older results are still owed, so this one cannot have arrived yet.
+            self.stale += 1;
+            false
+        } else {
+            match self.from_worker.pop() {
+                Ok(cleaned) => {
+                    *output = cleaned;
+                    true
+                }
+                Err(_) => {
+                    self.stale += 1;
+                    false
+                }
+            }
+        };
+        if !on_time {
+            *output = dry;
+        }
+        self.note(!on_time);
+        Ok(())
+    }
+
+    fn latency_samples(&self) -> usize {
+        OFFLOAD_HEADROOM_HOPS * HOP_SAMPLES + self.inner_latency
+    }
+
+    fn set_depth(&mut self, depth: NoiseSuppressionDepth) {
+        self.shared
+            .depth
+            .store(depth_code(depth), Ordering::Release);
+        self.worker.unpark();
+    }
+
+    fn guarded(&self) -> bool {
+        true
+    }
+
+    fn fell_behind(&self) -> bool {
+        self.late_count >= OFFLOAD_LATE_LIMIT
+    }
+
+    fn work_cost(&self) -> Option<(Duration, Duration)> {
+        let mean = self.shared.mean_nanos.load(Ordering::Relaxed);
+        (mean > 0).then(|| {
+            (
+                Duration::from_nanos(mean),
+                Duration::from_nanos(self.shared.worst_nanos.load(Ordering::Relaxed)),
+            )
+        })
+    }
+}
+
+impl Drop for Offloaded {
+    fn drop(&mut self) {
+        self.shared.stop.store(true, Ordering::Release);
+        self.worker.unpark();
     }
 }
 
@@ -669,8 +941,9 @@ impl SuppressorPath {
             }
             let started = Instant::now();
             suppressor.process_hop(&input, &mut output)?;
-            if self.guard.record(started.elapsed()) == GuardVerdict::FallBack
-                && suppressor.guarded()
+            if (self.guard.record(started.elapsed()) == GuardVerdict::FallBack
+                && suppressor.guarded())
+                || suppressor.fell_behind()
             {
                 self.overran = true;
             }
@@ -782,7 +1055,10 @@ impl SuppressorStage {
 
     /// What a hop of the running suppressor costs on average, and at worst, once measured.
     pub(crate) fn hop_cost(&self) -> Option<(Duration, Duration)> {
-        self.current.suppressor.as_ref()?;
+        let suppressor = self.current.suppressor.as_ref()?;
+        if let Some(cost) = suppressor.work_cost() {
+            return Some(cost);
+        }
         let guard = &self.current.guard;
         guard.mean().map(|mean| (mean, guard.worst()))
     }
@@ -1574,8 +1850,24 @@ mod tests {
     }
 
     #[cfg(feature = "studio-noise-suppression")]
+    /// The model itself, run inline, for tests of what it does to the sound. The capture
+    /// gets it on its own thread (see the test below that runs it in real time).
     fn studio(depth: NoiseSuppressionDepth) -> Option<Box<dyn VoiceSuppressor>> {
-        Some(build_studio(depth).expect("build Studio").studio)
+        Some(Box::new(studio::Studio::new(depth).expect("build Studio")))
+    }
+
+    /// Like [`run`], at the pace a device delivers audio: one 10 ms block every 10 ms.
+    fn run_in_real_time(stage: &mut SuppressorStage, input: &[f32], rate: u32) -> Vec<f32> {
+        let mut output = input.to_vec();
+        let started = Instant::now();
+        for (index, block) in output.chunks_mut(rate as usize / 100).enumerate() {
+            let due = started + Duration::from_millis(10 * index as u64);
+            if let Some(wait) = due.checked_duration_since(Instant::now()) {
+                std::thread::sleep(wait);
+            }
+            stage.process(block).expect("process block");
+        }
+        output
     }
 
     #[cfg(feature = "studio-noise-suppression")]
@@ -1639,16 +1931,20 @@ mod tests {
 
     #[cfg(feature = "studio-noise-suppression")]
     #[test]
-    fn studio_moves_to_the_capture_thread_and_keeps_working() {
+    fn studio_runs_on_its_own_thread_in_real_time_and_keeps_working() {
         let suppressors = build_studio(NoiseSuppressionDepth::Balanced).expect("build Studio");
         let worker = std::thread::spawn(move || {
             let mut stage = SuppressorStage::with_studio(suppressors, 48_000, 1);
-            let input = white_noise(0.05, 48_000);
-            let output = run(&mut stage, &input, 48_000);
+            let input = white_noise(0.05, 2 * 48_000);
+            let output = run_in_real_time(&mut stage, &input, 48_000);
+            assert!(!stage.overran(), "Studio's worker fell behind");
+            if let Some((mean, worst)) = stage.hop_cost() {
+                eprintln!("Studio on its worker: {mean:?} a hop on average, {worst:?} at worst");
+            }
             let started = Instant::now();
             drop(stage);
             (
-                rms(&output[24_000..]) / rms(&input[24_000..]),
+                rms(&output[48_000..]) / rms(&input[48_000..]),
                 started.elapsed(),
             )
         });
@@ -1656,5 +1952,159 @@ mod tests {
         // Noise alone comes down to about the 24 dB floor.
         assert!(kept < 0.15, "kept {kept} of the noise");
         eprintln!("dropping Studio took {drop_time:?}");
+    }
+
+    /// Hands each hop back one hop late with its sign flipped, so cleaned output can be
+    /// told from the dry stand-in. Sleeps `cost` per hop and fails after `fail_after`.
+    struct Flip {
+        held: [f32; HOP_SAMPLES],
+        cost: Duration,
+        fail_after: Option<usize>,
+        hops: usize,
+        dropped: Option<Arc<AtomicBool>>,
+        dropped_on: Option<Arc<Mutex<Option<thread::ThreadId>>>>,
+    }
+
+    impl Flip {
+        fn new(cost: Duration) -> Self {
+            Self {
+                held: [0.0; HOP_SAMPLES],
+                cost,
+                fail_after: None,
+                hops: 0,
+                dropped: None,
+                dropped_on: None,
+            }
+        }
+    }
+
+    impl VoiceSuppressor for Flip {
+        fn process_hop(
+            &mut self,
+            input: &[f32; HOP_SAMPLES],
+            output: &mut [f32; HOP_SAMPLES],
+        ) -> Result<(), SuppressorError> {
+            self.hops += 1;
+            if self.fail_after.is_some_and(|after| self.hops > after) {
+                return Err(SuppressorError("the model broke".to_string()));
+            }
+            std::thread::sleep(self.cost);
+            for (out, held) in output.iter_mut().zip(&self.held) {
+                *out = -held;
+            }
+            self.held = *input;
+            Ok(())
+        }
+
+        fn latency_samples(&self) -> usize {
+            HOP_SAMPLES
+        }
+    }
+
+    impl Drop for Flip {
+        fn drop(&mut self) {
+            if let Some(on) = &self.dropped_on {
+                *on.lock().unwrap() = Some(thread::current().id());
+            }
+            if let Some(dropped) = &self.dropped {
+                dropped.store(true, Ordering::SeqCst);
+            }
+        }
+    }
+
+    /// Feeds numbered hops (every sample of hop n is n) at `pace`, returns each output hop's
+    /// first sample.
+    fn feed(offloaded: &mut Offloaded, hops: usize, pace: Duration) -> Vec<f32> {
+        let mut output = [0.0; HOP_SAMPLES];
+        (1..=hops)
+            .map(|n| {
+                offloaded
+                    .process_hop(&[n as f32; HOP_SAMPLES], &mut output)
+                    .expect("hop");
+                std::thread::sleep(pace);
+                output[0]
+            })
+            .collect()
+    }
+
+    #[test]
+    fn an_offloaded_suppressor_comes_back_cleaned_and_lined_up_with_its_latency() {
+        let mut offloaded = Offloaded::start(Box::new(Flip::new(Duration::ZERO))).unwrap();
+        let delay_hops = offloaded.latency_samples() / HOP_SAMPLES;
+        assert_eq!(delay_hops, OFFLOAD_HEADROOM_HOPS + 1);
+        let out = feed(&mut offloaded, 60, Duration::from_millis(2));
+        for (index, sample) in out.iter().enumerate() {
+            let hop = index + 1;
+            let expected = hop.saturating_sub(delay_hops) as f32;
+            // Cleaned (flipped) when on time, dry when late; lined up either way.
+            assert!(
+                *sample == -expected || *sample == expected,
+                "hop {hop}: {sample}, want ±{expected}"
+            );
+        }
+        let cleaned = out.iter().filter(|sample| **sample < 0.0).count();
+        assert!(cleaned > 50, "only {cleaned} of 60 hops came back cleaned");
+        assert!(!offloaded.fell_behind());
+    }
+
+    #[test]
+    fn a_worker_that_cannot_keep_up_falls_behind_and_stays_lined_up() {
+        let mut offloaded =
+            Offloaded::start(Box::new(Flip::new(Duration::from_millis(30)))).unwrap();
+        let delay_hops = offloaded.latency_samples() / HOP_SAMPLES;
+        let hops = OFFLOAD_WARM_UP_HOPS + OFFLOAD_HEADROOM_HOPS + OFFLOAD_LATE_LIMIT + 5;
+        let out = feed(&mut offloaded, hops, Duration::from_micros(500));
+        assert!(offloaded.fell_behind());
+        for (index, sample) in out.iter().enumerate() {
+            let expected = (index + 1).saturating_sub(delay_hops) as f32;
+            assert!(sample.abs() == expected, "hop {}: {sample}", index + 1);
+        }
+    }
+
+    #[test]
+    fn a_failing_worker_is_reported_on_the_audio_thread() {
+        let mut flip = Flip::new(Duration::ZERO);
+        flip.fail_after = Some(3);
+        let mut offloaded = Offloaded::start(Box::new(flip)).unwrap();
+        let mut output = [0.0; HOP_SAMPLES];
+        let mut failed = None;
+        for _ in 0..200 {
+            if let Err(error) = offloaded.process_hop(&[0.5; HOP_SAMPLES], &mut output) {
+                failed = Some(error.0);
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        assert_eq!(failed.as_deref(), Some("the model broke"));
+    }
+
+    #[test]
+    fn the_offloaded_model_is_freed_on_its_worker() {
+        let dropped = Arc::new(AtomicBool::new(false));
+        let dropped_on = Arc::new(Mutex::new(None));
+        let mut flip = Flip::new(Duration::ZERO);
+        flip.dropped = Some(Arc::clone(&dropped));
+        flip.dropped_on = Some(Arc::clone(&dropped_on));
+        let offloaded = Offloaded::start(Box::new(flip)).unwrap();
+        drop(offloaded);
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while !dropped.load(Ordering::SeqCst) && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        assert!(dropped.load(Ordering::SeqCst), "the worker never stopped");
+        assert_ne!(*dropped_on.lock().unwrap(), Some(thread::current().id()));
+    }
+
+    #[test]
+    fn a_depth_change_reaches_the_worker() {
+        assert_eq!(
+            depth_from_code(depth_code(NoiseSuppressionDepth::Gentle)),
+            Some(NoiseSuppressionDepth::Gentle)
+        );
+        assert_eq!(
+            depth_from_code(depth_code(NoiseSuppressionDepth::Full)),
+            Some(NoiseSuppressionDepth::Full)
+        );
+        assert_eq!(depth_from_code(0), None);
     }
 }

@@ -1,38 +1,51 @@
-import { useState } from "react";
-import type { AdminApi } from "../api";
+import { useRef, useState } from "react";
+import type { AdminApi, AuditPage } from "../api";
 import type { AuditEvent } from "../types";
 import { Button, List, Loading, Notice, PageHeader, Row, Select } from "../components/ui";
 import { describeAction, describeDetail, formatDateTime } from "../lib/format";
 import { routeHref } from "../lib/route";
 import { errorMessage, useLoad } from "../lib/useLoad";
 
-const PAGE = 100;
-
 export function AuditView({ api }: { api: AdminApi }) {
   const [entityType, setEntityType] = useState("");
   const [older, setOlder] = useState<AuditEvent[]>([]);
-  const [exhausted, setExhausted] = useState(false);
+  // Where the next "Show older" starts once an older page has arrived; until then the first
+  // page says. Null means there is nothing older.
+  const [cursor, setCursor] = useState<string | null | undefined>(undefined);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
-  const first = useLoad(async () => {
+  // Bumped whenever the list starts over, so an older page that was asked for under the
+  // previous filter is dropped when it arrives instead of being added to this one.
+  const generation = useRef(0);
+  const first = useLoad<AuditPage>(async () => {
+    generation.current += 1;
     setOlder([]);
-    setExhausted(false);
-    return api.audit({ entityType });
+    setCursor(undefined);
+    setBusy(false);
+    setError("");
+    return api.auditPage({ entityType });
   }, entityType);
-  const events = [...(first.data ?? []), ...older];
+  const firstEvents = first.data?.events ?? [];
+  const events = [...firstEvents, ...older];
+  const before = cursor === undefined ? (first.data?.before ?? null) : cursor;
   const more = async () => {
-    const last = events[events.length - 1];
-    if (!last) return;
+    if (!before) return;
+    const asked = generation.current;
     setBusy(true);
     setError("");
     try {
-      const next = await api.audit({ entityType, before: last.createdAt });
-      setOlder((current) => [...current, ...next]);
-      if (next.length < PAGE) setExhausted(true);
+      const page = await api.auditPage({ entityType, before });
+      if (generation.current !== asked) return;
+      setOlder((current) => {
+        // A cursor that includes its boundary would repeat an event; show it once.
+        const seen = new Set([...firstEvents, ...current].map((event) => event.id));
+        return [...current, ...page.events.filter((event) => !seen.has(event.id))];
+      });
+      setCursor(page.events.length > 0 ? page.before : null);
     } catch (cause) {
-      setError(errorMessage(cause));
+      if (generation.current === asked) setError(errorMessage(cause));
     } finally {
-      setBusy(false);
+      if (generation.current === asked) setBusy(false);
     }
   };
 
@@ -45,7 +58,9 @@ export function AuditView({ api }: { api: AdminApi }) {
           <option value="user">Users</option>
           <option value="space">Spaces</option>
           <option value="room">Rooms</option>
-          <option value="server">Server settings</option>
+          <option value="invite">Invites</option>
+          <option value="library_item">GIFs and stickers</option>
+          <option value="server">Server settings and messages</option>
         </Select>
       </div>
       {first.error ? <Notice>{first.error}</Notice> : null}
@@ -71,7 +86,7 @@ export function AuditView({ api }: { api: AdminApi }) {
         <Loading />
       ) : null}
       {error ? <div className="mt-3"><Notice>{error}</Notice></div> : null}
-      {first.data && first.data.length >= PAGE && !exhausted ? (
+      {first.data && before ? (
         <div className="mt-4 flex justify-center">
           <Button size="sm" disabled={busy} onClick={() => void more()}>
             {busy ? "Loading…" : "Show older"}
@@ -84,14 +99,16 @@ export function AuditView({ api }: { api: AdminApi }) {
 
 function Subject({ event }: { event: AuditEvent }) {
   const label = event.entityLabel || event.entityId;
-  // A deleted space has no page to open.
+  if (!label) return null;
   if (event.entityType === "user") {
+    // A deleted account keeps its page, but its name is gone: the label is a placeholder.
     return (
       <a href={routeHref({ page: "user", id: event.entityId })} className="text-muted-foreground hover:underline">
-        @{label}
+        {event.action === "account.deleted" ? label : `@${label}`}
       </a>
     );
   }
+  // A deleted space has no page to open.
   if (event.entityType === "space" && event.action !== "space.deleted") {
     return (
       <a href={routeHref({ page: "space", id: event.entityId })} className="text-muted-foreground hover:underline">

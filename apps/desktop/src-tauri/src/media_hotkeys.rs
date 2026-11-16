@@ -6,7 +6,7 @@ use std::{
 };
 
 use serde::{Deserialize, Serialize};
-use tauri::{AppHandle, Emitter, Manager, State};
+use tauri::{AppHandle, Manager, State};
 use thiserror::Error;
 
 pub const MEDIA_HOTKEY_EVENT: &str = "media-hotkey-pressed";
@@ -346,6 +346,7 @@ fn reconcile_registration(
 
 #[cfg(any(windows, target_os = "linux"))]
 fn register(app: &AppHandle, hotkey: &str, action: &str) -> Result<(), MediaHotkeyError> {
+    use tauri::Emitter;
     use tauri_plugin_global_shortcut::{GlobalShortcutExt, ShortcutState};
     let action = action.to_string();
     app.global_shortcut()

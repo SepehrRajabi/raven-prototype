@@ -185,7 +185,7 @@ func TestKnockMessageReply(t *testing.T) {
 		until := time.Now().UTC().Add(2 * time.Hour).Format(time.RFC3339Nano)
 		postJSON(t, server, bobToken, "/v1/knocks/"+knock.ID+"/reply", map[string]string{"reply": "message", "message": "Busy", "until": until}, http.StatusOK)
 		state := senderKnockState(t, server, aliceToken, bob.ID)
-		if state == nil || state.State != "replied" || state.Message != "Busy" || state.RetryAt != until {
+		if state == nil || state.State != "replied" || state.Message != "Busy" || !sameInstant(state.RetryAt, until) {
 			t.Fatalf("wrong sender state: %+v", state)
 		}
 		postJSON(t, server, aliceToken, "/v1/knocks", map[string]string{"toUserId": bob.ID}, http.StatusTooManyRequests)

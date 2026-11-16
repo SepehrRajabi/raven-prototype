@@ -1902,14 +1902,28 @@ pub fn audio_get_capabilities() -> NativeAudioCapabilityReport {
     }
 }
 
+// Device enumeration probes every endpoint (each ALSA PCM on Linux) and can take hundreds of
+// milliseconds. A synchronous command would run it on the main thread and freeze the UI,
+// so these run on a blocking worker instead.
+
 #[tauri::command]
-pub fn audio_list_input_devices() -> Result<Vec<AudioInputDevice>, AudioStateError> {
-    Ok(list_input_devices())
+pub async fn audio_list_input_devices() -> Result<Vec<AudioInputDevice>, AudioStateError> {
+    run_blocking(list_input_devices).await
 }
 
 #[tauri::command]
-pub fn audio_list_output_devices() -> Result<Vec<AudioOutputDevice>, AudioStateError> {
-    Ok(list_output_devices())
+pub async fn audio_list_output_devices() -> Result<Vec<AudioOutputDevice>, AudioStateError> {
+    run_blocking(list_output_devices).await
+}
+
+async fn run_blocking<T: Send + 'static>(
+    work: impl FnOnce() -> T + Send + 'static,
+) -> Result<T, AudioStateError> {
+    tauri::async_runtime::spawn_blocking(work)
+        .await
+        .map_err(|error| AudioStateError::MediaPublisherFailed {
+            message: error.to_string(),
+        })
 }
 
 #[tauri::command]
@@ -2109,8 +2123,17 @@ pub fn linked_app_audio_name(app: Option<&AppAudioSource>) -> String {
         .unwrap_or_else(|| "App audio".to_string())
 }
 
+/// Walks every audio session and visible window and extracts icons, so it runs on a
+/// blocking worker rather than the main thread.
 #[tauri::command]
-pub fn audio_list_app_audio_sources() -> Result<Vec<crate::audio::domain::AppAudioSource>, String> {
+pub async fn audio_list_app_audio_sources(
+) -> Result<Vec<crate::audio::domain::AppAudioSource>, String> {
+    tauri::async_runtime::spawn_blocking(list_app_audio_sources)
+        .await
+        .map_err(|error| error.to_string())?
+}
+
+fn list_app_audio_sources() -> Result<Vec<crate::audio::domain::AppAudioSource>, String> {
     #[cfg(target_os = "windows")]
     {
         crate::audio::capture::platform::windows::list_app_audio_sources()
@@ -2127,13 +2150,18 @@ pub fn audio_list_app_audio_sources() -> Result<Vec<crate::audio::domain::AppAud
 }
 
 #[tauri::command]
-pub fn audio_list_presets(
+pub async fn audio_list_presets(
     app: AppHandle,
     state: State<'_, SharedAudioEngineState>,
 ) -> Result<Vec<AudioPresetDefinition>, AudioStateError> {
-    let mut guard = state.write().map_err(|_| AudioStateError::StatePoisoned)?;
-    ensure_user_presets_loaded(&app, &mut guard)?;
-    Ok(guard.list_presets())
+    let shared = Arc::clone(state.inner());
+    // The first call reads the presets file.
+    run_blocking(move || {
+        let mut guard = shared.write().map_err(|_| AudioStateError::StatePoisoned)?;
+        ensure_user_presets_loaded(&app, &mut guard)?;
+        Ok(guard.list_presets())
+    })
+    .await?
 }
 
 #[tauri::command]
@@ -2167,8 +2195,41 @@ pub async fn audio_apply_preset_to_remote_track(
     .await
 }
 
+/// Keeps preset writes in order, so the file always ends with the newest list, while the
+/// state lock is released before the disk is touched. Lock order: this, then state.
+static USER_PRESET_SAVES: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+/// Edit the user presets under the state lock, then write them to disk after releasing it,
+/// on a blocking worker rather than the main thread. Returns the full preset list, and the
+/// mixer snapshot when `snapshot` is set.
+async fn edit_user_presets(
+    app: AppHandle,
+    shared: SharedAudioEngineState,
+    snapshot: bool,
+    edit: impl FnOnce(&mut AudioEngineState) -> Result<(), AudioStateError> + Send + 'static,
+) -> Result<(Vec<AudioPresetDefinition>, Option<AudioMixerState>), AudioStateError> {
+    run_blocking(move || {
+        let _saves = USER_PRESET_SAVES
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let (user_presets, presets, state) = {
+            let mut guard = shared.write().map_err(|_| AudioStateError::StatePoisoned)?;
+            ensure_user_presets_loaded(&app, &mut guard)?;
+            edit(&mut guard)?;
+            (
+                guard.user_presets.clone(),
+                guard.list_presets(),
+                snapshot.then(|| guard.snapshot()),
+            )
+        };
+        save_user_presets(&app, &user_presets)?;
+        Ok((presets, state))
+    })
+    .await?
+}
+
 #[tauri::command]
-pub fn audio_save_local_channel_as_preset(
+pub async fn audio_save_local_channel_as_preset(
     app: AppHandle,
     state: State<'_, SharedAudioEngineState>,
     source_id: AudioSourceId,
@@ -2176,18 +2237,17 @@ pub fn audio_save_local_channel_as_preset(
     description: String,
     target: AudioPresetTarget,
 ) -> Result<Vec<AudioPresetDefinition>, AudioStateError> {
-    let presets = {
-        let mut guard = state.write().map_err(|_| AudioStateError::StatePoisoned)?;
-        ensure_user_presets_loaded(&app, &mut guard)?;
-        guard.save_local_channel_as_preset(source_id, name, description, target)?;
-        save_user_presets(&app, &guard.user_presets)?;
-        guard.list_presets()
-    };
+    let (presets, _) = edit_user_presets(app, Arc::clone(state.inner()), false, move |engine| {
+        engine
+            .save_local_channel_as_preset(source_id, name, description, target)
+            .map(drop)
+    })
+    .await?;
     Ok(presets)
 }
 
 #[tauri::command]
-pub fn audio_save_remote_track_as_preset(
+pub async fn audio_save_remote_track_as_preset(
     app: AppHandle,
     state: State<'_, SharedAudioEngineState>,
     remote_participant_id: ParticipantId,
@@ -2196,53 +2256,51 @@ pub fn audio_save_remote_track_as_preset(
     description: String,
     target: AudioPresetTarget,
 ) -> Result<Vec<AudioPresetDefinition>, AudioStateError> {
-    let presets = {
-        let mut guard = state.write().map_err(|_| AudioStateError::StatePoisoned)?;
-        ensure_user_presets_loaded(&app, &mut guard)?;
-        guard.save_remote_track_as_preset(
-            remote_participant_id,
-            remote_track_id,
-            name,
-            description,
-            target,
-        )?;
-        save_user_presets(&app, &guard.user_presets)?;
-        guard.list_presets()
-    };
+    let (presets, _) = edit_user_presets(app, Arc::clone(state.inner()), false, move |engine| {
+        engine
+            .save_remote_track_as_preset(
+                remote_participant_id,
+                remote_track_id,
+                name,
+                description,
+                target,
+            )
+            .map(drop)
+    })
+    .await?;
     Ok(presets)
 }
 
 #[tauri::command]
-pub fn audio_delete_user_preset(
+pub async fn audio_delete_user_preset(
     app: AppHandle,
     state: State<'_, SharedAudioEngineState>,
     preset_id: String,
 ) -> Result<Vec<AudioPresetDefinition>, AudioStateError> {
-    let (snapshot, presets) = {
-        let mut guard = state.write().map_err(|_| AudioStateError::StatePoisoned)?;
-        ensure_user_presets_loaded(&app, &mut guard)?;
-        guard.delete_user_preset(&preset_id)?;
-        save_user_presets(&app, &guard.user_presets)?;
-        (guard.snapshot(), guard.list_presets())
-    };
-    emit_audio_state_changed(&app, &snapshot)?;
+    let (presets, snapshot) = edit_user_presets(
+        app.clone(),
+        Arc::clone(state.inner()),
+        true,
+        move |engine| engine.delete_user_preset(&preset_id).map(drop),
+    )
+    .await?;
+    if let Some(snapshot) = snapshot {
+        emit_audio_state_changed(&app, &snapshot)?;
+    }
     Ok(presets)
 }
 
 #[tauri::command]
-pub fn audio_rename_user_preset(
+pub async fn audio_rename_user_preset(
     app: AppHandle,
     state: State<'_, SharedAudioEngineState>,
     preset_id: String,
     name: String,
 ) -> Result<Vec<AudioPresetDefinition>, AudioStateError> {
-    let presets = {
-        let mut guard = state.write().map_err(|_| AudioStateError::StatePoisoned)?;
-        ensure_user_presets_loaded(&app, &mut guard)?;
-        guard.rename_user_preset(&preset_id, name)?;
-        save_user_presets(&app, &guard.user_presets)?;
-        guard.list_presets()
-    };
+    let (presets, _) = edit_user_presets(app, Arc::clone(state.inner()), false, move |engine| {
+        engine.rename_user_preset(&preset_id, name).map(drop)
+    })
+    .await?;
     Ok(presets)
 }
 

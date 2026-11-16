@@ -46,6 +46,8 @@ Then in `engine.rs`:
    windowed-sinc `StereoResampler` and cuts exact 10 ms frames
    (`PUBLISH_FRAME_SAMPLES` = 960 interleaved samples). Frames go into a bounded channel
    of `PUBLISH_BACKLOG_FRAMES = 12`; when it is full new frames are dropped, never queued.
+   The drain task hands each used frame buffer back through a small pool, so the capture
+   thread does not allocate one every 10 ms.
 8. **Drain task** — `drain_published_audio` forwards each frame to
    `NativeAudioSource::capture_frame`. If a source produces nothing for
    `PUBLISH_IDLE_AFTER = 60 ms` (silent system loopback, stalled device) it sends
@@ -176,7 +178,8 @@ so its overlapping windows smooth it). A change that arrives mid-fade waits. A s
 error is logged once and the stage drops to a simpler mode: Studio to Strong, Strong to
 sonora's NS (`FailedToStart`); the microphone keeps working and the stream never sees
 the error. The stage keeps running while muted, so the muted-speech meter sees the
-cleaned signal.
+cleaned signal. The device callback never logs: the reason (Studio too slow, a
+suppressor stopping) travels as a `CaptureEvent::Notice` and the event pump prints it.
 
 ### Studio
 
@@ -188,10 +191,20 @@ feature, on by default; without it Studio reports `NotAvailable` and runs Strong
 
 - **Not `Send`.** tract keeps `Rc` tensors and non-`Send` op states, so `DfTract` is not
   `Send`. `studio::Model` wraps it with an `unsafe impl Send`: the model is built on one
-  thread and moved whole to the capture thread, never cloned or shared. Decided with
-  Soroush on 2026-10-18 over a worker thread (+10 ms) or freezing tract's state per hop.
-- **Delay:** 1440 samples (30 ms) at 48 kHz: `fft_size - hop_size` (480) plus two hops of
-  look-ahead. Measured with an impulse in a test; `latency_samples` reports it.
+  thread and moved whole to the thread that runs it, never cloned or shared. Decided with
+  Soroush on 2026-10-18 over freezing tract's state per hop.
+- **Its own thread** (`Offloaded`, since 2026-11-16). `build_studio` moves the model to a
+  `raven-studio` worker. The audio thread pushes each hop into an `rtrb` queue, unparks
+  the worker and takes back the hop it pushed `OFFLOAD_HEADROOM_HOPS` (2) earlier; it
+  never waits. A hop not back in time is replaced by the dry signal delayed to line up,
+  and its late result is discarded. After a 100-hop warm-up, 3 late hops in 200 set
+  `fell_behind`, which trips the same fallback as the overrun guard. `work_cost` reports
+  the worker's own cost for the notice and the Mixer. Two hops, not one, because a device
+  that delivers 20 ms per callback hands over two hops at once. The model is freed on
+  the worker when the stage drops it.
+- **Delay:** the model's own 1440 samples (30 ms) at 48 kHz (`fft_size - hop_size` (480)
+  plus two hops of look-ahead, measured with an impulse in a test), plus the worker's
+  960 samples of headroom: 2400 samples (50 ms). `latency_samples` reports the total.
 - **Debug builds.** tract runs graph checks under debug assertions, and one rejects this
   model ("duplicate name /convt3/Conv.bias") though the optimised graph is fine. The
   app's `Cargo.toml` builds the tract crates with `opt-level = 3` and
@@ -209,7 +222,8 @@ feature, on by default; without it Studio reports `NotAvailable` and runs Strong
   waits, whatever ran before keeps running and the report says `active: <previous>,
   fallback: Starting`.
 - **Overrun guard** (`OverrunGuard`). Every suppressor hop is timed with `Instant::now()`;
-  only a guarded suppressor (Studio) acts on the verdict. The first 100 hops (1 s) are
+  only a guarded suppressor acts on the verdict. Studio's hops now cost the audio thread
+  only a queue push and pop, so for Studio the trip that matters is `fell_behind`. The first 100 hops (1 s) are
   ignored; it falls back when the mean of the last 200 hops (2 s) exceeds 5 ms, or when 3
   of them took over 10 ms. Then the standby fades in, the report says `active: Strong,
   fallback: TooSlow`, and choosing Studio again keeps Strong until the capture ends
@@ -241,7 +255,9 @@ output volume and the bus limiter. Each canceller holds its own `RenderCursor`; 
 consecutive 10 ms frames, starts 20 ms behind the writer, and resyncs if it falls more
 than 120 ms behind. `feed_render` feeds up to `MAX_RENDER_FRAMES_PER_CAPTURE = 8`
 frames per capture frame to catch up. Do not replace this with "latest N samples": a
-discontinuous reference is why echo cancellation never converged before.
+discontinuous reference is why echo cancellation never converged before. The output
+callback only `try_lock`s the ring: while a canceller is reading it, the played block
+waits in a preallocated 100 ms backlog and is pushed, in order, ahead of the next block.
 
 ## Receive path, in order
 
@@ -321,7 +337,13 @@ playback error.
 ## Device watcher (`devices.rs`)
 
 `spawn_device_watcher` polls device *names* every 2 s (6 s on Linux, where enumeration
-probes ALSA) and emits `audio-devices-changed` so pickers refresh. It opens nothing.
+probes ALSA) and emits `audio-devices-changed` so pickers refresh. It opens nothing. It
+enumerates only while the main window is visible and not minimised, or capture is wanted
+(a call or the Mixer); idle in the tray it does nothing, and the first check after the
+window returns reports any change made meanwhile. Capture and playback follow devices
+with their own probes, so a call does not depend on it. The device and window listing
+commands (`audio_list_*_devices`, `audio_list_app_audio_sources`, `video_list_*`) run on
+a blocking worker, never the main thread.
 Device ids are cpal device names today.
 
 ## Resampling and dynamics building blocks

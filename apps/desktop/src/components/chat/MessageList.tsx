@@ -7,10 +7,18 @@ import { typingLine } from "@/lib/chat/text";
 import { unreadLabel } from "@/lib/chat/reducer";
 import { buildRows, type ChatRow as Row } from "@/lib/chat/rows";
 import { canSelect, type MessageSelection } from "@/lib/chat/selection";
+import { lastVisibleIndex, renderedRowBoxes } from "@/lib/chat/visibility";
 import type { ChatAttachment, ChatMessage, ConversationState, PendingMessage } from "@/lib/chat/types";
 import { MessageRow, PendingRow, type DeliveryStatus } from "./MessageRow";
 import type { MentionContext } from "./MessageText";
 import { SeenBy } from "./SeenBy";
+
+interface RowHandlers {
+  onReact: (emoji: string) => Promise<void>;
+  onRemoveLinkPreview?: () => Promise<void>;
+  onVote: (options: number[]) => Promise<void>;
+  onClosePoll?: () => Promise<void>;
+}
 
 /** Virtuoso counts rows from here, leaving room to add older ones in front. */
 const FIRST_INDEX = 1_000_000;
@@ -135,7 +143,12 @@ export const MessageList = forwardRef<MessageListHandle, MessageListProps>(funct
   const virtuoso = useRef<VirtuosoHandle>(null);
   const [atBottom, setAtBottom] = useState(true);
   const [highlighted, setHighlighted] = useState<string | null>(null);
-  const visibleEnd = useRef(-1);
+  // The list's scrolling element: what is on screen is read from it, not from the range
+  // Virtuoso renders, which reaches 600 px beyond the viewport.
+  const [scroller, setScroller] = useState<HTMLElement | null>(null);
+  const scrollerRef = useCallback((element: HTMLElement | Window | null) => {
+    setScroller(element instanceof HTMLElement ? element : null);
+  }, []);
   // Where "New messages" goes is decided once, when the conversation is opened: before
   // what was unread then. Messages that arrive while reading do not get a divider.
   const [dividerAfterSeq] = useState<number | null>(() => (summary.unreadCount > 0 ? summary.readSeq : null));
@@ -178,16 +191,39 @@ export const MessageList = forwardRef<MessageListHandle, MessageListProps>(funct
 
   // What is on screen has been seen, provided the person can see the window.
   const markVisibleRead = useCallback(() => {
-    if (!windowActive) return;
-    for (let index = Math.min(visibleEnd.current, rows.length - 1); index >= 0; index -= 1) {
+    if (!windowActive || !scroller) return;
+    const viewport = scroller.getBoundingClientRect();
+    const lastSeen = lastVisibleIndex(renderedRowBoxes(scroller), viewport.top, viewport.bottom);
+    for (let index = Math.min(lastSeen, rows.length - 1); index >= 0; index -= 1) {
       const row = rows[index];
       if (row?.kind !== "message") continue;
       if (row.message.seq > summary.readSeq) store.markRead(id, row.message.seq);
       return;
     }
-  }, [windowActive, rows, summary.readSeq, store, id]);
+  }, [windowActive, scroller, rows, summary.readSeq, store, id]);
 
   useEffect(markVisibleRead, [markVisibleRead]);
+
+  // Scrolling within the rows already rendered changes what is seen without changing the
+  // rendered range, so look again once per frame while scrolling.
+  const markVisibleReadRef = useRef(markVisibleRead);
+  markVisibleReadRef.current = markVisibleRead;
+  useEffect(() => {
+    if (!scroller) return;
+    let frame = 0;
+    const onScroll = () => {
+      if (frame) return;
+      frame = requestAnimationFrame(() => {
+        frame = 0;
+        markVisibleReadRef.current();
+      });
+    };
+    scroller.addEventListener("scroll", onScroll, { passive: true });
+    return () => {
+      scroller.removeEventListener("scroll", onScroll);
+      if (frame) cancelAnimationFrame(frame);
+    };
+  }, [scroller]);
 
   const scrollToLatest = useCallback(() => {
     if (conversation.hasMoreAfter) {
@@ -223,6 +259,31 @@ export const MessageList = forwardRef<MessageListHandle, MessageListProps>(funct
 
   useImperativeHandle(ref, () => ({ scrollToLatest, goTo: openReply }), [scrollToLatest, openReply]);
 
+  // One set of handlers per message, kept while the conversation and what may be done in
+  // it stay the same, so MessageRow's memo holds when other rows change.
+  const canSend = summary.canSend;
+  const rowHandlers = useMemo(() => {
+    const cache = new Map<string, RowHandlers>();
+    return (messageId: string, mine: boolean): RowHandlers => {
+      const key = `${mine ? "1" : "0"}${messageId}`;
+      let handlers = cache.get(key);
+      if (!handlers) {
+        handlers = {
+          onReact: (emoji) => store.react(id, messageId, emoji),
+          onRemoveLinkPreview: mine && canSend ? () => store.removeLinkPreview(id, messageId) : undefined,
+          onVote: (options) => store.votePoll(id, messageId, options),
+          onClosePoll: mine && canSend ? () => store.closePoll(id, messageId) : undefined,
+        };
+        cache.set(key, handlers);
+      }
+      return handlers;
+    };
+  }, [store, id, canSend]);
+  const toggleSelected = useCallback(
+    (toggled: ChatMessage, shift: boolean) => onToggleSelected?.(toggled, shift, selectable),
+    [onToggleSelected, selectable],
+  );
+
   const retry = useCallback((item: PendingMessage) => store.retry(id, item.clientMessageId), [store, id]);
   const discard = useCallback((item: PendingMessage) => store.discard(id, item.clientMessageId), [store, id]);
 
@@ -245,6 +306,7 @@ export const MessageList = forwardRef<MessageListHandle, MessageListProps>(funct
       <Virtuoso<Row, ListContext>
         key={epoch}
         ref={virtuoso}
+        scrollerRef={scrollerRef}
         className="h-full"
         data={rows}
         context={context}
@@ -270,7 +332,6 @@ export const MessageList = forwardRef<MessageListHandle, MessageListProps>(funct
           if (conversation.hasMoreAfter) void store.loadNewer(id);
         }}
         rangeChanged={({ startIndex, endIndex }) => {
-          visibleEnd.current = endIndex - firstItemIndex;
           markVisibleRead();
           // Ask for the next page while there is still some way to go, so that scrolling
           // steadily does not run into the edge of what is loaded and have to wait there.
@@ -291,6 +352,7 @@ export const MessageList = forwardRef<MessageListHandle, MessageListProps>(funct
             ? message.seq <= (summary.kind === "dm" ? (summary.peerReadSeq ?? 0) : (conversation.seen?.readSeq ?? 0)) ? "read" : "sent"
             : undefined;
           // A copy stays as it was saved; your own notes in Saved messages have no time limit.
+          const handlers = rowHandlers(message.id, mine);
           const editable = mine && summary.canSend && !message.origin && !message.poll && !isLibraryMessage(message) && (inSaved || Date.now() - Date.parse(message.createdAt) < EDIT_WINDOW_MS);
           return (
             <div className="mx-auto w-full max-w-3xl px-6">
@@ -305,10 +367,10 @@ export const MessageList = forwardRef<MessageListHandle, MessageListProps>(funct
                 parent={message.replyTo ? byId.get(message.replyTo.id) : undefined}
                 reactionLimits={reactionLimits}
                 nameOf={nameOf}
-                onReact={(emoji) => store.react(id, message.id, emoji)}
-                onRemoveLinkPreview={mine && summary.canSend ? () => store.removeLinkPreview(id, message.id) : undefined}
-                onVote={(options) => store.votePoll(id, message.id, options)}
-                onClosePoll={mine && summary.canSend ? () => store.closePoll(id, message.id) : undefined}
+                onReact={handlers.onReact}
+                onRemoveLinkPreview={handlers.onRemoveLinkPreview}
+                onVote={handlers.onVote}
+                onClosePoll={handlers.onClosePoll}
                 canReply={summary.canSend}
                 canEdit={editable}
                 canDeleteForEveryone={mine || summary.canManage}
@@ -329,7 +391,7 @@ export const MessageList = forwardRef<MessageListHandle, MessageListProps>(funct
                 onSelect={onStartSelecting}
                 selecting={Boolean(selection)}
                 selected={selection?.ids.has(message.id)}
-                onToggleSelected={(toggled, shift) => onToggleSelected?.(toggled, shift, selectable)}
+                onToggleSelected={toggleSelected}
                 inSaved={inSaved}
                 mentions={mentions}
               />

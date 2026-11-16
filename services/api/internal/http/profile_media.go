@@ -1,10 +1,12 @@
 package http
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"database/sql"
 	"encoding/hex"
 	"errors"
+	"image"
 	"log"
 	stdhttp "net/http"
 	"os"
@@ -13,12 +15,19 @@ import (
 
 	"raven/services/api/internal/auth"
 	"raven/services/api/internal/database"
+	"raven/services/api/internal/linkpreview"
 	profilemedia "raven/services/api/internal/media"
 
 	"github.com/gofiber/fiber/v2"
 )
 
-const maxProfileImageBytes = 512 * 1024
+const (
+	maxProfileImageBytes = 512 * 1024
+	// maxProfileImageSide is the longest side a stored profile image keeps. Larger ones
+	// are scaled down and encoded again, so no reader decodes a huge picture to draw a
+	// small circle. The desktop already sends 512 pixels.
+	maxProfileImageSide = 1024
+)
 
 func (s *Server) getUserAvatar(c *fiber.Ctx) error {
 	return s.sendStoredAvatar(c, `SELECT avatar_object_key FROM users WHERE id = ?`, c.Params("id"))
@@ -148,6 +157,17 @@ func (s *Server) storeUploadedAvatar(c *fiber.Ctx, scope, id string) (string, er
 	detected := stdhttp.DetectContentType(body)
 	if !allowedProfileContentType(contentType) || !allowedProfileContentType(detected) || contentType != detected {
 		return "", fiber.NewError(fiber.StatusUnsupportedMediaType, "use a JPEG, PNG, GIF, or WebP image")
+	}
+	config, _, err := image.DecodeConfig(bytes.NewReader(body))
+	if err != nil || config.Width <= 0 || config.Height <= 0 {
+		return "", fiber.NewError(fiber.StatusUnsupportedMediaType, "use a JPEG, PNG, GIF, or WebP image")
+	}
+	if config.Width > maxProfileImageSide || config.Height > maxProfileImageSide {
+		fitted, err := linkpreview.FitImage(body, maxProfileImageSide)
+		if err != nil {
+			return "", fiber.NewError(fiber.StatusRequestEntityTooLarge, "profile images must be 8192 pixels or smaller on each side")
+		}
+		body, contentType = fitted.Bytes, fitted.ContentType
 	}
 	extension := map[string]string{
 		"image/jpeg": ".jpg",

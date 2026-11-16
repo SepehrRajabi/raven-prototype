@@ -1,14 +1,20 @@
 package http
 
 import (
+	"context"
 	"database/sql"
 	"errors"
 	"fmt"
+	"log"
+	"net"
+	"net/url"
 	"os"
+	"runtime/debug"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"raven/services/api/internal/auth"
 	"raven/services/api/internal/database"
@@ -17,15 +23,22 @@ import (
 
 	"github.com/gofiber/fiber/v2"
 	"github.com/gofiber/fiber/v2/middleware/cors"
+	"github.com/gofiber/fiber/v2/middleware/recover"
 	"github.com/gofiber/fiber/v2/middleware/session"
 	"github.com/livekit/protocol/livekit"
 	lksdk "github.com/livekit/server-sdk-go/v2"
+	"github.com/valyala/fasthttp"
 )
 
 type Server struct {
-	app               *fiber.App
-	db                *database.DB
-	sessions          *session.Store
+	app      *fiber.App
+	db       *database.DB
+	sessions *session.Store
+	// sessionStorage is where sessions keeps its data, keyed by token hash.
+	sessionStorage *database.SessionStorage
+	// sessionPurgedAt is when expired and revoked sign-ins were last deleted.
+	sessionPurgeMu    sync.Mutex
+	sessionPurgedAt   time.Time
 	serverName        string
 	serverDescription string
 	serverAvatar      string
@@ -34,6 +47,16 @@ type Server struct {
 	liveKitAPIKey     string
 	liveKitAPISecret  string
 	liveKitRooms      *lksdk.RoomServiceClient
+	// liveKitDevCredentials is true when LIVEKIT_API_KEY or LIVEKIT_API_SECRET was unset
+	// and the development pair is in use.
+	liveKitDevCredentials bool
+	// listLiveKitRooms and listLiveKitParticipants read LiveKit for the call reconcile
+	// (see livekit_reconcile.go). Fields so tests can stand in for LiveKit.
+	listLiveKitRooms        func(ctx context.Context) ([]string, error)
+	listLiveKitParticipants func(ctx context.Context, room string) ([]*livekit.ParticipantInfo, error)
+	// spaceLocks keeps one account's owned-space count and the creation of a space
+	// together, so two requests at once cannot both take the last place under the limit.
+	spaceLocks *keyedMutex
 	// removeParticipant and closeRoom end LiveKit connections. They are fields so tests
 	// can see what was asked for without a LiveKit server.
 	removeParticipant func(room, identity string)
@@ -188,11 +211,14 @@ func New(db *database.DB) *Server {
 	if liveKitURL == "" {
 		liveKitURL = "ws://127.0.0.1:7880"
 	}
-	liveKitAPIKey := os.Getenv("LIVEKIT_API_KEY")
+	// Without a key and secret the development pair is used, which anyone can sign
+	// tokens with. CheckLiveKitConfig refuses to serve with it anywhere but loopback.
+	liveKitAPIKey := strings.TrimSpace(os.Getenv("LIVEKIT_API_KEY"))
+	liveKitAPISecret := strings.TrimSpace(os.Getenv("LIVEKIT_API_SECRET"))
+	liveKitDevCredentials := liveKitAPIKey == "" || liveKitAPISecret == ""
 	if liveKitAPIKey == "" {
 		liveKitAPIKey = "devkey"
 	}
-	liveKitAPISecret := os.Getenv("LIVEKIT_API_SECRET")
 	if liveKitAPISecret == "" {
 		liveKitAPISecret = "secret"
 	}
@@ -205,32 +231,38 @@ func New(db *database.DB) *Server {
 		serverDescription = "Desktop RTC for private Nests"
 	}
 	serverAvatar := strings.TrimSpace(os.Getenv("RAVEN_SERVER_AVATAR"))
+	sessionStorage := database.NewSessionStorage(db)
 	s := &Server{
 		app: fiber.New(fiberConfig()),
 		db:  db,
 		sessions: session.New(session.Config{
-			Expiration: 30 * 24 * time.Hour,
+			Expiration: sessionIdleLifetime,
 			KeyLookup:  "header:X-Session-ID",
-			Storage:    database.NewSessionStorage(db),
+			Storage:    sessionStorage,
 		}),
-		serverName:        serverName,
-		serverDescription: serverDescription,
-		serverAvatar:      serverAvatar,
-		profileMedia:      profilemedia.NewStoreFromEnv(),
-		liveKitURL:        liveKitURL,
-		liveKitAPIKey:     liveKitAPIKey,
-		liveKitAPISecret:  liveKitAPISecret,
-		liveKitRooms:      lksdk.NewRoomServiceClient(liveKitURL, liveKitAPIKey, liveKitAPISecret),
-		events:            newEventBroker(),
-		metrics:           newServerMetrics(),
-		chatLocks:         newKeyedMutex(),
-		linkPreviews:      newChatLinkPreviewerFromEnv(),
-		inviteLocks:       newKeyedMutex(),
-		serverVersion:     fallbackString(os.Getenv("RAVEN_VERSION"), "0.1.0"),
-		minClientVersion:  fallbackString(os.Getenv("RAVEN_MINIMUM_CLIENT_VERSION"), "0.1.0"),
+		sessionStorage:        sessionStorage,
+		serverName:            serverName,
+		serverDescription:     serverDescription,
+		serverAvatar:          serverAvatar,
+		profileMedia:          profilemedia.NewStoreFromEnv(),
+		liveKitURL:            liveKitURL,
+		liveKitAPIKey:         liveKitAPIKey,
+		liveKitAPISecret:      liveKitAPISecret,
+		liveKitDevCredentials: liveKitDevCredentials,
+		liveKitRooms:          lksdk.NewRoomServiceClient(liveKitURL, liveKitAPIKey, liveKitAPISecret),
+		events:                newEventBroker(),
+		metrics:               newServerMetrics(),
+		chatLocks:             newKeyedMutex(),
+		linkPreviews:          newChatLinkPreviewerFromEnv(),
+		inviteLocks:           newKeyedMutex(),
+		serverVersion:         fallbackString(os.Getenv("RAVEN_VERSION"), "0.1.0"),
+		minClientVersion:      fallbackString(os.Getenv("RAVEN_MINIMUM_CLIENT_VERSION"), "0.1.0"),
 	}
 	s.events.metrics = s.metrics
 	s.removeParticipant = s.liveKitRemoveParticipant
+	s.listLiveKitRooms = s.liveKitListRooms
+	s.listLiveKitParticipants = s.liveKitListParticipants
+	s.spaceLocks = newKeyedMutex()
 	s.closeRoom = s.liveKitDeleteRoom
 	s.setParticipantPermission = s.liveKitSetParticipantPermission
 	s.setParticipantName = s.liveKitSetParticipantName
@@ -239,6 +271,7 @@ func New(db *database.DB) *Server {
 	s.workshop = relay.NewRegistry(relay.LimitsFromEnv())
 	s.workshop.OnEvent = s.publishWorkshopEvent
 	s.relayServer = relay.NewServer(s.workshop, relayPolicy{s})
+	s.relayServer.SetPendingLimits(envInt("RAVEN_WORKSHOP_MAX_PENDING", 0), envInt("RAVEN_WORKSHOP_MAX_PENDING_PER_IP", 0))
 	s.loginThrottle = newLoginThrottle()
 	s.libraryConversion = detectLibraryConversion()
 	s.startChatLinkPreviews()
@@ -253,9 +286,21 @@ func New(db *database.DB) *Server {
 // client cannot name its own address.
 func fiberConfig() fiber.Config {
 	config := fiber.Config{
-		AppName:      "Raven API",
-		BodyLimit:    libraryOriginalBytes + 64*1024,
+		AppName: "Raven API",
+		// The server-wide ceiling is the largest upload any route takes. Each request
+		// gets its own, much smaller limit as soon as its headers are read (see
+		// requestLimits), before fasthttp buffers the body.
+		BodyLimit:    maxUploadBodyBytes,
 		ErrorHandler: errorHandler,
+		// Routes match exactly. Matching case-insensitively let /v1/ADMIN/... reach the
+		// admin routes past a proxy rule written for /v1/admin/.
+		CaseSensitive: true,
+		// A request has this long to arrive in full, and a response this long to be
+		// written, unless requestLimits gives its route more. A keep-alive connection
+		// may sit idle between requests for IdleTimeout.
+		ReadTimeout:  defaultReadTimeout,
+		WriteTimeout: defaultWriteTimeout,
+		IdleTimeout:  defaultIdleTimeout,
 	}
 	if proxies := splitCSV(os.Getenv("RAVEN_TRUSTED_PROXIES")); len(proxies) > 0 {
 		config.ProxyHeader = fiber.HeaderXForwardedFor
@@ -264,6 +309,128 @@ func fiberConfig() fiber.Config {
 		config.EnableIPValidation = true
 	}
 	return config
+}
+
+const (
+	// defaultBodyBytes is the most fasthttp reads of a request body on every route but
+	// an upload. chatRequestBodyLimit then holds those routes to 1 MB; the extra room
+	// here keeps its clearer error for bodies just over that, while a body this large
+	// is refused before it is read in full.
+	defaultBodyBytes = 4 * 1024 * 1024
+	// maxUploadBodyBytes is what the upload routes take: the 20 MB a library original
+	// may be, plus room for the request around it.
+	maxUploadBodyBytes = libraryOriginalBytes + 64*1024
+
+	defaultReadTimeout  = 30 * time.Second
+	defaultWriteTimeout = 2 * time.Minute
+	defaultIdleTimeout  = 2 * time.Minute
+	// uploadReadTimeout is how long an upload may take to arrive: 20 MB at about
+	// 300 kbit/s.
+	uploadReadTimeout = 10 * time.Minute
+	// downloadWriteTimeout is how long a file or an account export may take to be sent.
+	downloadWriteTimeout = 30 * time.Minute
+	// streamWriteTimeout stands in for "no limit" on an event stream, which stays open
+	// as long as the app does. fasthttp reads zero as "use the default", so it is long
+	// instead. The stream itself notices a client that went away from its keepalives.
+	streamWriteTimeout = 100 * 365 * 24 * time.Hour
+)
+
+// requestLimits picks a request's body limit and timeouts from its method and path,
+// once its headers are read and before its body is. Only the upload routes take a large
+// body, so the 20 MB ceiling is never buffered for anyone else, signed in or not. It is
+// installed as fasthttp's HeaderReceived hook.
+func requestLimits(method, path string) fasthttp.RequestConfig {
+	config := fasthttp.RequestConfig{MaxRequestBodySize: defaultBodyBytes}
+	parts := strings.Split(strings.Trim(path, "/"), "/")
+	switch {
+	case method == fiber.MethodPut && isUploadPath(parts):
+		config.MaxRequestBodySize = maxUploadBodyBytes
+		config.ReadTimeout = uploadReadTimeout
+	case method == fiber.MethodGet && path == "/v1/nest-events":
+		config.WriteTimeout = streamWriteTimeout
+	case method == fiber.MethodGet && isDownloadPath(parts):
+		config.WriteTimeout = downloadWriteTimeout
+	}
+	return config
+}
+
+// isUploadPath is a chat attachment variant or a library original, the two routes that
+// take file bytes.
+func isUploadPath(parts []string) bool {
+	if len(parts) == 8 && parts[0] == "v1" && parts[1] == "chat" && parts[2] == "conversations" && parts[4] == "attachments" && parts[6] == "variants" {
+		return true
+	}
+	return len(parts) == 5 && parts[0] == "v1" && parts[1] == "library" && parts[2] == "assets" && parts[4] == "original"
+}
+
+// isDownloadPath is a route that sends a file or a whole account, which can take longer
+// than an ordinary answer on a slow connection.
+func isDownloadPath(parts []string) bool {
+	if len(parts) < 2 || parts[0] != "v1" {
+		return false
+	}
+	switch parts[1] {
+	case "media", "library":
+		return true
+	case "account":
+		return len(parts) == 3 && parts[2] == "export"
+	case "admin":
+		return len(parts) >= 3 && parts[2] == "library"
+	case "chat":
+		return len(parts) >= 6 && parts[2] == "conversations" && (parts[4] == "attachments" || parts[4] == "messages")
+	}
+	return false
+}
+
+// installRequestLimits hooks requestLimits into the HTTP server.
+func installRequestLimits(app *fiber.App) {
+	app.Server().HeaderReceived = func(header *fasthttp.RequestHeader) fasthttp.RequestConfig {
+		path := string(header.RequestURI())
+		if i := strings.IndexAny(path, "?#"); i >= 0 {
+			path = path[:i]
+		}
+		return requestLimits(string(header.Method()), path)
+	}
+}
+
+// CheckLiveKitConfig refuses to start a server that would sign call tokens with the
+// development key and secret anywhere but on this machine. Those are public, so anyone
+// could make their own tokens and join any call. addr is the address the API listens on.
+func (s *Server) CheckLiveKitConfig(addr string) error {
+	if !s.liveKitDevCredentials {
+		return nil
+	}
+	if loopbackAddr(addr) && loopbackURL(s.liveKitURL) {
+		return nil
+	}
+	return errors.New("LIVEKIT_API_KEY and LIVEKIT_API_SECRET must be set when the API or LiveKit is reachable from other machines")
+}
+
+func loopbackAddr(addr string) bool {
+	if addr == "" {
+		return true
+	}
+	host, _, err := net.SplitHostPort(addr)
+	if err != nil {
+		host = addr
+	}
+	return loopbackHost(host)
+}
+
+func loopbackURL(raw string) bool {
+	parsed, err := url.Parse(raw)
+	if err != nil {
+		return false
+	}
+	return loopbackHost(parsed.Hostname())
+}
+
+func loopbackHost(host string) bool {
+	if host == "localhost" {
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
 }
 
 func (s *Server) Listen(addr string) error {
@@ -287,6 +454,15 @@ func (s *Server) Shutdown(timeout time.Duration) error {
 }
 
 func (s *Server) routes() {
+	installRequestLimits(s.app)
+	// A panic in a handler answers that request with a 500 instead of ending the
+	// process, and every call, stream and relay connection with it.
+	s.app.Use(recover.New(recover.Config{
+		EnableStackTrace: true,
+		StackTraceHandler: func(c *fiber.Ctx, recovered any) {
+			log.Printf("panic in %s %s: %v\n%s", c.Method(), c.Route().Path, recovered, debug.Stack())
+		},
+	}))
 	s.app.Use(cors.New(cors.Config{
 		AllowOriginsFunc: func(origin string) bool {
 			return allowedCORSOrigin(origin)
@@ -506,14 +682,19 @@ func (s *Server) requireAuth(c *fiber.Ctx) error {
 	if err != nil {
 		return err
 	}
-	sessionID := sess.ID()
+	token := sess.ID()
 	userID, _ := sess.Get("user_id").(string)
 	if userID == "" {
 		_ = sess.Destroy()
 		return fiber.NewError(fiber.StatusUnauthorized, "authentication required")
 	}
-	var expiresAt string
-	err = s.db.QueryRow(`SELECT expires_at FROM auth_sessions WHERE id = ? AND user_id = ? AND revoked_at IS NULL`, sessionID, userID).Scan(&expiresAt)
+	// The token is looked up by its hash; sessionID is the sign-in's public id, which is
+	// what lists, revocation and the open streams go by.
+	var sessionID, expiresAt, createdAt string
+	err = s.db.QueryRow(
+		`SELECT id, expires_at, created_at FROM auth_sessions WHERE token_hash = ? AND user_id = ? AND revoked_at IS NULL`,
+		database.SessionTokenHash(token), userID,
+	).Scan(&sessionID, &expiresAt, &createdAt)
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return err
 	}
@@ -535,12 +716,12 @@ func (s *Server) requireAuth(c *fiber.Ctx) error {
 	}
 	user.Capabilities = &capabilities
 	now := database.Now()
-	nextExpiry := time.Now().UTC().Add(30 * 24 * time.Hour).Format(time.RFC3339Nano)
+	nextExpiry := sessionNextExpiry(createdAt, time.Now())
 	_, _ = s.db.Exec(
 		`UPDATE auth_sessions SET latest_ip = ?, user_agent = ?, os = ?, device_name = ?, last_accessed_at = ?, expires_at = ? WHERE id = ?`,
-		clientIP(c), limited(c.Get(fiber.HeaderUserAgent), 500), clientOS(c), clientDevice(c), now, nextExpiry, sessionID,
+		clientIP(c), limited(c.Get(fiber.HeaderUserAgent), 500), clientOS(c), clientDevice(c), now, database.Timestamp(nextExpiry), sessionID,
 	)
-	sess.SetExpiry(30 * 24 * time.Hour)
+	sess.SetExpiry(time.Until(nextExpiry))
 	if err := sess.Save(); err != nil {
 		return err
 	}
@@ -617,27 +798,32 @@ func (s *Server) startSession(c *fiber.Ctx, user User) error {
 	if err != nil {
 		return err
 	}
-	previousID := sess.ID()
+	previousToken := sess.ID()
 	if err := sess.Regenerate(); err != nil {
 		return err
 	}
-	if previousID != "" {
-		_, _ = s.db.Exec(`UPDATE auth_sessions SET revoked_at = ? WHERE id = ? AND revoked_at IS NULL`, database.Now(), previousID)
-		s.endSessionStreams(previousID)
+	if previousToken != "" {
+		// Whatever this client was signed in as before ends here.
+		var previousID string
+		if err := s.db.QueryRow(`SELECT id FROM auth_sessions WHERE token_hash = ? AND revoked_at IS NULL`, database.SessionTokenHash(previousToken)).Scan(&previousID); err == nil {
+			_, _ = s.db.Exec(`UPDATE auth_sessions SET revoked_at = ? WHERE id = ? AND revoked_at IS NULL`, database.Now(), previousID)
+			s.endSessionStreams(previousID)
+		}
 	}
-	sessionID := sess.ID()
-	now := database.Now()
-	expiresAt := time.Now().UTC().Add(30 * 24 * time.Hour).Format(time.RFC3339Nano)
+	sessionID := auth.NewID()
+	startedAt := time.Now()
+	now := database.Timestamp(startedAt)
+	expiresAt := sessionNextExpiry(now, startedAt)
 	_, err = s.db.Exec(
-		`INSERT INTO auth_sessions (id, user_id, latest_ip, user_agent, os, device_name, created_at, last_accessed_at, expires_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		sessionID, user.ID, clientIP(c), limited(c.Get(fiber.HeaderUserAgent), 500), clientOS(c), clientDevice(c), now, now, expiresAt,
+		`INSERT INTO auth_sessions (id, token_hash, user_id, latest_ip, user_agent, os, device_name, created_at, last_accessed_at, expires_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		sessionID, database.SessionTokenHash(sess.ID()), user.ID, clientIP(c), limited(c.Get(fiber.HeaderUserAgent), 500), clientOS(c), clientDevice(c), now, now, database.Timestamp(expiresAt),
 	)
 	if err != nil {
 		return err
 	}
 	sess.Set("user_id", user.ID)
-	sess.SetExpiry(30 * 24 * time.Hour)
+	sess.SetExpiry(time.Until(expiresAt))
 	if err := sess.Save(); err != nil {
 		_, _ = s.db.Exec(`DELETE FROM auth_sessions WHERE id = ?`, sessionID)
 		return err
@@ -841,9 +1027,12 @@ func (s *Server) createNestWithType(c *fiber.Ctx, defaultType string) error {
 	if err := c.BodyParser(&body); err != nil {
 		return fiber.NewError(fiber.StatusBadRequest, "invalid Nest payload")
 	}
-	name := strings.TrimSpace(body.Name)
+	name := strings.Join(strings.Fields(body.Name), " ")
 	if name == "" {
 		return fiber.NewError(fiber.StatusBadRequest, "Nest name is required")
+	}
+	if utf8.RuneCountInString(name) > 80 {
+		return fiber.NewError(fiber.StatusBadRequest, "Nest name must be 80 characters or fewer")
 	}
 	nestType := normalizeNestType(body.Type, defaultType)
 	if nestType == "" {
@@ -869,7 +1058,10 @@ func (s *Server) createNestWithType(c *fiber.Ctx, defaultType string) error {
 			treeID = &requestedTreeID
 		} else {
 			// With no tree named the nest goes in the first tree this person owns, and
-			// one is made for them if they own none. That is creating a tree.
+			// one is made for them if they own none. That is creating a tree, so it
+			// holds the same lock as createTree.
+			unlock := s.spaceLocks.lock(user.ID)
+			defer unlock()
 			owned, err := s.ownedTreeCount(user.ID)
 			if err != nil {
 				return err
@@ -1018,6 +1210,7 @@ func (s *Server) liveKitToken(c *fiber.Ctx) error {
 		Name:      displayName,
 		Role:      tokenRole,
 		Grants:    auth.CallGrantsFor(identityKind, limits),
+		ValidFor:  liveKitTokenTTL,
 	})
 	if err != nil {
 		return err
@@ -1279,8 +1472,18 @@ func (s *Server) resolveJoinRequest(c *fiber.Ctx, status string) error {
 	); err != nil {
 		return err
 	}
-	if _, err := tx.Exec(`UPDATE nest_join_requests SET status = ?, resolved_at = ?, resolved_by_user_id = ? WHERE id = ?`, status, now, actor.ID, request.ID); err != nil {
+	resolved, err := tx.Exec(
+		`UPDATE nest_join_requests SET status = ?, resolved_at = ?, resolved_by_user_id = ? WHERE id = ? AND status = 'pending'`,
+		status, now, actor.ID, request.ID,
+	)
+	if err != nil {
 		return err
+	}
+	// Someone else answered it first; a second, different answer must not undo it.
+	if count, err := resolved.RowsAffected(); err != nil {
+		return err
+	} else if count == 0 {
+		return fiber.NewError(fiber.StatusConflict, "This request was already answered.")
 	}
 	if status == "accepted" {
 		if _, err := tx.Exec(

@@ -176,7 +176,7 @@ func (s *Server) openInviteCount(q chatQuerier, userID string, now time.Time) (i
 	err := q.QueryRow(
 		`SELECT COUNT(*) FROM account_invites
 		 WHERE created_by_user_id = ? AND used_at IS NULL AND revoked_at IS NULL AND expires_at > ?`,
-		userID, now.Format(time.RFC3339Nano),
+		userID, database.Timestamp(now),
 	).Scan(&count)
 	return count, err
 }
@@ -193,7 +193,7 @@ func (s *Server) listInvites(c *fiber.Ctx) error {
 		 WHERE i.created_by_user_id = ?
 		   AND ((i.used_at IS NULL AND i.revoked_at IS NULL AND i.expires_at > ?) OR i.created_at > ?)
 		 ORDER BY i.created_at DESC, i.id`,
-		user.ID, now.Format(time.RFC3339Nano), now.Add(-inviteListWindow).Format(time.RFC3339Nano),
+		user.ID, database.Timestamp(now), database.Timestamp(now.Add(-inviteListWindow)),
 	)
 	if err != nil {
 		return err
@@ -239,8 +239,8 @@ func (s *Server) createInvite(c *fiber.Ctx) error {
 	invite := Invite{
 		ID:        auth.NewID(),
 		Hint:      normalized[len(normalized)-4:],
-		CreatedAt: now.Format(time.RFC3339Nano),
-		ExpiresAt: now.Add(inviteLifetime).Format(time.RFC3339Nano),
+		CreatedAt: database.Timestamp(now),
+		ExpiresAt: database.Timestamp(now.Add(inviteLifetime)),
 		State:     "open",
 	}
 	// The count and the insert share a lock on the account, so two requests at once

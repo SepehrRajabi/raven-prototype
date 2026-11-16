@@ -8,6 +8,7 @@ import (
 
 	"github.com/gofiber/fiber/v2"
 	"raven/services/api/internal/auth"
+	"raven/services/api/internal/database"
 )
 
 const profileKnockCooldown = 60 * time.Second
@@ -92,7 +93,7 @@ func profileKnockState(knock Knock, now time.Time) *ProfileKnockState {
 	if state.State == "cooldown" && !now.Before(retry) {
 		return nil
 	}
-	state.RetryAt = retry.Format(time.RFC3339Nano)
+	state.RetryAt = database.Timestamp(retry)
 	return &state
 }
 
@@ -137,9 +138,9 @@ func profileKnockStates(knocks []Knock, now time.Time) []ProfileKnockState {
 
 // profileKnockWindow selects the sender's knocks that can still shape their state.
 func profileKnockWindow(now time.Time) (string, []any) {
-	cutoff := now.Add(-profileKnockCooldown).Format(time.RFC3339Nano)
+	cutoff := database.Timestamp(now.Add(-profileKnockCooldown))
 	return ` AND (k.status = 'pending' OR k.resolved_at > ? OR k.expires_at > ? OR k.reply_until > ?) ORDER BY k.created_at DESC`,
-		[]any{cutoff, cutoff, now.Add(-knockReminderWindow).Format(time.RFC3339Nano)}
+		[]any{cutoff, cutoff, database.Timestamp(now.Add(-knockReminderWindow))}
 }
 
 // knockSeenBy hides a quiet dismiss from the person who knocked.
@@ -206,7 +207,7 @@ func (s *Server) createProfileKnock(c *fiber.Ctx, fromUserID, toUserID, message 
 	}
 	id := auth.NewID()
 	if _, err := tx.Exec(`INSERT INTO knocks (id, from_user_id, to_user_id, status, message, created_at, expires_at)
-		VALUES (?, ?, ?, 'pending', ?, ?, ?)`, id, fromUserID, toUserID, nullableString(message), now.Format(time.RFC3339Nano), now.Add(knockTTL()).Format(time.RFC3339Nano)); err != nil {
+		VALUES (?, ?, ?, 'pending', ?, ?, ?)`, id, fromUserID, toUserID, nullableString(message), database.Timestamp(now), database.Timestamp(now.Add(knockTTL()))); err != nil {
 		return err
 	}
 	if err := tx.Commit(); err != nil {

@@ -2,7 +2,9 @@ package http
 
 import (
 	"crypto/rand"
+	"crypto/sha256"
 	"database/sql"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"regexp"
@@ -144,6 +146,10 @@ const (
 	loginFailureWindow        = 10 * time.Minute
 	loginMaxFailuresPerPair   = 8
 	loginMaxFailuresPerSource = 40
+	// loginMaxTrackedKeys bounds the throttle's memory. Past it, failures still count
+	// against their address, but no new name-and-address pairs are remembered until
+	// the sweep makes room. Each key is at most about 170 bytes plus its times.
+	loginMaxTrackedKeys = 100_000
 )
 
 type loginThrottle struct {
@@ -156,12 +162,32 @@ func newLoginThrottle() *loginThrottle {
 	return &loginThrottle{failures: map[string][]time.Time{}, now: time.Now}
 }
 
+// loginPairKey names an address and an account name together. The name is hashed, so
+// however long a name someone sends, the key stays the same small size.
 func loginPairKey(ip, username string) string {
-	return "pair:" + ip + "|" + strings.ToLower(strings.TrimSpace(username))
+	sum := sha256.Sum256([]byte(strings.ToLower(strings.TrimSpace(username))))
+	return "pair:" + limited(ip, 100) + "|" + hex.EncodeToString(sum[:16])
 }
 
 func loginSourceKey(ip string) string {
-	return "source:" + ip
+	return "source:" + limited(ip, 100)
+}
+
+// sweep forgets every key whose failures have all left the window. It runs from the
+// maintenance loop, so keys that are never looked at again do not stay forever.
+func (t *loginThrottle) sweep() {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	for key := range t.failures {
+		t.recentLocked(key)
+	}
+}
+
+// size is how many keys are remembered, for tests.
+func (t *loginThrottle) size() int {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return len(t.failures)
 }
 
 // recentLocked drops failures older than the window and returns what is left.
@@ -208,7 +234,11 @@ func (t *loginThrottle) failed(ip, username string) {
 	defer t.mu.Unlock()
 	now := t.now()
 	for _, key := range []string{loginPairKey(ip, username), loginSourceKey(ip)} {
-		t.failures[key] = append(t.recentLocked(key), now)
+		recent := t.recentLocked(key)
+		if recent == nil && len(t.failures) >= loginMaxTrackedKeys && strings.HasPrefix(key, "pair:") {
+			continue
+		}
+		t.failures[key] = append(recent, now)
 	}
 }
 
@@ -310,17 +340,6 @@ func (s *Server) revokeUserSessions(userID, exceptSessionID string) error {
 			return err
 		}
 	}
-	return nil
-}
-
-func (s *Server) revokeSession(sessionID, now string) error {
-	if _, err := s.db.Exec(`UPDATE auth_sessions SET revoked_at = ? WHERE id = ? AND revoked_at IS NULL`, now, sessionID); err != nil {
-		return err
-	}
-	if err := s.sessions.Delete(sessionID); err != nil {
-		return err
-	}
-	s.endSessionStreams(sessionID)
 	return nil
 }
 
