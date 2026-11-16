@@ -84,7 +84,7 @@ describe("picker sections", () => {
 
 describe("grid keys", () => {
   // Three cells on one row and two below, 50 px apart.
-  const cell = (left: number, top: number) => ({ getBoundingClientRect: () => ({ left, top }) }) as unknown as HTMLElement;
+  const cell = (left: number, top: number, width = 46) => ({ getBoundingClientRect: () => ({ left, top, width }) }) as unknown as HTMLElement;
   const cells = [cell(0, 0), cell(50, 0), cell(100, 0), cell(0, 50), cell(50, 50)];
 
   test("arrows move to the nearest cell on screen, and the short last row works", () => {
@@ -93,6 +93,13 @@ describe("grid keys", () => {
     expect(neighbour(cells, cells[2], "ArrowDown")).toBe(cells[4]);
     expect(neighbour(cells, cells[3], "ArrowUp")).toBe(cells[0]);
     expect(neighbour(cells, cells[0], "ArrowUp")).toBeUndefined();
+  });
+
+  test("in gallery rows of different widths, up and down go to the nearest centre", () => {
+    // A wide tile above a narrow one and a wide one: the wide tile's centre (100) is closest to the second.
+    const rows = [cell(0, 0, 200), cell(0, 100, 40), cell(44, 100, 156)];
+    expect(neighbour(rows, rows[0], "ArrowDown")).toBe(rows[2]);
+    expect(neighbour(rows, rows[1], "ArrowUp")).toBe(rows[0]);
   });
 });
 

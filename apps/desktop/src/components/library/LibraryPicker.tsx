@@ -1,17 +1,18 @@
 import { useEffect, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
-import { ChevronDown, ChevronRight, Folder, ImagePlay, Plus, Search, Sticker } from "lucide-react";
+import { ChevronDown, ChevronRight, Folder, ImagePlay, Maximize2, Minimize2, Plus, Search, Sticker, type LucideIcon } from "lucide-react";
 import { Tooltip } from "@/components/ui/tooltip";
 import { SCOPE_ICONS, SECTION_ICONS } from "./icons";
 import { Input } from "@/components/ui/input";
 import { Tabs } from "@/components/ui/tabs";
 import { neighbour } from "@/lib/gridNavigation";
 import { libraryApi, type LibraryApi } from "@/lib/library/libraryApi";
+import { justifyRows, squareGrid } from "@/lib/library/justify";
 import { PICKER_CAP } from "@/lib/library/playback";
 import { browseSections, groupResults, lastTab, PICKER_SCOPES, recentItems, rememberTab, type PickerScope, type PickerSection } from "@/lib/library/picker";
 import type { LibraryCollection, LibraryItem, LibraryKind } from "@/lib/library/types";
 import { cn } from "@/lib/utils";
 import { PlaybackScopeProvider } from "./LibraryMedia";
-import { LibraryTile, tileSize, type ItemActions } from "./LibraryTile";
+import { LibraryTile, type ItemActions } from "./LibraryTile";
 
 export interface LibraryPickerProps {
   conversationId: string;
@@ -28,8 +29,20 @@ export interface LibraryPickerProps {
   onClose: () => void;
   /** Bumped by the caller after an edit, so the lists load again. */
   version?: number;
+  /** The larger view: fills the size its caller gives it and lists sections in a rail. */
+  expanded?: boolean;
+  onExpandedChange?: (expanded: boolean) => void;
   api?: LibraryApi;
 }
+
+interface RailEntry {
+  key: string;
+  title: string;
+  icon?: LucideIcon;
+  collectionId?: string;
+}
+
+const GAP = 4;
 
 interface Results {
   items: LibraryItem[];
@@ -49,7 +62,7 @@ export function LibraryPicker(props: LibraryPickerProps) {
   );
 }
 
-function PickerBody({ conversationId, userId, inSpace, replyToMessageId, onPick, onAdd, onEdit, onRemove, onSave, onClose, version = 0, api = libraryApi }: LibraryPickerProps) {
+function PickerBody({ conversationId, userId, inSpace, replyToMessageId, onPick, onAdd, onEdit, onRemove, onSave, onClose, version = 0, expanded = false, onExpandedChange, api = libraryApi }: LibraryPickerProps) {
   const [kind, setKind] = useState<LibraryKind>(lastTab);
   const [query, setQuery] = useState("");
   const [debounced, setDebounced] = useState("");
@@ -66,9 +79,23 @@ function PickerBody({ conversationId, userId, inSpace, replyToMessageId, onPick,
   const grid = useRef<HTMLDivElement>(null);
   const [recent] = useState(() => recentItems(userId));
   const reload = version + changed;
+  // The grid's content width, scrollbar excluded, so rows fill it exactly.
+  const [width, setWidth] = useState(0);
 
   useEffect(() => {
     input.current?.focus();
+  }, []);
+  useEffect(() => {
+    const element = grid.current;
+    if (!element) return;
+    const measure = () => {
+      const style = getComputedStyle(element);
+      setWidth(Math.max(0, element.clientWidth - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight)));
+    };
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(element);
+    return () => observer.disconnect();
   }, []);
   useEffect(() => {
     const timer = setTimeout(() => setDebounced(query.trim()), 150);
@@ -147,6 +174,11 @@ function PickerBody({ conversationId, userId, inSpace, replyToMessageId, onPick,
     return !Array.isArray(items) || items.length > 0;
   });
 
+  const jump = (key: string, collectionId?: string) => {
+    if (collectionId) toggle(collectionId, true);
+    requestAnimationFrame(() => grid.current?.querySelector<HTMLElement>(`[data-picker-section="${CSS.escape(key)}"]`)?.scrollIntoView({ block: "start" }));
+  };
+
   const more = (current: Results, set: (value: Results) => void, q?: string) => {
     if (!current.nextCursor) return;
     set({ ...current, loading: true });
@@ -176,16 +208,27 @@ function PickerBody({ conversationId, userId, inSpace, replyToMessageId, onPick,
       next.scrollIntoView({ block: "nearest" });
     } else if (event.key === "ArrowUp") input.current?.focus();
   };
-  const size = tileSize(kind);
-  const tiles = (items: LibraryItem[]) => (
-    <div className="flex flex-wrap gap-1">
-      {items.map((item) => (
-        <LibraryTile key={item.id} item={item} width={size.width} height={size.height} actions={actions} onActivate={onPick} onKeyDown={gridKey} />
-      ))}
-    </div>
+  const tile = (item: LibraryItem, width: number, height: number) => (
+    <LibraryTile key={item.id} item={item} width={width} height={height} flush={kind === "gif"} actions={actions} onActivate={onPick} onKeyDown={gridKey} />
   );
+  const tiles = (items: LibraryItem[]) => {
+    if (kind === "sticker") {
+      const { size } = squareGrid(width, expanded ? 112 : 84, GAP);
+      return <div className="flex flex-wrap gap-1">{items.map((item) => tile(item, size, size))}</div>;
+    }
+    return (
+      <div className="flex flex-col gap-1">
+        {justifyRows(items, width, expanded ? 132 : 96, GAP).map((row) => (
+          <div key={row[0].item.id} className="flex gap-1">
+            {row.map((cell) => tile(cell.item, cell.width, cell.height))}
+          </div>
+        ))}
+      </div>
+    );
+  };
+  const rail: RailEntry[] = [];
   const section = (entry: PickerSection) => (
-    <section key={entry.id} aria-label={entry.title}>
+    <section key={entry.id} data-picker-section={entry.id} aria-label={entry.title}>
       <h3 className="flex items-center gap-1.5 px-0.5 pb-1 pt-2 text-caption font-medium text-subtle">
         {(() => {
           const Icon = SECTION_ICONS[entry.id];
@@ -203,6 +246,7 @@ function PickerBody({ conversationId, userId, inSpace, replyToMessageId, onPick,
     body = <Hint>Type to search what people have made public on this server.</Hint>;
   } else if (searching) {
     const groups = groupResults(results.items);
+    for (const group of groups) rail.push({ key: group.id, title: group.title, icon: SECTION_ICONS[group.id] });
     body = results.error ? (
       <Hint>Couldn’t search. Try again in a moment.</Hint>
     ) : results.loading && results.items.length === 0 ? (
@@ -219,6 +263,11 @@ function PickerBody({ conversationId, userId, inSpace, replyToMessageId, onPick,
     const { top, bottom } = browseSections({ kind, scope, suggested, recent, items: browse.items });
     const visibleBottom = inSpace ? bottom : bottom.filter((entry) => entry.id !== "space");
     const empty = top.length === 0 && visibleBottom.length === 0 && shownCollections.length === 0;
+    if (!browse.loading && !browse.error) {
+      for (const entry of top) rail.push({ key: entry.id, title: entry.title, icon: SECTION_ICONS[entry.id] });
+      for (const collection of shownCollections) rail.push({ key: `collection:${collection.id}`, title: collection.name, icon: Folder, collectionId: collection.id });
+      for (const entry of visibleBottom) rail.push({ key: entry.id, title: entry.title, icon: SECTION_ICONS[entry.id] });
+    }
     body = browse.error ? (
       <Hint>Couldn’t load your {noun}. Try again in a moment.</Hint>
     ) : browse.loading ? (
@@ -229,37 +278,36 @@ function PickerBody({ conversationId, userId, inSpace, replyToMessageId, onPick,
         {top.map(section)}
         {shownCollections.length > 0 ? (
           <>
-            <div className="flex flex-wrap gap-1 pt-2" role="group" aria-label="Jump to a collection">
-              {shownCollections.map((collection) => (
-                <button
-                  key={collection.id}
-                  type="button"
-                  onClick={() => {
-                    toggle(collection.id, true);
-                    requestAnimationFrame(() => grid.current?.querySelector<HTMLElement>(`[data-collection="${collection.id}"]`)?.scrollIntoView({ block: "start" }));
-                  }}
-                  className="h-7 max-w-[10rem] truncate rounded-chip bg-secondary px-2.5 text-caption font-medium text-muted-foreground transition-colors hover:text-foreground"
-                >
-                  {collection.name}
-                </button>
-              ))}
-            </div>
+            {expanded ? null : (
+              <div className="flex flex-wrap gap-1 pt-2" role="group" aria-label="Jump to a collection">
+                {shownCollections.map((collection) => (
+                  <button
+                    key={collection.id}
+                    type="button"
+                    onClick={() => jump(`collection:${collection.id}`, collection.id)}
+                    className="h-7 max-w-[10rem] truncate rounded-chip bg-secondary px-2.5 text-caption font-medium text-muted-foreground transition-colors hover:text-foreground"
+                  >
+                    {collection.name}
+                  </button>
+                ))}
+              </div>
+            )}
             {shownCollections.map((collection) => {
-              const expanded = !folded.has(collection.id);
+              const open = !folded.has(collection.id);
               const items = collectionItems[collection.id];
               return (
-                <section key={collection.id} data-collection={collection.id} aria-label={collection.name}>
+                <section key={collection.id} data-picker-section={`collection:${collection.id}`} aria-label={collection.name}>
                   <button
                     type="button"
-                    aria-expanded={expanded}
+                    aria-expanded={open}
                     onClick={() => toggle(collection.id)}
                     className="flex h-8 w-full items-center gap-1 rounded-control px-0.5 text-caption font-medium text-subtle transition-colors hover:text-foreground"
                   >
-                    {expanded ? <ChevronDown className="h-3.5 w-3.5" aria-hidden /> : <ChevronRight className="h-3.5 w-3.5" aria-hidden />}
+                    {open ? <ChevronDown className="h-3.5 w-3.5" aria-hidden /> : <ChevronRight className="h-3.5 w-3.5" aria-hidden />}
                     <Folder className="h-3.5 w-3.5 shrink-0" aria-hidden />
                     <span className="truncate">{collection.name}</span>
                   </button>
-                  {!expanded ? null : items === "loading" || items === undefined ? (
+                  {!open ? null : items === "loading" || items === undefined ? (
                     <Hint>Loading…</Hint>
                   ) : items === "error" ? (
                     <Hint>Couldn’t load this collection.</Hint>
@@ -281,7 +329,7 @@ function PickerBody({ conversationId, userId, inSpace, replyToMessageId, onPick,
 
   return (
     <div
-      className="flex h-[440px] w-[356px] flex-col"
+      className={cn("flex flex-col", expanded ? "h-full w-full" : "h-[520px] w-[480px]")}
       onKeyDown={(event) => {
         if (event.key === "Escape") {
           event.preventDefault();
@@ -290,18 +338,33 @@ function PickerBody({ conversationId, userId, inSpace, replyToMessageId, onPick,
       }}
     >
       <div className="flex flex-col gap-2 px-3 pt-3">
-        <Tabs
-          value={kind}
-          onValueChange={(value) => {
-            const next = value === "sticker" ? "sticker" : "gif";
-            setKind(next);
-            rememberTab(next);
-          }}
-          tabs={[
-            { value: "gif", label: <><ImagePlay className="h-4 w-4" aria-hidden />GIFs</>, content: null },
-            { value: "sticker", label: <><Sticker className="h-4 w-4" aria-hidden />Stickers</>, content: null },
-          ]}
-        />
+        <div className="flex items-center gap-2">
+          <Tabs
+            value={kind}
+            onValueChange={(value) => {
+              const next = value === "sticker" ? "sticker" : "gif";
+              setKind(next);
+              rememberTab(next);
+            }}
+            tabs={[
+              { value: "gif", label: <><ImagePlay className="h-4 w-4" aria-hidden />GIFs</>, content: null },
+              { value: "sticker", label: <><Sticker className="h-4 w-4" aria-hidden />Stickers</>, content: null },
+            ]}
+          />
+          {onExpandedChange ? (
+            <Tooltip label={expanded ? "Smaller view" : "Larger view"}>
+              <button
+                type="button"
+                aria-label="Larger view"
+                aria-pressed={expanded}
+                onClick={() => onExpandedChange(!expanded)}
+                className="ml-auto flex h-8 w-8 shrink-0 items-center justify-center rounded-control text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground"
+              >
+                {expanded ? <Minimize2 className="h-4 w-4" aria-hidden /> : <Maximize2 className="h-4 w-4" aria-hidden />}
+              </button>
+            </Tooltip>
+          ) : null}
+        </div>
         <div className="relative">
           <Search className="pointer-events-none absolute left-2.5 top-1/2 h-4 w-4 -translate-y-1/2 text-subtle" aria-hidden />
           <Input
@@ -348,7 +411,26 @@ function PickerBody({ conversationId, userId, inSpace, replyToMessageId, onPick,
           })}
         </div>
       </div>
-      <div ref={grid} className="mt-1 min-h-0 flex-1 overflow-y-auto px-3 pb-3">
+      <div className="mt-1 flex min-h-0 flex-1">
+        {expanded && rail.length > 0 ? (
+          <nav aria-label="Sections" className="w-44 shrink-0 overflow-y-auto border-r px-2 pb-3 pt-2">
+            {rail.map((entry) => {
+              const Icon = entry.icon;
+              return (
+                <button
+                  key={entry.key}
+                  type="button"
+                  onClick={() => jump(entry.key, entry.collectionId)}
+                  className="flex h-8 w-full items-center gap-2 rounded-control px-2 text-left text-small text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground"
+                >
+                  {Icon ? <Icon className="h-4 w-4 shrink-0" aria-hidden /> : null}
+                  <span className="truncate">{entry.title}</span>
+                </button>
+              );
+            })}
+          </nav>
+        ) : null}
+      <div ref={grid} className="min-h-0 flex-1 overflow-y-auto px-3 pb-3">
         {body}
         <div className="pt-2">
           <button
@@ -362,6 +444,7 @@ function PickerBody({ conversationId, userId, inSpace, replyToMessageId, onPick,
             Add
           </button>
         </div>
+      </div>
       </div>
     </div>
   );

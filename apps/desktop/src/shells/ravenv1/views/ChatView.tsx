@@ -483,7 +483,7 @@ function OpenConversation({
         }
       />
 
-      <div className="relative flex min-h-0 flex-1 flex-col">
+      <div data-chat-pane className="relative flex min-h-0 flex-1 flex-col">
         <MessageList
           ref={list}
           store={chat}
