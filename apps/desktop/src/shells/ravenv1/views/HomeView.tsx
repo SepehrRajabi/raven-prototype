@@ -1,30 +1,30 @@
 import { useMemo, useState } from "react";
 import { capabilitiesOf } from "@/lib/permissions";
 import { AtSign, Hand, Plus, Search } from "lucide-react";
-import { Avatar } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
 import { toast } from "@/components/ui/toast";
 import { ConversationRow, UnreadDot } from "@/components/chat/ConversationRow";
-import { api } from "@/lib/api";
 import type { ChatStore } from "@/lib/chat/store";
 import { useProfileKnock } from "../useProfileKnock";
-import { GroupedList, LiveDot, NestGlyph, PersonAvatar, SectionLabel } from "../atoms";
+import { EmptyState, GroupedList, NestGlyph, PersonAvatar, SectionLabel } from "../atoms";
 import { PendingList } from "../Inbox";
-import { orderTrees, unreadConversations } from "../home";
+import { unreadConversations } from "../home";
 import { readLastVisited } from "../lastVisited";
 import { personStatus, reachRank } from "../people";
 import { PRESENCE, type RavenShellData, type RavenView, type ShellPerson } from "../state";
 import { focusGlobalSearch } from "../searchFocus";
 import { usePendingActions } from "../usePendingActions";
-import { useChatState, useTreeChatSummaries } from "../useChat";
+import { useChatState } from "../useChat";
 import type { RavenMediaAdapterState } from "../useRavenMediaAdapter";
 import type { NestEntryController } from "../useNestEntry";
 import { NameDialog } from "./dialogs";
 import { DoorwayRow, LiveNestCard, namesSentence, nestPeople, nestView, treeNameFor } from "./shared";
 
 /**
- * Home is the person's places: what is waiting for them, what is alive, and a door to each
- * of their trees. Sections appear only when they have something, so it is never a dead end.
+ * Home answers who is reachable and what is alive: what is waiting for the person, live
+ * nests, people open to talk, unread conversations. The trees are in the sidebar, so they
+ * are not listed again here. Sections appear only when they have something; with nothing
+ * to show, one calm line says so.
  */
 export function HomeView({
   data,
@@ -54,21 +54,7 @@ export function HomeView({
 
   const chatState = useChatState(chat);
   const unread = useMemo(() => unreadConversations(chatState ? Object.values(chatState.conversations).map(({ summary }) => summary) : []), [chatState]);
-  const treeChat = useTreeChatSummaries(chat);
   const lastVisited = useMemo(() => (data.user ? readLastVisited(data.apiServerUrl, data.user.id) : {}), [data.apiServerUrl, data.user]);
-  const liveByTree = useMemo(() => {
-    const people = new Map<string, number>();
-    for (const nest of liveNests) {
-      if (nest.treeId) people.set(nest.treeId, (people.get(nest.treeId) ?? 0) + nest.activeParticipantCount);
-    }
-    return people;
-  }, [liveNests]);
-  // Same rule as the Live now cards, so a tree is never marked live with nothing to show.
-  const liveTreeIds = useMemo(() => new Set(liveNests.flatMap((nest) => (nest.treeId ? [nest.treeId] : []))), [liveNests]);
-  const trees = useMemo(
-    () => orderTrees(data.trees, (id) => liveTreeIds.has(id), (id) => treeChat.get(id)?.unread ?? false, lastVisited.treeId),
-    [data.trees, liveTreeIds, treeChat, lastVisited.treeId],
-  );
 
   // The last nest looked at, when it is quiet: a live one is already a card above.
   const pickUp = lastVisited.nestId ? data.getNest(lastVisited.nestId) : undefined;
@@ -81,7 +67,7 @@ export function HomeView({
     !liveNests.some((nest) => nest.id === pickUp.id);
 
   const firstRun = data.trees.length === 0;
-  const nothingElse = data.pending.length === 0 && liveNests.length === 0 && unread.length === 0 && openPeople.length === 0 && data.outgoingFriendRequests.length === 0 && !pickUpUsable;
+  const nobodyAround = data.pending.length === 0 && liveNests.length === 0 && unread.length === 0 && openPeople.length === 0;
 
   // Joining always passes the threshold, so the person sees what they will reveal first.
   const open = (nestId: string) => onNavigate({ kind: "nest", id: nestId });
@@ -99,15 +85,6 @@ export function HomeView({
     <>
       <div className="min-h-0 flex-1 overflow-y-auto">
         <div className="mx-auto max-w-3xl space-y-8 px-6 py-8">
-          {pickUpUsable && pickUp ? (
-            <section>
-              <SectionLabel className="mb-1">Pick up</SectionLabel>
-              <GroupedList>
-                <PickUpRow nest={pickUp} data={data} onOpen={() => open(pickUp.id)} />
-              </GroupedList>
-            </section>
-          ) : null}
-
           {data.pending.length > 0 ? (
             <section>
               <SectionLabel className="mb-1">Reaching you</SectionLabel>
@@ -132,6 +109,17 @@ export function HomeView({
                   />
                 ))}
               </div>
+            </section>
+          ) : null}
+
+          {openPeople.length > 0 ? (
+            <section>
+              <SectionLabel className="mb-1">Open to talk</SectionLabel>
+              <GroupedList>
+                {openPeople.map((person) => (
+                  <ReachableRow key={person.id} person={person} data={data} onNavigate={onNavigate} />
+                ))}
+              </GroupedList>
             </section>
           ) : null}
 
@@ -174,44 +162,27 @@ export function HomeView({
                 ) : null}
               </GroupedList>
             </section>
-          ) : (
-            <section>
-              <SectionLabel
-                className="mb-1"
-                action={
-                  canCreate ? (
-                    <Button size="icon-sm" variant="ghost" aria-label={`New ${treeSingular}`} onClick={() => setCreateTreeOpen(true)}>
-                      <Plus className="h-4 w-4" />
-                    </Button>
-                  ) : undefined
-                }
-              >
-                {data.labels.treePlural}
-              </SectionLabel>
-              {nothingElse && liveTreeIds.size === 0 ? <p className="mb-2 px-1 text-small text-muted-foreground">Nobody is in a {nestSingular} right now.</p> : null}
-              <GroupedList>
-                {trees.map((tree) => (
-                  <TreeRow
-                    key={tree.id}
-                    tree={tree}
-                    peopleInside={liveByTree.get(tree.id) ?? 0}
-                    live={liveTreeIds.has(tree.id)}
-                    unread={treeChat.get(tree.id)?.unread ?? false}
-                    nestSingular={nestSingular}
-                    onOpen={() => onNavigate({ kind: "tree", id: tree.id })}
-                  />
-                ))}
-              </GroupedList>
-            </section>
-          )}
+          ) : nobodyAround ? (
+            <EmptyState
+              title="It’s quiet right now"
+              text={`Nobody is in a ${nestSingular} and nobody is open to talk. Open one of your ${data.labels.treePlural.toLowerCase()} from the sidebar, and the people there will see it.`}
+            >
+              {canCreate ? (
+                <Button size="sm" variant="secondary" onClick={() => setCreateTreeOpen(true)}>
+                  New {treeSingular}
+                </Button>
+              ) : null}
+              <Button size="sm" variant="secondary" onClick={() => focusGlobalSearch()}>
+                Find a {treeSingular}
+              </Button>
+            </EmptyState>
+          ) : null}
 
-          {openPeople.length > 0 ? (
+          {pickUpUsable && pickUp ? (
             <section>
-              <SectionLabel className="mb-1">Open to talk</SectionLabel>
+              <SectionLabel className="mb-1">Last visited</SectionLabel>
               <GroupedList>
-                {openPeople.map((person) => (
-                  <ReachableRow key={person.id} person={person} data={data} onNavigate={onNavigate} />
-                ))}
+                <LastVisitedRow nest={pickUp} data={data} onOpen={() => open(pickUp.id)} />
               </GroupedList>
             </section>
           ) : null}
@@ -260,10 +231,10 @@ export function HomeView({
   );
 }
 
-function PickUpRow({ nest, data, onOpen }: { nest: NonNullable<ReturnType<RavenShellData["getNest"]>>; data: RavenShellData; onOpen: () => void }) {
+function LastVisitedRow({ nest, data, onOpen }: { nest: NonNullable<ReturnType<RavenShellData["getNest"]>>; data: RavenShellData; onOpen: () => void }) {
   const others = nestPeople(nest, data).filter((person) => person.id !== data.user?.id).map((person) => person.name);
   return (
-    <button type="button" onClick={onOpen} className="flex h-14 w-full items-center gap-3 px-3.5 text-left transition-colors hover:bg-secondary">
+    <button type="button" onClick={onOpen} aria-label={`Back to ${nest.name}`} className="flex h-14 w-full items-center gap-3 px-3.5 text-left transition-colors hover:bg-secondary">
       <NestGlyph kind="voice" className="text-subtle" />
       <span className="min-w-0 flex-1">
         <span className="block truncate text-body font-medium"><bdi>{nest.name}</bdi></span>
@@ -272,34 +243,6 @@ function PickUpRow({ nest, data, onOpen }: { nest: NonNullable<ReturnType<RavenS
           {others.length ? ` · ${namesSentence(others, 3)} ${others.length === 1 ? "is" : "are"} here` : ""}
         </span>
       </span>
-    </button>
-  );
-}
-
-function TreeRow({
-  tree,
-  peopleInside,
-  live,
-  unread,
-  nestSingular,
-  onOpen,
-}: {
-  tree: { id: string; name: string; updatedAt: string };
-  peopleInside: number;
-  live: boolean;
-  unread: boolean;
-  nestSingular: string;
-  onOpen: () => void;
-}) {
-  return (
-    <button type="button" onClick={onOpen} className="flex h-14 w-full items-center gap-3 px-3.5 text-left transition-colors hover:bg-secondary">
-      <Avatar name={tree.name} src={api.treeAvatarUrl(tree.id, tree.updatedAt)} className="h-8 w-8 rounded-control" />
-      <span className="min-w-0 flex-1">
-        <span className="block truncate text-body font-medium"><bdi>{tree.name}</bdi></span>
-        {peopleInside > 0 ? <span className="block truncate text-caption text-muted-foreground">{peopleInside} in a {nestSingular}</span> : null}
-      </span>
-      {live ? <LiveDot aria-label="Live" /> : null}
-      {unread ? <UnreadDot /> : null}
     </button>
   );
 }

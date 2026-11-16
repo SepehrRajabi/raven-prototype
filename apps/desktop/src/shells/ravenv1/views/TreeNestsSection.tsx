@@ -13,7 +13,7 @@ import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigge
 import { toast } from "@/components/ui/toast";
 import type { LauncherNest, Nest, TreeDetails } from "@/lib/api";
 import { failureText } from "@/lib/chat/errors";
-import { canMoveCategory, entryKey, layoutSections, moveCategory, moveEntry, toEntries, toLayoutRequest, type ArrangeEntry, type NestRef } from "@/lib/chat/layout";
+import { canMoveCategory, entryKey, existingNestRefs, layoutSections, moveCategory, moveEntry, toEntries, toLayoutRequest, type ArrangeEntry, type NestRef } from "@/lib/chat/layout";
 import { textNestsOfTree } from "@/lib/chat/reducer";
 import type { ChatStore } from "@/lib/chat/store";
 import type { TreeCategory } from "@/lib/chat/types";
@@ -22,7 +22,7 @@ import { AvatarStack, GroupedList, NestGlyph, SectionLabel } from "../atoms";
 import { lifecycleLabel, type RavenShellData, type RavenView } from "../state";
 import type { RavenMediaAdapterState } from "../useRavenMediaAdapter";
 import { useChatState } from "../useChat";
-import { liveTreeNests } from "../treeLobby";
+import { treeVoiceNests } from "../treeLobby";
 import { DoorMark, RoomDialog } from "./RoomDoor";
 import { namesSentence, nestPeople, nestView } from "./shared";
 
@@ -70,19 +70,12 @@ export function TreeNestsSection({
     void chat.loadLayout(treeId).catch(() => undefined);
   }, [chat, treeId]);
 
-  const voiceNests = useMemo(() => [...liveTreeNests(details, data.activeNests), ...details.inactiveNests], [details, data.activeNests]);
+  const voiceNests = useMemo(() => treeVoiceNests(details, data.activeNests), [details, data.activeNests]);
   const voiceById = useMemo(() => new Map(voiceNests.map((nest) => [nest.id, nest])), [voiceNests]);
   const textNests = useMemo(() => (state ? textNestsOfTree(state, treeId) : []), [state, treeId]);
   const textById = useMemo(() => new Map(textNests.map((nest) => [nest.summary.id, nest.summary])), [textNests]);
 
-  const sections = useMemo(() => {
-    const oldestFirst = [...textNests].sort((a, b) => a.summary.createdAt.localeCompare(b.summary.createdAt));
-    const existing: NestRef[] = [
-      ...oldestFirst.map((nest) => ({ kind: "text" as const, id: nest.summary.id })),
-      ...voiceNests.map((nest) => ({ kind: "voice" as const, id: nest.id })),
-    ];
-    return layoutSections(layout, existing);
-  }, [layout, textNests, voiceNests]);
+  const sections = useMemo(() => layoutSections(layout, existingNestRefs(textNests, voiceNests)), [layout, textNests, voiceNests]);
 
   const nameOf = (ref: NestRef) => (ref.kind === "text" ? textById.get(ref.id)?.name : voiceById.get(ref.id)?.name) ?? "";
 

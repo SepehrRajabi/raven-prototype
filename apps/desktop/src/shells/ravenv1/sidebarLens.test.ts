@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { lensForView, viewSignature } from "./sidebarLens";
+import { lensForView } from "./sidebarLens";
 
 describe("lensForView", () => {
   test("people views", () => {
@@ -22,13 +22,5 @@ describe("lensForView", () => {
     expect(lensForView({ kind: "settings" })).toBeNull();
     expect(lensForView({ kind: "mixer" })).toBeNull();
     expect(lensForView({ kind: "chat", id: "c" })).toBeNull();
-  });
-});
-
-describe("viewSignature", () => {
-  test("changes with the view, not with a message position", () => {
-    expect(viewSignature({ kind: "chat", id: "c", at: 3 }, "dm")).toBe(viewSignature({ kind: "chat", id: "c", at: 9 }, "dm"));
-    expect(viewSignature({ kind: "chat", id: "c" }, "dm")).not.toBe(viewSignature({ kind: "chat", id: "d" }, "dm"));
-    expect(viewSignature({ kind: "nest", id: "a" })).not.toBe(viewSignature({ kind: "waiting", id: "a" }));
   });
 });

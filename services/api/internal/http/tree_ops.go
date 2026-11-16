@@ -282,7 +282,7 @@ func (s *Server) archiveNestCore(nestID, actorID string) error {
 		return err
 	} else if err == nil {
 		duration := durationSeconds(startedAt, now)
-		if _, err := tx.Exec(`UPDATE session_participants SET left_at = ?, last_seen_at = ?, status = 'left', updated_at = ? WHERE session_id = ? AND left_at IS NULL`, now, now, now, sessionID); err != nil {
+		if _, err := tx.Exec(`UPDATE session_participants SET left_at = ?, last_seen_at = ?, status = 'left', hand_raised_at = NULL, updated_at = ? WHERE session_id = ? AND left_at IS NULL`, now, now, now, sessionID); err != nil {
 			return err
 		}
 		if _, err := tx.Exec(`UPDATE nest_sessions SET ended_at = ?, duration_seconds = ?, status = 'ended', updated_at = ? WHERE id = ?`, now, duration, now, sessionID); err != nil {

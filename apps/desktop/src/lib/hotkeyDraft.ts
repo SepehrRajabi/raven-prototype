@@ -10,6 +10,7 @@ export function hotkeyDraftDirty(draft: HotkeyDraft, saved: HotkeyDraft): boolea
     draft.camera !== saved.camera ||
     draft.deafen !== saved.deafen ||
     draft.screenShare !== saved.screenShare ||
+    draft.hand !== saved.hand ||
     draft.voiceOverlay !== saved.voiceOverlay
   );
 }

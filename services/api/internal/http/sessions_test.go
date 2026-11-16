@@ -1184,6 +1184,60 @@ func TestCallStateIsSharedAndOnlyChangesTheCaller(t *testing.T) {
 	}
 }
 
+func TestRaisedHandsAreOrderedWithoutTimes(t *testing.T) {
+	server, aliceToken := newTestServer(t)
+	_, bobToken := createTestUser(t, server, "bob")
+	nestID := createTestNest(t, server, aliceToken, "/v1/nests/temporary", "Quick call")
+	postJSON(t, server, aliceToken, "/v1/nests/"+nestID+"/invitations", map[string]string{"username": "bob"}, http.StatusCreated)
+	postJSON(t, server, bobToken, "/v1/nests/"+nestID+"/join", nil, http.StatusOK)
+	joinResponse := postJSON(t, server, aliceToken, "/v1/nests/"+nestID+"/session/join", nil, http.StatusOK)
+	postJSON(t, server, bobToken, "/v1/nests/"+nestID+"/session/join", nil, http.StatusOK)
+	if !bytes.Contains(joinResponse, []byte(`"handOrder":0`)) {
+		t.Fatalf("participants should always carry a hand order: %s", joinResponse)
+	}
+	state := "/v1/nests/" + nestID + "/session/state"
+	order := func() (int, int) {
+		people := sessionParticipants(t, server, bobToken, nestID)
+		return participantByUsername(t, people, "alice").HandOrder, participantByUsername(t, people, "bob").HandOrder
+	}
+
+	postJSON(t, server, aliceToken, state, map[string]bool{"hand": true}, http.StatusOK)
+	response := postJSON(t, server, bobToken, state, map[string]bool{"hand": true}, http.StatusOK)
+	if alice, bob := order(); alice != 1 || bob != 2 {
+		t.Fatalf("hands should be in the order they went up: alice=%d bob=%d", alice, bob)
+	}
+	if bytes.Contains(response, []byte("hand_raised")) || bytes.Contains(response, []byte("raisedAt")) {
+		t.Fatalf("the time a hand went up must not be sent: %s", response)
+	}
+
+	// Raising again keeps the place; lowering moves the next one up.
+	postJSON(t, server, aliceToken, state, map[string]bool{"hand": true}, http.StatusOK)
+	if alice, bob := order(); alice != 1 || bob != 2 {
+		t.Fatalf("raising again should keep the place: alice=%d bob=%d", alice, bob)
+	}
+	postJSON(t, server, aliceToken, state, map[string]bool{"hand": false}, http.StatusOK)
+	if alice, bob := order(); alice != 0 || bob != 1 {
+		t.Fatalf("lowering should move bob up: alice=%d bob=%d", alice, bob)
+	}
+
+	// Stepping away lowers the hand.
+	postJSON(t, server, bobToken, state, map[string]bool{"away": true}, http.StatusOK)
+	if _, bob := order(); bob != 0 {
+		t.Fatalf("Back in a bit should lower the hand: bob=%d", bob)
+	}
+
+	// Leaving keeps no trace of a raised hand.
+	postJSON(t, server, aliceToken, state, map[string]bool{"hand": true}, http.StatusOK)
+	postJSON(t, server, aliceToken, "/v1/nests/"+nestID+"/session/leave", nil, http.StatusOK)
+	var kept int
+	if err := server.db.QueryRow(`SELECT COUNT(*) FROM session_participants WHERE nest_id = ? AND hand_raised_at IS NOT NULL`, nestID).Scan(&kept); err != nil {
+		t.Fatal(err)
+	}
+	if kept != 0 {
+		t.Fatalf("a raised hand should not outlive the call: %d rows", kept)
+	}
+}
+
 func TestCallStateRequiresBeingInTheCall(t *testing.T) {
 	server, aliceToken := newTestServer(t)
 	_, bobToken := createTestUser(t, server, "bob")

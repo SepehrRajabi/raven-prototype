@@ -300,6 +300,26 @@ A client that is in a Nest sends its `nestId`. The response then includes `nestA
 
 `actorId` and `actorName` are present only on updates addressed to specific users (`nest.entering`, `nest.entering.cancelled`, delivered to the people inside that Nest); they are never broadcast. The stream sends a comment line every 15 seconds while idle, and sets `X-Accel-Buffering: no`; reverse proxies must not buffer it (see `infra/homelab/nginx/mimir.conf`). A background task on the server expires stale Nest activity and broadcasts `presence.changed` when a user goes offline by missing heartbeats.
 
+## Call state
+
+```http
+POST /v1/nests/:id/session/state
+```
+
+A person in the call sets markers on their own participation. Every field is optional; a missing field is left as it is.
+
+```json
+{
+  "away": true,
+  "deafened": false,
+  "hand": true
+}
+```
+
+The response is `{ "session": … }`, and the people in the call get a `session.changed` update with `type: "participant.state"`. Each participant in a session summary carries `away`, `deafened` and `handOrder`.
+
+`hand` is "I'd like to speak". `handOrder` is the person's place in line (1, 2, …) or `0` when their hand is down. Raising a hand that is already up keeps its place. The server keeps the time a hand went up only to order the line; it never sends it. Setting `away` lowers the hand, and leaving the call or the call ending clears it, so no record remains. Only the person can raise or lower their own hand. A server without raised hands sends no `handOrder`; clients then hide the control.
+
 ## Trees
 
 ```http

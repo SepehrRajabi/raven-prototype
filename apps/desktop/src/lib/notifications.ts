@@ -15,16 +15,16 @@ export interface NotificationSettings {
 
 const SETTINGS_KEY = "raven.notificationSettings";
 
-export const DEFAULT_NOTIFICATION_SETTINGS: NotificationSettings = { knocks: false, messages: false, messageText: true, events: true };
+export const DEFAULT_NOTIFICATION_SETTINGS: NotificationSettings = { knocks: true, messages: true, messageText: true, events: true };
 
 export function loadNotificationSettings(storage: Pick<Storage, "getItem"> = localStorage): NotificationSettings {
   try {
     const parsed = JSON.parse(storage.getItem(SETTINGS_KEY) ?? "null") as Partial<NotificationSettings> | null;
     return {
-      knocks: typeof parsed?.knocks === "boolean" ? parsed.knocks : false,
-      messages: typeof parsed?.messages === "boolean" ? parsed.messages : false,
-      messageText: typeof parsed?.messageText === "boolean" ? parsed.messageText : true,
-      events: typeof parsed?.events === "boolean" ? parsed.events : true,
+      knocks: typeof parsed?.knocks === "boolean" ? parsed.knocks : DEFAULT_NOTIFICATION_SETTINGS.knocks,
+      messages: typeof parsed?.messages === "boolean" ? parsed.messages : DEFAULT_NOTIFICATION_SETTINGS.messages,
+      messageText: typeof parsed?.messageText === "boolean" ? parsed.messageText : DEFAULT_NOTIFICATION_SETTINGS.messageText,
+      events: typeof parsed?.events === "boolean" ? parsed.events : DEFAULT_NOTIFICATION_SETTINGS.events,
     };
   } catch {
     return { ...DEFAULT_NOTIFICATION_SETTINGS };

@@ -172,7 +172,7 @@ export function PollDialog({
                       onClick={() => update(option.key, { correct: !option.correct })}
                       className={cn(
                         "flex h-6 w-6 shrink-0 items-center justify-center rounded-full border transition-colors",
-                        option.correct ? "border-live bg-live text-live-foreground" : "border-input text-transparent hover:border-subtle hover:text-subtle",
+                        option.correct ? "border-foreground bg-foreground text-background" : "border-input text-transparent hover:border-subtle hover:text-subtle",
                       )}
                     >
                       <Check className="h-3.5 w-3.5" aria-hidden />

@@ -1,23 +1,19 @@
-import { useEffect, useMemo, useState } from "react";
-import type { TreeEvent } from "@/lib/api";
-import { roomEventCaptions } from "@/lib/events";
+import { useMemo, useState } from "react";
 import { Plus, Search, UserPlus, Users } from "lucide-react";
 import { NewGroupDialog } from "@/components/chat/ChatDialogs";
 import { ConversationAvatar, ConversationRowCompact, MentionDot, MutedIndicator, SavedAvatar, UnreadCount } from "@/components/chat/ConversationRow";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { Input } from "@/components/ui/input";
 import { Tooltip } from "@/components/ui/tooltip";
-import { orderTextNests } from "@/lib/chat/layout";
-import { listedConversations, textNestsOfTree } from "@/lib/chat/reducer";
+import { listedConversations } from "@/lib/chat/reducer";
 import type { ChatStore } from "@/lib/chat/store";
 import { capabilitiesOf } from "@/lib/permissions";
 import { cn } from "@/lib/utils";
 import { PersonAvatar, SectionLabel } from "./atoms";
-import { filterPeople, visibleTextNests, type FriendsAndGroupsRow } from "./friendsAndGroups";
+import { filterPeople, type FriendsAndGroupsRow } from "./friendsAndGroups";
 import { OFFLINE_RANK, personStatus, reachRank } from "./people";
 import { focusGlobalSearch } from "./searchFocus";
 import { PRESENCE, type RavenShellData, type RavenView } from "./state";
-import { useNow } from "./useNow";
 import { useChatState, useFriendsAndGroups, useOpenPerson, useOpenSaved } from "./useChat";
 
 /**
@@ -326,55 +322,5 @@ function GroupRow({
       <MentionDot count={conversation.mentionCount} />
       {unread ? <UnreadCount count={conversation.unreadCount} /> : <span className="max-w-[45%] shrink-0 truncate text-caption text-muted-foreground">{people}</span>}
     </button>
-  );
-}
-
-/**
- * A tree's text nests that need attention: those with unread messages and the one that is
- * open, in the order its owners arranged them. The rest are in the tree's lobby.
- */
-export function TreeTextNests({
-  chat,
-  treeId,
-  view,
-  events,
-  onNavigate,
-}: {
-  chat: ChatStore;
-  treeId: string;
-  view: RavenView;
-  /** The tree's scheduled events, shown as what is on in each room now. */
-  events?: TreeEvent[];
-  onNavigate: (view: RavenView) => void;
-}) {
-  // The clock ticks here, so only these rows re-render with it, not the whole sidebar.
-  const captions = roomEventCaptions(events, useNow());
-  const state = useChatState(chat);
-  const layout = state?.layouts[treeId];
-  const hasLayout = Boolean(layout);
-
-  // The order lives with the tree's layout, fetched the first time it is needed.
-  useEffect(() => {
-    if (!hasLayout) void chat.loadLayout(treeId).catch(() => undefined);
-  }, [chat, treeId, hasLayout]);
-
-  const activeId = view.kind === "chat" ? view.id : "";
-  const nests = useMemo(
-    () => (state ? visibleTextNests(orderTextNests(textNestsOfTree(state, treeId), layout), activeId) : []),
-    [state, treeId, layout, activeId],
-  );
-  return (
-    <>
-      {nests.map((conversation) => (
-        <ConversationRowCompact
-          key={conversation.summary.id}
-          conversation={conversation.summary}
-          active={conversation.summary.id === activeId}
-          nested
-          caption={captions?.get(conversation.summary.id)}
-          onOpen={(id) => onNavigate({ kind: "chat", id })}
-        />
-      ))}
-    </>
   );
 }
