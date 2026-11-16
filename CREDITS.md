@@ -8,6 +8,7 @@ Raven is better because of the people below. Anyone whose work has improved Rave
 - **Ali Esmaili Seraji** ([@hu13er](https://github.com/hu13er)): proposed port sharing, which shipped in 0.1.9 and grew into the Workshop. Has guided Raven's architecture and software design, particularly for its most complex features. Alpha tester.
 - **PesarAmmehZA** ([@saeedark](https://github.com/saeedark)): wrote one of Raven's earliest idea lists (`docs/ideas/early-ideas.md`), including per-track noise suppression, admin and moderator permissions, and chat, which Raven has since gained. Alpha tester.
 - **Ali Mirlou** ([@alimirlou](https://github.com/alimirlou)): feedback on the sidebar redesign that shaped how it presents places, people and live calls, and the request to show your own name in calls instead of "You" (0.1.12). Alpha tester.
+- **Seyed Hossein Mohammadi** ([@HosseinOutward](https://github.com/HosseinOutward)): feedback on the GIF and sticker picker that led to its gallery layout and larger view (0.1.12). Alpha tester.
 
 ## Alpha testers
 
