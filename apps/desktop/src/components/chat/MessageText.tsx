@@ -44,8 +44,8 @@ export interface MentionContext {
 function Face({ id, name, presence, className }: { id: string; name: string; presence?: Presence; className?: string }) {
   const [failed, setFailed] = useState(false);
   return (
-    <span className={cn("relative inline-flex h-3.5 w-3.5 shrink-0 items-center justify-center rounded-full bg-accent", className)} aria-hidden title={name}>
-      {failed ? null : <img src={api.userAvatarUrl(id)} alt="" draggable={false} className="h-full w-full rounded-full object-cover" onError={() => setFailed(true)} />}
+    <span className={cn("relative inline-flex h-3.5 w-3.5 shrink-0 items-center justify-center rounded-full bg-accent text-[8px] font-semibold leading-none text-foreground/80", className)} aria-hidden title={name}>
+      {failed ? <bdi>{Array.from(name.trim())[0]?.toUpperCase() ?? "R"}</bdi> : <img src={api.userAvatarUrl(id)} alt="" draggable={false} className="h-full w-full rounded-full object-cover" onError={() => setFailed(true)} />}
       {presence ? <PresenceDot presence={presence} className="absolute -bottom-0.5 -right-0.5 h-1.5 w-1.5 opacity-0 transition-opacity group-hover/mention:opacity-100" /> : null}
     </span>
   );
@@ -72,11 +72,13 @@ function Mention({ node, context }: { node: Extract<Inline, { type: "mention" }>
         <bdi className={cn("ml-1 font-medium decoration-subtle underline-offset-2 group-hover/mention:underline", isMe ? "font-semibold text-foreground" : "text-foreground")}>{person.name}</bdi>
       </>
     );
+    // A tinted chip, so a mention reads as a mention and not as plain text; yours is stronger.
+    const chip = cn("group/mention mx-px inline rounded-chip px-1.5 py-px transition-colors", isMe ? "bg-primary/25 hover:bg-primary/35" : "bg-primary/10 hover:bg-primary/20");
     return context.onOpen ? (
-      <button type="button" aria-label={`Open ${person.name}’s profile`} onClick={() => context.onOpen!(node.target, node.id)} className="group/mention inline rounded-chip text-start">
+      <button type="button" aria-label={`Open ${person.name}’s profile`} onClick={() => context.onOpen!(node.target, node.id)} className={cn(chip, "text-start")}>
         {inner}
       </button>
-    ) : <span className="group/mention">{inner}</span>;
+    ) : <span className={chip}>{inner}</span>;
   }
 
   const nest = context?.resolve.nest(node.target, node.id);
