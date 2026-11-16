@@ -142,7 +142,9 @@ function Invoke-Sign {
   $env:TAURI_SIGNING_PRIVATE_KEY_PASSWORD = [System.Net.NetworkCredential]::new("", $secure).Password
   try {
     Remove-Item -LiteralPath "$Artifact.sig" -ErrorAction SilentlyContinue
-    Invoke-Native (Get-TauriCli) @("signer", "sign", $Artifact) $Desktop | Out-Null
+    # --app-version binds the signature to this version; the app refuses an update whose
+    # manifest announces any other (requireSignedVersion in tauri.conf.json).
+    Invoke-Native (Get-TauriCli) @("signer", "sign", "--app-version", $Version, $Artifact) $Desktop | Out-Null
   }
   finally {
     Remove-Item Env:TAURI_SIGNING_PRIVATE_KEY_PATH, Env:TAURI_SIGNING_PRIVATE_KEY_PASSWORD -ErrorAction SilentlyContinue
@@ -150,12 +152,13 @@ function Invoke-Sign {
   Assert-Signature $Artifact
 }
 
-# Checks the artifact against the public key built into the app, exactly as Raven will.
+# Checks the artifact against the public key built into the app, and that the signature is
+# bound to this version, exactly as Raven will.
 function Assert-Signature {
   param([string]$Artifact)
   if (-not (Test-Path -LiteralPath "$Artifact.sig")) { throw "$Artifact has no signature." }
   $manifest = Join-Path $Root "tools\release\signature-verify\Cargo.toml"
-  Invoke-Native "cargo" @("run", "--quiet", "--locked", "--manifest-path", $manifest, "--", $Artifact, "$Artifact.sig", $PublicKey) | Out-Null
+  Invoke-Native "cargo" @("run", "--quiet", "--locked", "--manifest-path", $manifest, "--", $Artifact, "$Artifact.sig", $PublicKey, $Version) | Out-Null
 }
 
 function Build-Windows {

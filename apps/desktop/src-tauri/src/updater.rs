@@ -9,8 +9,9 @@
 //! - a failed check, download or install leaves the current version running;
 //! - Raven never restarts while the shell reports it is busy (in a Nest, capturing), or
 //!   while the native audio engine itself is in a call, whatever the page says;
-//! - the version a manifest announces must match the version in the signed installer's
-//!   name, when the signature names one (see [`signed_version_matches`]).
+//! - the version a manifest announces must be the version the installer was signed for
+//!   (`requireSignedVersion`, checked by the plugin), so an older signed build cannot be
+//!   offered under a newer number.
 
 use serde::{Deserialize, Serialize};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -247,7 +248,7 @@ impl UpdaterRuntime {
             });
         });
 
-        let mut last_error = String::new();
+        let mut signature_failed = false;
         for attempt in 0..DOWNLOAD_ATTEMPTS {
             if attempt > 0 {
                 tokio::time::sleep(Duration::from_secs(2 * 3_u64.pow(attempt - 1))).await;
@@ -276,24 +277,6 @@ impl UpdaterRuntime {
                 .await;
             match result {
                 Ok(bytes) => {
-                    // The plugin has checked the signature, so its trusted comment is
-                    // authentic now. The manifest's version is not signed: refuse an
-                    // installer whose signed name gives a different one, which is how an
-                    // older signed build relabelled as a newer version would look.
-                    if !signed_version_matches(&found.signature, &found.version) {
-                        eprintln!(
-                            "[raven] update refused: the signed installer is not version {}",
-                            found.version
-                        );
-                        return Ok(self.update(|state| {
-                            state.snapshot.phase = UpdatePhase::Available;
-                            state.snapshot.progress = None;
-                            state.snapshot.error = Some(
-                                "The download didn’t pass Raven’s signature check, so it wasn’t installed."
-                                    .to_string(),
-                            );
-                        }));
-                    }
                     return Ok(self.update(|state| {
                         state.snapshot.phase = UpdatePhase::Ready;
                         state.snapshot.progress = None;
@@ -305,11 +288,16 @@ impl UpdaterRuntime {
                         "[raven] update download attempt {} failed: {error}",
                         attempt + 1
                     );
-                    last_error = error.to_string();
+                    // A download that fails the signature or signed-version check would
+                    // fail the same way again.
+                    if is_signature_failure(&error) {
+                        signature_failed = true;
+                        break;
+                    }
                 }
             }
         }
-        let message = if last_error.to_ascii_lowercase().contains("signature") {
+        let message = if signature_failed {
             "The download didn’t pass Raven’s signature check, so it wasn’t installed."
         } else {
             "The download didn’t finish. Your current version is unchanged."
@@ -404,50 +392,18 @@ fn engine_in_call(app: &AppHandle) -> bool {
         )
 }
 
-/// Whether the signed installer is the version the manifest announces.
-///
-/// `signature` is the manifest's base64 minisign signature, already verified by the
-/// plugin, so its trusted comment is authentic. A comment with `version:` is checked by
-/// the plugin itself. Raven's releases so far carry only `file:Raven_<version>_...`, so
-/// the version is read from that name. A name with no version in it (the macOS
-/// `Raven.app.tar.gz`) cannot be checked and passes; the plugin still refuses any
-/// version that is not newer than the running one.
-fn signed_version_matches(signature: &str, announced: &str) -> bool {
-    use base64::Engine as _;
-    let Ok(decoded) = base64::engine::general_purpose::STANDARD.decode(signature.trim()) else {
-        return false;
-    };
-    let text = String::from_utf8_lossy(&decoded);
-    let Some(comment) = text
-        .lines()
-        .find_map(|line| line.strip_prefix("trusted comment:"))
-    else {
-        return false;
-    };
-    let announced = announced.trim().trim_start_matches('v');
-    let fields: Vec<&str> = comment.trim().split('\t').collect();
-    if fields.iter().any(|field| field.starts_with("version:")) {
-        return true;
-    }
-    let Some(file) = fields.iter().find_map(|field| field.strip_prefix("file:")) else {
-        return true;
-    };
-    let versions: Vec<&str> = file
-        .split(['_', ' '])
-        .map(|part| part.trim_start_matches('v'))
-        .filter(|part| looks_like_version(part))
-        .collect();
-    versions.is_empty() || versions.contains(&announced)
-}
-
-/// `1.2.3`, optionally with a pre-release or build suffix (`1.2.3-rc.1`).
-fn looks_like_version(part: &str) -> bool {
-    let core = part.split(['-', '+']).next().unwrap_or("");
-    let numbers: Vec<&str> = core.split('.').collect();
-    numbers.len() == 3
-        && numbers
-            .iter()
-            .all(|n| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()))
+/// Whether a download was refused for its signature: bad bytes, the wrong key, or a version
+/// other than the one it was signed for.
+fn is_signature_failure(error: &tauri_plugin_updater::Error) -> bool {
+    use tauri_plugin_updater::Error;
+    matches!(
+        error,
+        Error::Minisign(_)
+            | Error::Base64(_)
+            | Error::SignatureUtf8(_)
+            | Error::SignedVersionMismatch { .. }
+            | Error::MissingSignedVersion
+    )
 }
 
 /// Debug builds may point at another manifest (`RAVEN_UPDATE_ENDPOINT`) to rehearse an
@@ -536,32 +492,6 @@ fn past_releases(manifest: &serde_json::Value) -> Vec<PastRelease> {
 
 #[cfg(test)]
 mod tests {
-    fn signature(trusted_comment: &str) -> String {
-        use base64::Engine as _;
-        let text = format!(
-            "untrusted comment: signature from tauri secret key\nRUTsig\ntrusted comment: {trusted_comment}\nglobalsig\n"
-        );
-        base64::engine::general_purpose::STANDARD.encode(text)
-    }
-
-    #[test]
-    fn the_signed_installer_name_must_carry_the_announced_version() {
-        let windows = signature("timestamp:1794336722\tfile:Raven_0.1.11_x64-setup.exe");
-        assert!(super::signed_version_matches(&windows, "0.1.11"));
-        assert!(super::signed_version_matches(&windows, "v0.1.11"));
-        // An older signed build announced as a newer version.
-        assert!(!super::signed_version_matches(&windows, "9.9.9"));
-        let linux = signature("timestamp:1794336809\tfile:Raven_0.1.11_amd64.AppImage");
-        assert!(!super::signed_version_matches(&linux, "0.1.12"));
-        // The plugin checks a signed `version:` itself.
-        let tagged = signature("timestamp:1\tfile:Raven.app.tar.gz\tversion:0.1.12");
-        assert!(super::signed_version_matches(&tagged, "0.1.12"));
-        // Nothing to check against: the plugin's own rules decide.
-        let mac = signature("timestamp:1\tfile:Raven.app.tar.gz");
-        assert!(super::signed_version_matches(&mac, "0.1.12"));
-        assert!(!super::signed_version_matches("not base64!", "0.1.12"));
-    }
-
     #[test]
     fn manifest_history_is_read_and_its_absence_is_harmless() {
         let manifest = serde_json::json!({ "history": [{ "version": "0.1.6", "notes": "Fixes" }] });

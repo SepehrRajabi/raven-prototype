@@ -16,17 +16,31 @@ fn main() {
 
 fn run() -> Result<(), String> {
     let args: Vec<String> = env::args().collect();
-    if args.len() != 4 {
-        return Err("usage: raven-signature-verify <artifact> <signature> <public-key>".into());
+    if args.len() != 4 && args.len() != 5 {
+        return Err(
+            "usage: raven-signature-verify <artifact> <signature> <public-key> [version]".into(),
+        );
     }
-    verify(Path::new(&args[1]), &args[2], &args[3])?;
+    verify(
+        Path::new(&args[1]),
+        &args[2],
+        &args[3],
+        args.get(4).map(String::as_str),
+    )?;
     println!("{{\"verified\":true}}");
     Ok(())
 }
 
 /// Checks the artifact against the signature file and the public key (a file or the key
-/// itself). Only prehashed (Tauri's) signatures are accepted.
-fn verify(artifact_path: &Path, signature: &str, public_key: &str) -> Result<(), String> {
+/// itself). Only prehashed (Tauri's) signatures are accepted. With `version`, the signature
+/// must also be bound to that app version, as Raven's updater requires
+/// (`requireSignedVersion`).
+fn verify(
+    artifact_path: &Path,
+    signature: &str,
+    public_key: &str,
+    version: Option<&str>,
+) -> Result<(), String> {
     let signature = load_signature(signature)?;
     let public_key = load_public_key(public_key)?;
     let mut verifier = public_key
@@ -47,6 +61,18 @@ fn verify(artifact_path: &Path, signature: &str, public_key: &str) -> Result<(),
     verifier
         .finalize()
         .map_err(|_| "artifact signature verification failed".to_string())?;
+    // The trusted comment is covered by the signature, so it can be read now.
+    if let Some(version) = version {
+        let signed = signature
+            .trusted_comment()
+            .split('\t')
+            .find_map(|field| field.strip_prefix("version:"));
+        match signed {
+            Some(signed) if signed == version => {}
+            Some(signed) => return Err(format!("signed for version {signed}, not {version}")),
+            None => return Err("signature is not bound to a version".into()),
+        }
+    }
     Ok(())
 }
 
@@ -113,7 +139,7 @@ mod tests {
     fn check(artifact: &[u8], signature: &str, key: &str) -> Result<(), String> {
         let artifact = temp(artifact);
         let signature = temp(signature.as_bytes());
-        let result = verify(&artifact, signature.to_str().unwrap(), key);
+        let result = verify(&artifact, signature.to_str().unwrap(), key, None);
         let _ = fs::remove_file(artifact);
         let _ = fs::remove_file(signature);
         result
@@ -178,6 +204,35 @@ mod tests {
         assert!(check(b"test", &tampered, KEY).is_err());
     }
 
+    // A throwaway key and `tauri signer sign --app-version 1.2.3` of the four bytes "test".
+    const VERSIONED_KEY: &str = "RWTPQgU8B1LqP2h3FOtBnunqw7AX2EpQVyrHVDzgbzT24OdJQTjWA+/0";
+    const VERSIONED: &str = "untrusted comment: signature from tauri secret key\nRUTPQgU8B1LqP2aywniWLgigqdWYi/niSmg1MnDHb+JC+UzNIn/RIov9Ff+szQX/V6PsVwtXBCE5TWudv5HluvBl4UywHZa5rQA=\ntrusted comment: timestamp:1794828178\tfile:test\tversion:1.2.3\nfAO2xIRb7OtlVq6GbFC2qV8LGlklChVkc9uOIf/m33IoGe4VyD//bJ2hLR27nWY3I1YJRmS0+Py/n3tjxXF3DQ==\n";
+
+    fn check_version(signature: &str, key: &str, version: &str) -> Result<(), String> {
+        let artifact = temp(b"test");
+        let signature = temp(signature.as_bytes());
+        let result = verify(&artifact, signature.to_str().unwrap(), key, Some(version));
+        let _ = fs::remove_file(artifact);
+        let _ = fs::remove_file(signature);
+        result
+    }
+
+    #[test]
+    fn checks_the_signed_version_when_asked() {
+        check(b"test", VERSIONED, VERSIONED_KEY).expect("no version asked for");
+        check_version(VERSIONED, VERSIONED_KEY, "1.2.3").expect("the signed version");
+        assert_eq!(
+            check_version(VERSIONED, VERSIONED_KEY, "1.2.4"),
+            Err("signed for version 1.2.3, not 1.2.4".into())
+        );
+        assert_eq!(
+            check_version(PREHASHED, KEY, "1.2.3"),
+            Err("signature is not bound to a version".into())
+        );
+        let relabelled = VERSIONED.replace("version:1.2.3", "version:9.9.9");
+        assert!(check_version(&relabelled, VERSIONED_KEY, "9.9.9").is_err());
+    }
+
     #[test]
     fn refuses_garbage_and_missing_files() {
         assert!(check(b"test", "not a signature", KEY).is_err());
@@ -186,7 +241,8 @@ mod tests {
             verify(
                 Path::new("/nonexistent/raven-artifact"),
                 "/nonexistent/sig",
-                KEY
+                KEY,
+                None
             ),
             Err("signature file could not be read".into())
         );

@@ -155,6 +155,13 @@ That is the only server-side update setting.
 - Raven installs nothing unless its signature matches the public key built into the app
   (`apps/desktop/src-tauri/updater/raven-updater.key.pub`). A cut-off or altered download
   fails that check and is thrown away.
+- Each signature is bound to its version (`tauri signer sign --app-version`), and the app
+  sets `requireSignedVersion`: an update is refused unless `latest.json` announces exactly
+  the version the installer was signed for. Whoever controls the update host cannot offer
+  an older signed build under a newer number. `release.ps1` checks the signed version
+  before anything is uploaded. Releases signed before this change carry no
+  version, so an app that requires one will not install them; that only matters when
+  repointing to one of them, which the updater refuses anyway as not newer.
 - A failed check, download or install leaves the running version untouched. The app then
   offers the installer as a plain download.
 - Installers are uploaded and hash-checked before `latest.json` moves, and `latest.json`
