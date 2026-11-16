@@ -227,7 +227,7 @@ func TestAHandlerPanicAnswers500AndTheServerCarriesOn(t *testing.T) {
 	getJSON(t, server, token, "/v1/auth/me", http.StatusOK)
 }
 
-func TestSomeoneRemovedFromAFreeTreeHasToAsk(t *testing.T) {
+func TestSomeoneRemovedFromAFreeTreeWaitsBeforeJoiningAgain(t *testing.T) {
 	server, aliceToken := newTestServer(t)
 	bob, bobToken := createTestUser(t, server, "bob")
 	var created struct {
@@ -237,24 +237,24 @@ func TestSomeoneRemovedFromAFreeTreeHasToAsk(t *testing.T) {
 		t.Fatal(err)
 	}
 	treeID := created.Tree.ID
-	joinStatus := func() string {
-		var payload struct {
-			Status string `json:"status"`
-		}
-		if err := json.Unmarshal(postJSON(t, server, bobToken, "/v1/trees/"+treeID+"/join", nil, http.StatusOK), &payload); err != nil {
-			t.Fatal(err)
-		}
-		return payload.Status
+	join := func(status int) {
+		t.Helper()
+		postJSON(t, server, bobToken, "/v1/trees/"+treeID+"/join", nil, status)
 	}
-	if got := joinStatus(); got != "joined" {
-		t.Fatalf("first join: %s", got)
-	}
+	join(http.StatusOK)
 	deleteJSON(t, server, aliceToken, "/v1/trees/"+treeID+"/members/"+bob.ID, http.StatusNoContent)
-	if got := joinStatus(); got != "waiting" {
-		t.Fatalf("join after removal: %s, want waiting", got)
-	}
+	join(http.StatusForbidden)
 	if role := treeRoleInDB(t, server, treeID, bob.ID); role != "" {
 		t.Fatalf("bob is back in the tree as %q", role)
+	}
+	// Once the time is up, the free door is open to him again.
+	earlier := database.Timestamp(time.Now().Add(-treeRemovalCooldown - time.Second))
+	if _, err := server.db.Exec(`UPDATE tree_members SET left_at = ? WHERE tree_id = ? AND user_id = ?`, earlier, treeID, bob.ID); err != nil {
+		t.Fatal(err)
+	}
+	join(http.StatusOK)
+	if role := treeRoleInDB(t, server, treeID, bob.ID); role != treeRoleMember {
+		t.Fatalf("bob after the wait: %q, want member", role)
 	}
 }
 

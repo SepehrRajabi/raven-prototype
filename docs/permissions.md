@@ -122,8 +122,13 @@ Being removed from a space, leaving it, being suspended, losing `rooms.join`, be
 out of a call, a room being ended and a space being deleted all end the call as well as
 the access: the server closes
 the person's place in the call and asks LiveKit to disconnect them, because a media token
-already issued would otherwise keep working for hours. Tokens, sessions and presence are
+already issued would otherwise keep working until it expires (5 minutes). Tokens, sessions and presence are
 re-checked against membership every time.
+
+Someone removed from a space anyone can join cannot join it again for 15 minutes, the same
+time as being voted out of a call. Nobody can shorten it. Leaving a space on your own
+never holds you off. In a space where people ask to join, a removed person can ask again
+and the people who run it decide.
 
 ## Voting someone out of a call
 

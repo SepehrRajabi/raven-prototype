@@ -3,6 +3,8 @@ package http
 import (
 	"database/sql"
 	"errors"
+	"fmt"
+	"math"
 	"os"
 	"strconv"
 	"strings"
@@ -455,13 +457,12 @@ func (s *Server) joinTree(c *fiber.Ctx) error {
 	if tree.Visibility != "public" {
 		return fiber.NewError(fiber.StatusForbidden, "this Tree is private")
 	}
-	// Someone the tree's moderators removed does not walk back in through the free door:
-	// they can ask, and the people who run the tree decide.
-	removed, err := s.removedFromTree(tree.ID, actor.ID)
-	if err != nil {
-		return err
-	}
-	if tree.JoinPolicy == "free" && !removed {
+	// Someone the tree's moderators removed cannot walk straight back in through the free
+	// door: it stays shut to them for treeRemovalCooldown, as a vote does for a call.
+	if tree.JoinPolicy == "free" {
+		if err := s.requireNotRecentlyRemoved(tree.ID, actor.ID); err != nil {
+			return err
+		}
 		member, _, err := s.addTreeMemberCore(tree.ID, actor.ID, treeRoleMember)
 		if err != nil {
 			return err
@@ -476,15 +477,36 @@ func (s *Server) joinTree(c *fiber.Ctx) error {
 	return c.JSON(fiber.Map{"status": "waiting", "tree": tree, "joinRequest": request})
 }
 
-// removedFromTree reports whether someone was taken out of a tree by its moderators, as
-// opposed to leaving it or never being in it.
-func (s *Server) removedFromTree(treeID, userID string) (bool, error) {
+// treeRemovalCooldown is how long someone removed from a free-join tree is kept from
+// joining it again. It matches being voted out of a call, and nobody can lift it early.
+const treeRemovalCooldown = 15 * time.Minute
+
+// requireNotRecentlyRemoved refuses someone the tree's moderators took out less than
+// treeRemovalCooldown ago. Leaving on one's own never holds anyone off.
+func (s *Server) requireNotRecentlyRemoved(treeID, userID string) error {
 	var state string
-	err := s.db.QueryRow(`SELECT state FROM tree_members WHERE tree_id = ? AND user_id = ?`, treeID, userID).Scan(&state)
-	if errors.Is(err, sql.ErrNoRows) {
-		return false, nil
+	var leftAt sql.NullString
+	err := s.db.QueryRow(`SELECT state, left_at FROM tree_members WHERE tree_id = ? AND user_id = ?`, treeID, userID).Scan(&state, &leftAt)
+	if errors.Is(err, sql.ErrNoRows) || (err == nil && (state != "removed" || !leftAt.Valid)) {
+		return nil
 	}
-	return state == "removed", err
+	if err != nil {
+		return err
+	}
+	removedAt, err := time.Parse(time.RFC3339Nano, leftAt.String)
+	if err != nil {
+		return err
+	}
+	remaining := time.Until(removedAt.Add(treeRemovalCooldown))
+	if remaining <= 0 {
+		return nil
+	}
+	minutes := int(math.Ceil(remaining.Minutes()))
+	unit := "minutes"
+	if minutes == 1 {
+		unit = "minute"
+	}
+	return fiber.NewError(fiber.StatusForbidden, fmt.Sprintf("You were removed from this space. You can join again in %d %s.", minutes, unit))
 }
 
 func (s *Server) listTreeJoinRequests(c *fiber.Ctx) error {
