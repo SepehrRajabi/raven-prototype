@@ -80,6 +80,9 @@ sonora-agc2 = "0.3"
 sonora-simd = "0.3"
 # RNNoise in pure Rust: the "Strong" noise suppression mode.
 nnnoiseless = { version = "0.5", default-features = false }
+# Lock-free hop queues between the audio thread and the Studio worker. Already in the
+# tree through libwebrtc.
+rtrb = "0.3.6"
 # DeepFilterNet 3: the "Studio" mode. Vendored and trimmed to the inference path; see
 # vendor/deep_filter/README.md. ndarray is the version its API takes.
 deep_filter = { path = "vendor/deep_filter", optional = true }
