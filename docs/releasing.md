@@ -253,6 +253,14 @@ bun run tauri build --target aarch64-apple-darwin --bundles app,dmg   # or x86_6
 
 An Intel build needs `nasm` (`brew install nasm`) for mozjpeg's SIMD code.
 
+## The download page
+
+`publish` also writes the download page at `https://updates.rvn.bluehour.cloud/`. It
+links the Windows installer and the AppImage on the update host, and the Linux packages,
+macOS apps and Android APK on the GitHub release, where the workflows attach them. Run
+`github` and let the workflows finish before `publish`, so those links work as soon as the
+page changes.
+
 ## Android builds
 
 GitHub Actions (`.github/workflows/android-builds.yml`) builds the Android app,

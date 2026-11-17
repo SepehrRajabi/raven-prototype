@@ -375,6 +375,9 @@ mv '$incoming' '$final'
 # Makes <version>/latest.json the live manifest. The swap is a rename, so a client never
 # reads a half-written file; the manifest it replaces is kept as latest.previous.json.
 function Get-DownloadPage {
+  # Windows and the AppImage are served from here and update themselves; the other builds
+  # come from GitHub Actions and stay on the GitHub release (run `github` before `publish`).
+  $gh = "https://github.com/raven-collective/raven-prototype/releases/download/v$Version"
   return @"
 <!doctype html>
 <html lang="en">
@@ -410,6 +413,26 @@ function Get-DownloadPage {
     <a class="button" href="$Version/Raven_${Version}_amd64.AppImage">Download the AppImage</a>
     <p>Make it executable with <code>chmod +x Raven_${Version}_amd64.AppImage</code>. On newer Ubuntu, install <code>libfuse2t64</code> first.</p>
   </div>
+  <div class="card">
+    <h2>Linux packages</h2>
+    <p>Install with your package manager. These are not signed, and Raven does not update them itself: install the new file when Raven says a newer version is out.</p>
+    <p><a href="$gh/Raven_${Version}_amd64.deb">Debian 12+, Ubuntu 22.04+ (.deb)</a><br>
+    <a href="$gh/Raven_${Version}_x86_64_fedora.rpm">Fedora 44+ (.rpm)</a><br>
+    <a href="$gh/Raven_${Version}_x86_64_el10.rpm">RHEL, AlmaLinux, Rocky Linux 10 with EPEL and CRB (.rpm)</a><br>
+    <a href="$gh/Raven_${Version}_x86_64_opensuse.rpm">openSUSE Leap 16, Tumbleweed (.rpm)</a><br>
+    <a href="$gh/raven-desktop-${Version}-1-x86_64.pkg.tar.zst">Arch Linux</a></p>
+  </div>
+  <div class="card">
+    <h2>macOS 13 or later</h2>
+    <a class="button" href="$gh/Raven_${Version}_aarch64.dmg">Apple silicon</a> <a class="button" href="$gh/Raven_${Version}_x64.dmg">Intel</a>
+    <p>macOS refuses the first launch: open System Settings &gt; Privacy &amp; Security and choose "Open Anyway" under the message about Raven, once. To update, install the new file.</p>
+  </div>
+  <div class="card">
+    <h2>Android 8.0 or later (early preview)</h2>
+    <a class="button" href="$gh/Raven_${Version}_arm64.apk">Download the APK</a>
+    <p>For phones with an arm64 processor. Open the file on the phone and allow installing from that source when Android asks. To update, install the new file over the old one.</p>
+  </div>
+  <p>Linux packages, macOS and Android are downloaded from <a href="https://github.com/raven-collective/raven-prototype/releases/tag/v$Version">the GitHub release</a>, where <code>SHA256SUMS</code> files list their checksums.</p>
   <p>Running your own server? See the <a href="https://github.com/raven-collective/raven-prototype/blob/main/docs/self-hosting.md">self-hosting guide</a>.</p>
 </main>
 </body>
