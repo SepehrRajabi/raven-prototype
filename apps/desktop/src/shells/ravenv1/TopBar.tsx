@@ -32,9 +32,14 @@ export function TopBar({
   onForward: () => void;
   update: UpdaterSnapshot | null;
 }) {
+  const trafficLightInset = useTrafficLightInset();
   return (
     <header
-      className="raven-window-drag grid h-10 shrink-0 grid-cols-[minmax(0,1fr)_minmax(200px,440px)_minmax(0,1fr)] items-center gap-3 bg-background pl-2 text-foreground"
+      className={cn(
+        "raven-window-drag grid h-10 shrink-0 grid-cols-[minmax(0,1fr)_minmax(200px,440px)_minmax(0,1fr)] items-center gap-3 bg-background text-foreground",
+        trafficLightInset ? "pl-[78px]" : "pl-2",
+        nativeWindowControls && "pr-2",
+      )}
       onMouseDown={handleCaptionMouseDown}
     >
       <div className="flex items-center gap-0.5">
@@ -68,9 +73,10 @@ export function TopBar({
 }
 
 export function BareTopBar({ title = "Raven" }: { title?: string }) {
+  const trafficLightInset = useTrafficLightInset();
   return (
     <header
-      className="raven-window-drag flex h-10 shrink-0 items-center bg-background pl-3 text-foreground"
+      className={cn("raven-window-drag flex h-10 shrink-0 items-center bg-background text-foreground", trafficLightInset ? "pl-[78px]" : "pl-3")}
       onMouseDown={handleCaptionMouseDown}
     >
       <div className="min-w-0 truncate text-small font-medium text-muted-foreground">{title}</div>
@@ -155,7 +161,50 @@ function CaptionIconButton({
   );
 }
 
+/**
+ * Whether the top bar leaves room on the left for macOS's own window buttons. They sit
+ * there in a window (tauri.macos.conf.json) and hide in full screen until the pointer
+ * reaches the top of the screen, when macOS slides its title bar over the top bar.
+ */
+function useTrafficLightInset(): boolean {
+  const [fullScreen, setFullScreen] = useState(false);
+  useEffect(() => {
+    if (!nativeWindowControls) return;
+    const appWindow = currentTauriWindow();
+    if (!appWindow) return;
+    let active = true;
+    let unlisten: (() => void) | undefined;
+    const refresh = () => {
+      void appWindow
+        .isFullscreen()
+        .then((next) => {
+          if (active) setFullScreen(next);
+        })
+        .catch(() => undefined);
+    };
+    refresh();
+    appWindow
+      .onResized(refresh)
+      .then((next) => {
+        if (active) unlisten = next;
+        else next();
+      })
+      .catch(() => undefined);
+    return () => {
+      active = false;
+      unlisten?.();
+    };
+  }, []);
+  return nativeWindowControls && !fullScreen;
+}
+
+/** Minimize, maximize and close, drawn by Raven where the system draws none (not macOS). */
 function WindowCaptionControls() {
+  if (nativeWindowControls) return null;
+  return <DrawnCaptionControls />;
+}
+
+function DrawnCaptionControls() {
   const [maximized, setMaximized] = useState(false);
 
   useEffect(() => {
@@ -274,6 +323,11 @@ const isMac = typeof navigator !== "undefined" && /Macintosh|Mac OS X/i.test(nav
 // On macOS a maximized ("zoomed") window still sits under the menu bar; only full screen
 // takes the whole display, so there the maximize button means full screen.
 const maximizeIsFullScreen = isMac;
+
+// macOS draws the real red, yellow and green buttons over the top bar's left end
+// (titleBarStyle "Overlay" in tauri.macos.conf.json). They keep working in full screen,
+// where macOS shows them in the title bar it slides down from the top of the screen.
+const nativeWindowControls = isMac;
 
 /** Maximizes or restores the window (full screen on macOS); resolves to the new state. */
 async function toggleWindowMaximize(appWindow: ReturnType<typeof getCurrentWindow>): Promise<boolean> {

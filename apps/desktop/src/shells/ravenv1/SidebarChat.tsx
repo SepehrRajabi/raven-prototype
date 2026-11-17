@@ -14,10 +14,11 @@ import { filterPeople, type FriendsAndGroupsRow } from "./friendsAndGroups";
 import { OFFLINE_RANK, personStatus, reachRank } from "./people";
 import { focusGlobalSearch } from "./searchFocus";
 import { PRESENCE, type RavenShellData, type RavenView } from "./state";
-import { useChatState, useFriendsAndGroups, useOpenPerson, useOpenSaved } from "./useChat";
+import { useChatState, useFriendsAndGroups, useOpenPerson, useOpenSaved, useRavenConversation } from "./useChat";
 
 /**
- * The People lens: who you can talk to. A find field, Saved messages, then friends and groups
+ * The People lens: who you can talk to. A find field, Saved messages, Raven's messages once
+ * there are any, then friends and groups
  * in one list. A friend's row opens your conversation with them, a group's row opens the
  * group. Friends keep their place by reachability, offline friends come last and dimmed, and
  * unread is a count on the row. Typing in the field filters in place and also finds people
@@ -37,6 +38,7 @@ export function SidebarFriendsAndGroups({
 }) {
   const { shown, offline, activePersonId, activeConversationId } = useFriendsAndGroups(chat, data, view);
   const { open: openPerson, openingId } = useOpenPerson(chat, onNavigate);
+  const raven = useRavenConversation(chat);
   const state = useChatState(chat);
   const [query, setQuery] = useState("");
   const [newGroupOpen, setNewGroupOpen] = useState(false);
@@ -202,6 +204,11 @@ export function SidebarFriendsAndGroups({
       ) : (
         <>
           {chat && data.user ? <SavedRow chat={chat} data={data} view={view} onNavigate={onNavigate} /> : null}
+          {raven ? (
+            <div className="mb-px">
+              <ConversationRowCompact conversation={raven} active={activeConversationId === raven.id} onOpen={(id) => onNavigate({ kind: "chat", id })} />
+            </div>
+          ) : null}
           {listLabel}
           {rows.length ? <div className="space-y-px">{rows.map(row)}</div> : <p className="px-2 py-1 text-small text-muted-foreground">Search for someone to add them as a friend.</p>}
         </>
