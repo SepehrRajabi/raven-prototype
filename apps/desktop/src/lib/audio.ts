@@ -353,6 +353,8 @@ export interface AudioSessionHealth {
   outputFallback: boolean;
   /** Master output mute (deafen). */
   outputMuted: boolean;
+  /** While deafened, others' shared system and app audio keeps playing. Voices stay silent. */
+  deafenKeepsSatellites: boolean;
   /** The one volume for everything Raven plays, -40 to +6 dB. It moves no fader. */
   outputVolumeDb: number;
   /** True once the engine has a saved volume on disk; the engine owns the saved value. */
@@ -533,6 +535,10 @@ export const audioCommands = {
 
   setSoundCueSettings: (settings: SoundCueSettings) =>
     invoke<void>("audio_set_sound_cue_settings", { settings }),
+
+  /** While deafened, keep hearing others' shared system and app audio (and keep receiving it in Bandwidth saver). */
+  setDeafenKeepsSatellites: (keep: boolean) =>
+    invoke<AudioMixerState>("audio_set_deafen_keeps_satellites", { keep }),
 
   setRemoteAudioReceiving: (enabled: boolean) =>
     invoke<AudioMixerState>("audio_set_remote_audio_receiving", { enabled }),

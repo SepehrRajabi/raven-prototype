@@ -910,11 +910,13 @@ impl AudioEngineState {
         self.clear_remote_tracks();
         let output_volume_db = self.mixer.session.output_volume_db;
         let output_volume_saved = self.mixer.session.output_volume_saved;
+        let deafen_keeps_satellites = self.mixer.session.deafen_keeps_satellites;
         let publish_revoked = self.mixer.session.publish_revoked;
         let subscribe_revoked = self.mixer.session.subscribe_revoked;
         self.mixer.session = AudioSessionHealth {
             // Deafen and the volume are user choices that outlive the room.
             output_muted,
+            deafen_keeps_satellites,
             output_volume_db,
             output_volume_saved,
             // A moderator's limits hold across the reconnect cycle, like capture demand.
@@ -1953,6 +1955,25 @@ pub fn audio_set_output_muted(
     Ok(snapshot)
 }
 
+/// While deafened, keep hearing others' shared system and app audio (satellites). Voices stay
+/// silent. In Bandwidth saver the satellites also stay subscribed.
+#[tauri::command]
+pub async fn audio_set_deafen_keeps_satellites(
+    app: AppHandle,
+    state: State<'_, SharedAudioEngineState>,
+    keep: bool,
+) -> Result<AudioMixerState, AudioStateError> {
+    let shared = Arc::clone(state.inner());
+    let runtime = audio_runtime(&shared)?;
+    runtime.output.set_keep_satellites_when_muted(keep);
+    let mut ops = runtime.ops.lock().await;
+    ops.engine.set_receive_satellites_when_deafened(keep);
+    drop(ops);
+    let snapshot = update_session(&shared, |session| session.deafen_keeps_satellites = keep)?;
+    emit_audio_state_changed(&app, &snapshot)?;
+    Ok(snapshot)
+}
+
 /// The one volume for everything Raven plays (-40 to +6 dB, clamped). It works with no call
 /// running and moves no strip fader and no Auto-level status. The engine owns the saved
 /// value: `persist` (default true) writes it to disk off the lock, and a drag sends
@@ -2066,10 +2087,11 @@ pub async fn audio_set_remote_audio_receiving(
     let runtime = audio_runtime(&shared)?;
     let mut ops = runtime.ops.lock().await;
     ops.engine.set_remote_audio_receiving(enabled);
+    let receiving = ops.engine.receives_remote_audio();
     drop(ops);
     let snapshot = {
         let mut guard = shared.write().map_err(|_| AudioStateError::StatePoisoned)?;
-        if !enabled {
+        if !receiving {
             guard.mixer.session.eligible_remote_track_count = 0;
             guard.mixer.session.active_remote_track_count = 0;
         }
@@ -4011,8 +4033,10 @@ mod tests {
     #[test]
     fn a_room_disconnect_keeps_deafen() {
         let mut engine = AudioEngineState::default();
+        engine.mixer.session.deafen_keeps_satellites = true;
         engine.reset_after_disconnect(true);
         assert!(engine.mixer.session.output_muted);
+        assert!(engine.mixer.session.deafen_keeps_satellites);
     }
 
     #[test]

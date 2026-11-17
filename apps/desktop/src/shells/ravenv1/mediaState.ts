@@ -33,6 +33,29 @@ export function microphonesToMuteBeforeJoin(sources: AudioSourceState[]) {
   return sources.filter((source) => source.sourceType === "microphone");
 }
 
+/**
+ * The local sources your own deafen mutes: every microphone, and your shared system and app
+ * audio unless you keep sharing it. A source already muted is left out, so undeafening never
+ * unmutes something you muted yourself.
+ */
+export function sourcesToMuteOnDeafen(sources: AudioSourceState[], keepSharingMyAudio: boolean) {
+  return sources
+    .filter((source) => !source.channelStrip.mute.muted)
+    .filter((source) => source.sourceType === "microphone" || !keepSharingMyAudio)
+    .map((source) => source.id);
+}
+
+/**
+ * The sources undeafening unmutes: those the deafen muted that are still there and still muted.
+ * Under a server mute microphones stay muted, so lifting it never opens someone's mic.
+ */
+export function sourcesToRestoreAfterDeafen(sources: AudioSourceState[], mutedByDeafen: readonly string[], publishRevoked: boolean) {
+  return sources
+    .filter((source) => mutedByDeafen.includes(source.id) && source.channelStrip.mute.muted)
+    .filter((source) => !(publishRevoked && source.sourceType === "microphone"))
+    .map((source) => source.id);
+}
+
 export function isConfirmedVideoSourceActive(source: VideoSourceState | null) {
   return source != null
     && source.enabled

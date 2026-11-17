@@ -59,6 +59,8 @@ import {
   localVideoStatus,
   type LocalVideoStatus,
   microphonesToMuteBeforeJoin,
+  sourcesToMuteOnDeafen,
+  sourcesToRestoreAfterDeafen,
 } from "./mediaState";
 import { normalizeSelectedDeviceId, selectedDeviceIdForSource } from "@/lib/mediaDevicePreference";
 import { DeviceSwitchWatcher, devicesInUse } from "@/lib/deviceSwitch";
@@ -172,6 +174,10 @@ export interface RavenMediaAdapterState {
   /** False against a server that predates the shared call state. */
   awaySupported: boolean;
   deafenMode: DeafenMode;
+  /** While deafened, others' shared system and app audio keeps playing. */
+  deafenHearsSatellites: boolean;
+  /** While deafened, your own shared system and app audio keeps playing for others. */
+  deafenKeepsMySatellites: boolean;
   deafenSupported: boolean;
   outputMuteSupported: boolean;
   /** The user has picked something to share. Outside a call nothing is captured or sent. */
@@ -231,6 +237,8 @@ export interface RavenMediaAdapterState {
   toggleMic: () => Promise<void>;
   toggleCamera: () => Promise<void>;
   toggleDeafen: () => Promise<void>;
+  setDeafenHearsSatellites: (hear: boolean) => Promise<void>;
+  setDeafenKeepsMySatellites: (keep: boolean) => void;
   setAway: (away: boolean) => Promise<void>;
   startScreenShare: () => Promise<void>;
   stopScreenShare: () => Promise<void>;
@@ -306,6 +314,8 @@ export function useRavenMediaAdapter(
   const [selectedOutputPreference, setSelectedOutputPreference] = useState<string | null>(initialSettings.selectedOutput ?? null);
   const deviceSwitchRef = useRef(new DeviceSwitchWatcher());
   const [deafenMode, setDeafenModeState] = useState<DeafenMode>(initialSettings.deafenMode ?? "instant");
+  const [deafenHearsSatellites, setDeafenHearsSatellitesState] = useState(initialSettings.deafenHearsSatellites ?? false);
+  const [deafenKeepsMySatellites, setDeafenKeepsMySatellitesState] = useState(initialSettings.deafenKeepsMySatellites ?? true);
   const [networkActivitySettings, setNetworkActivitySettings] = useState<NetworkActivitySettings>(
     initialSettings.networkActivity ?? DEFAULT_NETWORK_ACTIVITY_SETTINGS,
   );
@@ -319,8 +329,10 @@ export function useRavenMediaAdapter(
   const localUserIdRef = useRef(options.localUserId);
   localUserIdRef.current = options.localUserId;
   const [reconnecting, setReconnecting] = useState(false);
-  const deafenRef = useRef({ deafened: false, mode: deafenMode });
-  deafenRef.current = { deafened, mode: deafenMode };
+  const deafenRef = useRef({ deafened: false, mode: deafenMode, hearsSatellites: deafenHearsSatellites });
+  deafenRef.current = { deafened, mode: deafenMode, hearsSatellites: deafenHearsSatellites };
+  /** The local sources your own deafen muted, unmuted again on undeafen. Mutes live in the engine, so this outlives a reconnect. */
+  const deafenMutedSourcesRef = useRef<string[]>([]);
   const reconnectLoopRef = useRef<Promise<void> | null>(null);
   const mediaLossRef = useRef(false);
   const audioLostRef = useRef(false);
@@ -841,6 +853,7 @@ export function useRavenMediaAdapter(
       let nextAudioState = await audioCommands.connectRoom(rtcServerUrl || audioToken.url, audioToken.token);
       checkpoint();
       const deafen = deafenRef.current;
+      nextAudioState = await audioCommands.setDeafenKeepsSatellites(deafen.hearsSatellites);
       nextAudioState = await audioCommands.setRemoteAudioReceiving(!(deafen.deafened && deafen.mode === "bandwidthSaver"));
       nextAudioState = await audioCommands.setOutputMuted(deafen.deafened);
       setAudioState(nextAudioState);
@@ -1163,17 +1176,9 @@ export function useRavenMediaAdapter(
   const serverMuted = audioState?.session.publishRevoked === true;
   const serverDeafened = audioState?.session.subscribeRevoked === true;
 
-  const toggleMic = useCallback(async () => {
-    if (serverMuted) return;
-    // Heard at once, as the answer to the click or hotkey. Only in a call: the engine
-    // drops it when no call is playing.
-    void audioCommands.playSoundCue(localMicOn ? "mute" : "unmute").catch(() => undefined);
-    if (localMicOn) {
-      await muteMic();
-    } else {
-      await publishMic();
-    }
-  }, [localMicOn, muteMic, publishMic, serverMuted]);
+  // Defined below, after deafen, which turning the mic on can undo.
+  const toggleMicRef = useRef<() => Promise<void>>(async () => undefined);
+  const toggleMic = useCallback(() => toggleMicRef.current(), []);
 
   const setMicDevice = useCallback(async (deviceId: string | null) => {
     setError("");
@@ -1285,6 +1290,27 @@ export function useRavenMediaAdapter(
     await setRemoteAudioReceiving(!(nextDeafened && mode === "bandwidthSaver"));
   }, [setRemoteAudioReceiving]);
 
+  /** Your own deafen mutes your mic, and your shared audio unless you keep sharing it. */
+  const muteForDeafen = useCallback(async () => {
+    let state = await audioCommands.getState();
+    const muted = sourcesToMuteOnDeafen(state.localSources, deafenKeepsMySatellites);
+    for (const sourceId of muted) state = await audioCommands.setLocalChannelMute(sourceId, true);
+    deafenMutedSourcesRef.current = muted;
+    setAudioState(state);
+  }, [deafenKeepsMySatellites]);
+
+  /** Undeafening puts back what the deafen muted, and nothing you muted yourself. */
+  const restoreAfterDeafen = useCallback(async () => {
+    const mutedByDeafen = deafenMutedSourcesRef.current;
+    deafenMutedSourcesRef.current = [];
+    if (!mutedByDeafen.length) return;
+    let state = await audioCommands.getState();
+    for (const sourceId of sourcesToRestoreAfterDeafen(state.localSources, mutedByDeafen, state.session.publishRevoked)) {
+      state = await audioCommands.setLocalChannelMute(sourceId, false);
+    }
+    setAudioState(state);
+  }, []);
+
   const toggleDeafen = useCallback(async () => {
     if (serverDeafened) return;
     const nextDeafened = !deafened;
@@ -1300,8 +1326,48 @@ export function useRavenMediaAdapter(
         "unsupported",
         "Try again, or leave and rejoin media.",
       );
+      return;
     }
-  }, [applyDeafenStrategy, deafenMode, deafened, setNonFatalError]);
+    try {
+      if (nextDeafened) await muteForDeafen();
+      else await restoreAfterDeafen();
+    } catch (err) {
+      setNonFatalError(
+        messageFromError(err, nextDeafened ? "Your microphone could not be muted" : "Your microphone could not be turned back on"),
+        "publish_failure",
+        nextDeafened ? "Mute your microphone yourself." : "Turn your microphone on yourself.",
+      );
+    }
+  }, [applyDeafenStrategy, deafenMode, deafened, muteForDeafen, restoreAfterDeafen, setNonFatalError]);
+
+  // Turning the mic on while deafened undeafens too: you asked to be heard, so you hear.
+  toggleMicRef.current = async () => {
+    if (serverMuted) return;
+    // Heard at once, as the answer to the click or hotkey. Only in a call: the engine
+    // drops it when no call is playing.
+    void audioCommands.playSoundCue(localMicOn ? "mute" : "unmute").catch(() => undefined);
+    if (localMicOn) {
+      await muteMic();
+      return;
+    }
+    if (deafened && !serverDeafened) await toggleDeafen();
+    await publishMic();
+  };
+
+  const setDeafenHearsSatellites = useCallback(async (hear: boolean) => {
+    setDeafenHearsSatellitesState(hear);
+    saveMediaSettings({ deafenHearsSatellites: hear });
+    try {
+      setAudioState(await audioCommands.setDeafenKeepsSatellites(hear));
+    } catch (err) {
+      setNonFatalError(messageFromError(err, "Shared audio could not be changed"), "unsupported", "Try again, or leave and rejoin media.");
+    }
+  }, [saveMediaSettings, setNonFatalError]);
+
+  const setDeafenKeepsMySatellites = useCallback((keep: boolean) => {
+    setDeafenKeepsMySatellitesState(keep);
+    saveMediaSettings({ deafenKeepsMySatellites: keep });
+  }, [saveMediaSettings]);
 
   // Others only need to know that you can't hear them. Quick toggles collapse to the
   // last value, and a failed send is not worth interrupting the user for.
@@ -1571,6 +1637,8 @@ export function useRavenMediaAdapter(
     callVote,
     awaySupported,
     deafenMode,
+    deafenHearsSatellites,
+    deafenKeepsMySatellites,
     deafenSupported: true,
     outputMuteSupported: false,
     screenSharing,
@@ -1618,6 +1686,8 @@ export function useRavenMediaAdapter(
     toggleMic,
     toggleCamera,
     toggleDeafen,
+    setDeafenHearsSatellites,
+    setDeafenKeepsMySatellites,
     setAway,
     startScreenShare,
     stopScreenShare,
@@ -1718,6 +1788,8 @@ type MediaSettings = {
   echoCancellation?: boolean;
   autoGainControl?: boolean;
   deafenMode?: DeafenMode;
+  deafenHearsSatellites?: boolean;
+  deafenKeepsMySatellites?: boolean;
   networkActivity?: NetworkActivitySettings;
   soundCues?: SoundCueSettings;
   selfMediaPreviewMode?: SelfMediaPreviewMode;
@@ -1737,6 +1809,8 @@ export function readMediaSettings(): MediaSettings {
       echoCancellation: typeof parsed.echoCancellation === "boolean" ? parsed.echoCancellation : undefined,
       autoGainControl: typeof parsed.autoGainControl === "boolean" ? parsed.autoGainControl : undefined,
       deafenMode: isDeafenMode(parsed.deafenMode) ? parsed.deafenMode : "instant",
+      deafenHearsSatellites: typeof parsed.deafenHearsSatellites === "boolean" ? parsed.deafenHearsSatellites : undefined,
+      deafenKeepsMySatellites: typeof parsed.deafenKeepsMySatellites === "boolean" ? parsed.deafenKeepsMySatellites : undefined,
       networkActivity: normalizeNetworkActivitySettings(parsed.networkActivity),
       soundCues: normalizeSoundCueSettings(parsed.soundCues),
       selfMediaPreviewMode: isSelfMediaPreviewMode(parsed.selfMediaPreviewMode) ? parsed.selfMediaPreviewMode : "local",

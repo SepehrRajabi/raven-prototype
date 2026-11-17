@@ -539,6 +539,67 @@ fn audio_source_from_lk(source: TrackSource) -> AudioSourceType {
     }
 }
 
+/// Which remote audio this connection subscribes to. Bandwidth saver deafen stops voices
+/// and, unless the listener keeps shared audio, satellites too. A moderator's deafen stops both.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct ReceivePolicy {
+    voices: bool,
+    satellites: bool,
+}
+
+impl ReceivePolicy {
+    const ALL: Self = Self {
+        voices: true,
+        satellites: true,
+    };
+
+    fn any(self) -> bool {
+        self.voices || self.satellites
+    }
+
+    /// A voice is a `Microphone` track; everything else Raven publishes is a satellite.
+    fn admits(self, source: TrackSource) -> bool {
+        if source == TrackSource::Microphone {
+            self.voices
+        } else {
+            self.satellites
+        }
+    }
+}
+
+/// [`ReceivePolicy`] shared with the room's event loop, one bit per kind.
+#[derive(Debug)]
+struct RemoteReceive(AtomicU8);
+
+impl RemoteReceive {
+    const VOICES: u8 = 1;
+    const SATELLITES: u8 = 2;
+
+    fn new(policy: ReceivePolicy) -> Self {
+        let receive = Self(AtomicU8::new(0));
+        receive.store(policy);
+        receive
+    }
+
+    fn load(&self) -> ReceivePolicy {
+        let bits = self.0.load(Ordering::SeqCst);
+        ReceivePolicy {
+            voices: bits & Self::VOICES != 0,
+            satellites: bits & Self::SATELLITES != 0,
+        }
+    }
+
+    fn store(&self, policy: ReceivePolicy) {
+        let bits = if policy.voices { Self::VOICES } else { 0 }
+            | if policy.satellites {
+                Self::SATELLITES
+            } else {
+                0
+            };
+        self.0.store(bits, Ordering::SeqCst);
+    }
+}
+
 fn base_participant_identity(identity: &str) -> &str {
     identity
         .strip_suffix("#audio")
@@ -793,8 +854,10 @@ pub struct AudioEngine {
     publications: HashMap<AudioSourceId, PublishEntry>,
     output: Arc<OutputMixer>,
     /// Whether remote audio is received: the user's choice, unless a moderator deafened them.
-    receive_remote_audio: Arc<AtomicBool>,
+    receive_remote_audio: Arc<RemoteReceive>,
     receive_wanted: bool,
+    /// Shared audio is still received while the user's own deafen stops voices.
+    receive_satellites_when_deafened: bool,
     subscribe_revoked: bool,
     /// Last participant-metadata JSON we pushed, so we only re-send on change.
     published_meta: String,
@@ -816,8 +879,9 @@ impl Default for AudioEngine {
             connection: None,
             publications: HashMap::new(),
             output: OutputMixer::new(),
-            receive_remote_audio: Arc::new(AtomicBool::new(true)),
+            receive_remote_audio: Arc::new(RemoteReceive::new(ReceivePolicy::ALL)),
             receive_wanted: true,
+            receive_satellites_when_deafened: false,
             subscribe_revoked: false,
             published_meta: String::new(),
         }
@@ -976,6 +1040,17 @@ impl AudioEngine {
         self.apply_remote_receiving();
     }
 
+    /// Keep receiving shared audio (satellites) while Bandwidth saver deafen stops voices.
+    pub fn set_receive_satellites_when_deafened(&mut self, keep: bool) {
+        self.receive_satellites_when_deafened = keep;
+        self.apply_remote_receiving();
+    }
+
+    /// Whether any remote audio is received now.
+    pub fn receives_remote_audio(&self) -> bool {
+        self.receive_remote_audio.load().any()
+    }
+
     /// A moderator's deafen. Kept apart from the user's own choice, which it returns to.
     pub fn set_subscribe_revoked(&mut self, revoked: bool) {
         self.subscribe_revoked = revoked;
@@ -983,8 +1058,12 @@ impl AudioEngine {
     }
 
     fn apply_remote_receiving(&mut self) {
-        let enabled = self.receive_wanted && !self.subscribe_revoked;
-        self.receive_remote_audio.store(enabled, Ordering::SeqCst);
+        let policy = ReceivePolicy {
+            voices: self.receive_wanted && !self.subscribe_revoked,
+            satellites: (self.receive_wanted || self.receive_satellites_when_deafened)
+                && !self.subscribe_revoked,
+        };
+        self.receive_remote_audio.store(policy);
         let subscription_updates = if let Some(connection) = self.connection.as_ref() {
             let local_identity =
                 base_participant_identity(&connection.room.local_participant().identity().0)
@@ -992,7 +1071,7 @@ impl AudioEngine {
             let mut updates = Vec::new();
             for participant in connection.room.remote_participants().values() {
                 for publication in participant.track_publications().values() {
-                    let should_subscribe = enabled
+                    let should_subscribe = policy.admits(publication.source())
                         && is_eligible_remote_publication(
                             publication,
                             participant,
@@ -1319,8 +1398,7 @@ impl AudioEngine {
                         let subscription_local_identity = local_identity.clone();
                         runtime_handle.spawn(async move {
                             tokio::task::yield_now().await;
-                            let receiving =
-                                subscription_receive_remote_audio.load(Ordering::SeqCst);
+                            let receiving = subscription_receive_remote_audio.load();
                             for (participant, publications) in participants_with_tracks {
                                 for publication in publications {
                                     reconcile_remote_publication(
@@ -1350,7 +1428,7 @@ impl AudioEngine {
                             &publication,
                             &participant,
                             &local_identity,
-                            receive_remote_audio.load(Ordering::SeqCst),
+                            receive_remote_audio.load(),
                         );
                         update_receive_health(
                             &app,
@@ -1358,7 +1436,7 @@ impl AudioEngine {
                             &room,
                             &readers,
                             &local_identity,
-                            receive_remote_audio.load(Ordering::SeqCst),
+                            receive_remote_audio.load(),
                             None,
                         );
                     }
@@ -1394,7 +1472,7 @@ impl AudioEngine {
                         let RemoteTrack::Audio(audio_track) = track else {
                             continue;
                         };
-                        if !receive_remote_audio.load(Ordering::SeqCst) {
+                        if !receive_remote_audio.load().admits(publication.source()) {
                             publication.set_subscribed(false);
                             continue;
                         }
@@ -1461,7 +1539,7 @@ impl AudioEngine {
                         // from the first frame: a muted peer must not play until the first
                         // refresh. Read with a wait here, on the event loop, not on the DSP.
                         let initial_controls = receiver_snapshot(&shared, participant_id, track_id);
-                        output.ensure_track(&key);
+                        output.ensure_track(&key, !microphone);
                         let rtc_track = audio_track.rtc_track();
                         let mut rate = output.sample_rate();
                         let mut stream = NativeAudioStream::new(
@@ -1750,7 +1828,7 @@ impl AudioEngine {
                             &room,
                             &readers,
                             &local_identity,
-                            receive_remote_audio.load(Ordering::SeqCst),
+                            receive_remote_audio.load(),
                             None,
                         );
                     }
@@ -1783,7 +1861,7 @@ impl AudioEngine {
                                 &room,
                                 &readers,
                                 &local_identity,
-                                receive_remote_audio.load(Ordering::SeqCst),
+                                receive_remote_audio.load(),
                                 None,
                             );
                         }
@@ -1864,7 +1942,7 @@ impl AudioEngine {
                                 &room,
                                 &readers,
                                 &local_identity,
-                                receive_remote_audio.load(Ordering::SeqCst),
+                                receive_remote_audio.load(),
                                 None,
                             );
                         }
@@ -1909,7 +1987,7 @@ impl AudioEngine {
                         // SDK sends their subscribe requests down the old session, which drops
                         // them. Each then reads as wanted with no track, so a reconcile alone
                         // would send nothing: ask again for those.
-                        let receiving = receive_remote_audio.load(Ordering::SeqCst);
+                        let receiving = receive_remote_audio.load();
                         for participant in room.remote_participants().values() {
                             for publication in participant.track_publications().values() {
                                 let wanted = reconcile_remote_publication(
@@ -1945,7 +2023,7 @@ impl AudioEngine {
                             &room,
                             &readers,
                             &local_identity,
-                            receive_remote_audio.load(Ordering::SeqCst),
+                            receive_remote_audio.load(),
                             None,
                         );
                     }
@@ -2120,9 +2198,9 @@ fn reconcile_remote_publication(
     publication: &RemoteTrackPublication,
     participant: &RemoteParticipant,
     local_identity: &str,
-    receive_remote_audio: bool,
+    receive: ReceivePolicy,
 ) -> bool {
-    let should_subscribe = receive_remote_audio
+    let should_subscribe = receive.admits(publication.source())
         && is_eligible_remote_publication(publication, participant, local_identity);
     if publication.is_desired() != should_subscribe {
         publication.set_subscribed(should_subscribe);
@@ -2151,7 +2229,7 @@ fn schedule_subscription_retry(
     publication: RemoteTrackPublication,
     participant: RemoteParticipant,
     retrying: &Arc<Mutex<HashSet<String>>>,
-    receive_remote_audio: Arc<AtomicBool>,
+    receive_remote_audio: Arc<RemoteReceive>,
     active: Arc<AtomicBool>,
     local_identity: String,
     initial_error: String,
@@ -2181,7 +2259,9 @@ fn schedule_subscription_retry(
     tokio::spawn(async move {
         let mut last_error = "Incoming audio could not be restored.".to_string();
         for delay in RECOVERY_DELAYS {
-            if !active.load(Ordering::SeqCst) || !receive_remote_audio.load(Ordering::SeqCst) {
+            if !active.load(Ordering::SeqCst)
+                || !receive_remote_audio.load().admits(publication.source())
+            {
                 retrying.lock().unwrap().remove(&key);
                 return;
             }
@@ -2228,7 +2308,7 @@ fn handle_reader_ended(
     output: &OutputMixer,
     readers: &Arc<Mutex<HashMap<String, JoinHandle<()>>>>,
     retrying: &Arc<Mutex<HashSet<String>>>,
-    receive_remote_audio: &Arc<AtomicBool>,
+    receive_remote_audio: &Arc<RemoteReceive>,
     active: &Arc<AtomicBool>,
     local_identity: &str,
     ended: ReaderEnded,
@@ -2248,7 +2328,7 @@ fn handle_reader_ended(
         readers.remove(&ended.key);
     }
     output.remove_track(&ended.key);
-    if !active.load(Ordering::SeqCst) || !receive_remote_audio.load(Ordering::SeqCst) {
+    if !active.load(Ordering::SeqCst) || !receive_remote_audio.load().any() {
         return;
     }
     update_remote_subscription_status(
@@ -2384,10 +2464,10 @@ fn update_receive_health(
     room: &Room,
     readers: &Arc<Mutex<HashMap<String, JoinHandle<()>>>>,
     local_identity: &str,
-    receive_remote_audio: bool,
+    receive: ReceivePolicy,
     error: Option<String>,
 ) {
-    let eligible = if receive_remote_audio {
+    let eligible = if receive.any() {
         room.remote_participants()
             .values()
             .map(|participant| {
@@ -2395,7 +2475,12 @@ fn update_receive_health(
                     .track_publications()
                     .values()
                     .filter(|publication| {
-                        is_eligible_remote_publication(publication, participant, local_identity)
+                        receive.admits(publication.source())
+                            && is_eligible_remote_publication(
+                                publication,
+                                participant,
+                                local_identity,
+                            )
                     })
                     .count()
             })

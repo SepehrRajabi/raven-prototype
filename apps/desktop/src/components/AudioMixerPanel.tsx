@@ -127,6 +127,7 @@ const emptyMixerState: AudioMixerState = {
     outputDeviceName: null,
     outputFallback: false,
     outputMuted: false,
+    deafenKeepsSatellites: false,
     outputVolumeDb: 0,
     outputVolumeSaved: false,
     outputMeter: { peakDb: -90, rmsDb: -90, clipping: false },

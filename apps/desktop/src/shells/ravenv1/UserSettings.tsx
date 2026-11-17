@@ -674,7 +674,7 @@ function AudioVideoSettings({ data, media }: { data: RavenShellData; media: Rave
         </SettingsRows>
       </SettingsSection>
 
-      <SettingsSection title="When you stop hearing people" description="What the headphones button in the bottom bar does.">
+      <SettingsSection title="When you stop hearing people" description="What the headphones button in the bottom bar does. It mutes your microphone too, and turning the microphone back on lets you hear again.">
         <SettingsRows>
           <SettingsChoice
             title="Silence it here"
@@ -689,6 +689,22 @@ function AudioVideoSettings({ data, media }: { data: RavenShellData; media: Rave
             selected={media.deafenMode === "bandwidthSaver"}
             disabled={media.busy}
             onSelect={() => void media.setDeafenMode("bandwidthSaver")}
+          />
+        </SettingsRows>
+        <SettingsRows>
+          <SettingsToggleRow
+            label="Hear shared audio"
+            description="System and app audio others share keeps playing. Voices stay silent."
+            checked={media.deafenHearsSatellites}
+            disabled={media.busy}
+            onChange={(hear) => void media.setDeafenHearsSatellites(hear)}
+          />
+          <SettingsToggleRow
+            label="Keep sharing my audio"
+            description="Your system and app audio keeps playing for others. Your microphone is muted either way."
+            checked={media.deafenKeepsMySatellites}
+            disabled={media.busy}
+            onChange={media.setDeafenKeepsMySatellites}
           />
         </SettingsRows>
       </SettingsSection>

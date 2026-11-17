@@ -81,7 +81,7 @@ return the fresh snapshot; the UI sets state from the return value and from even
 3. `audio_set_call_active(true)`, so a microphone kept from an earlier call opens before
    its track is published (a device error here never fails the join).
 4. `connectMedia(nestId)`: viewer token and audio token → `audio_connect_room` →
-   re-apply deafen (`setRemoteAudioReceiving`, `setOutputMuted`) → video token →
+   re-apply deafen (`setDeafenKeepsSatellites`, `setRemoteAudioReceiving`, `setOutputMuted`) → video token →
    `video_connect_room(url, videoToken, viewerToken)` → self-preview mode →
    `api.joinSession`, `api.joinNestPresence`, `api.updatePresence`.
 5. `prepareMicrophone`: make sure a microphone source exists and is published, muted.
@@ -130,6 +130,17 @@ leaving the user as a ghost who is in LiveKit but not in the Nest.
 - `DeafenMode = "instant" | "bandwidthSaver"`. Instant = `audio_set_output_muted`
   only. Bandwidth saver also calls `audio_set_remote_audio_receiving(false)`, which
   unsubscribes remote audio.
+- Your own deafen mutes your microphones (`setLocalChannelMute`), and your satellites
+  too when "Keep sharing my audio" (`deafenKeepsMySatellites`, default on) is off. The
+  adapter remembers only the sources it muted (`deafenMutedSourcesRef`, helpers in
+  `mediaState.ts`) and unmutes those on undeafen; a mic stays muted under a server mute.
+  Mutes live in the engine model, so they survive a reconnect. Turning the mic on while
+  deafened undeafens first. Push to talk does nothing while deafened: the hard mute wins.
+- "Hear shared audio" (`deafenHearsSatellites`, default off) calls
+  `audio_set_deafen_keeps_satellites`, re-sent on every audio connect. The bus then
+  ramps voices (`Microphone` tracks) and satellites separately (`BusRenderer::render`,
+  `TrackFeed::satellite`), and Bandwidth saver keeps satellites subscribed
+  (`ReceivePolicy` in `engine.rs`, keyed on the LiveKit track source).
 - The saved speaker is applied once at startup and on an explicit change
   (`appliedOutputRef`). Refreshing the device list must never re-send
   `audio_set_output_device` — that used to restart the speaker and cause dropouts —

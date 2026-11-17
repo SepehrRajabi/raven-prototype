@@ -44,6 +44,7 @@ pub const APP_COMMANDS: &[&str] = &[
     "audio_set_sound_cue_settings",
     "audio_test_output_device",
     "audio_set_remote_audio_receiving",
+    "audio_set_deafen_keeps_satellites",
     "audio_list_app_audio_sources",
     "audio_list_presets",
     "audio_apply_preset_to_local_channel",

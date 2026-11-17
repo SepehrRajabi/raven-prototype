@@ -397,6 +397,8 @@ struct TrackIncoming {
 #[derive(Debug, Default)]
 struct TrackFeed {
     incoming: Mutex<TrackIncoming>,
+    /// Shared system or app audio, not a voice. Satellites can stay audible while deafened.
+    satellite: bool,
 }
 
 /// A track as the callback sees it: its feed and the playout buffer only it touches.
@@ -419,6 +421,8 @@ struct MixBus {
     cues: Mutex<CueVoices>,
     sample_rate: AtomicU32,
     muted: AtomicBool,
+    /// Deafen leaves satellites (shared system and app audio) playing; only voices go silent.
+    keep_satellites_when_muted: AtomicBool,
     /// The output volume as linear gain (`f32` bits), shared with the cues and the test
     /// tone that play outside the bus.
     volume: AtomicU32,
@@ -469,6 +473,7 @@ impl Default for MixBus {
             cues: Mutex::new(CueVoices::default()),
             sample_rate: AtomicU32::new(48_000),
             muted: AtomicBool::new(false),
+            keep_satellites_when_muted: AtomicBool::new(false),
             volume: AtomicU32::new(1.0_f32.to_bits()),
             meter: Mutex::new(BusMeterWindow::default()),
         }
@@ -484,10 +489,16 @@ impl MixBus {
         self.tracks.lock().ok()?.get(key).cloned()
     }
 
-    fn ensure_track(&self, key: &str) {
+    fn ensure_track(&self, key: &str, satellite: bool) {
         if let Ok(mut tracks) = self.tracks.lock() {
             if !tracks.contains_key(key) {
-                tracks.insert(key.to_string(), Arc::default());
+                tracks.insert(
+                    key.to_string(),
+                    Arc::new(TrackFeed {
+                        satellite,
+                        ..TrackFeed::default()
+                    }),
+                );
                 self.tracks_version.fetch_add(1, Ordering::Release);
             }
         }
@@ -554,6 +565,26 @@ impl MixBus {
         f32::from_bits(self.volume.load(Ordering::Relaxed))
     }
 
+    /// The gain voices ramp toward: silent while deafened.
+    fn voice_target(&self) -> f32 {
+        if self.muted.load(Ordering::Relaxed) {
+            0.0
+        } else {
+            1.0
+        }
+    }
+
+    /// The gain satellites ramp toward: silent while deafened unless the listener keeps them.
+    fn satellite_target(&self) -> f32 {
+        if self.muted.load(Ordering::Relaxed)
+            && !self.keep_satellites_when_muted.load(Ordering::Relaxed)
+        {
+            0.0
+        } else {
+            1.0
+        }
+    }
+
     fn take_meter(&self) -> MeterState {
         self.meter
             .lock()
@@ -572,6 +603,10 @@ struct BusRenderer {
     tracks: Vec<RenderTrack>,
     tracks_version: u64,
     master_gain: f32,
+    /// The deafen ramp for satellites, which may stay up while voices go silent.
+    satellite_gain: f32,
+    /// Satellites are summed here so their own ramp touches only them. Reserved up front.
+    satellite_mix: Vec<f32>,
     volume: VolumeRamp,
     limiter_gain: f32,
     /// Played audio the echo reference was busy for, pushed ahead of the next block so
@@ -582,11 +617,8 @@ struct BusRenderer {
 impl BusRenderer {
     fn new(bus: Arc<MixBus>, reference: Arc<RenderReference>, sample_rate: u32) -> Self {
         let bus_volume = bus.volume_gain();
-        let master_gain = if bus.muted.load(Ordering::Relaxed) {
-            0.0
-        } else {
-            1.0
-        };
+        let master_gain = bus.voice_target();
+        let satellite_gain = bus.satellite_target();
         Self {
             bus,
             reference,
@@ -596,6 +628,8 @@ impl BusRenderer {
             // Never a real version, so the first callback reads the registry.
             tracks_version: u64::MAX,
             master_gain,
+            satellite_gain,
+            satellite_mix: Vec::with_capacity(reference_backlog_cap(sample_rate)),
             volume: VolumeRamp::new(bus_volume),
             limiter_gain: 1.0,
             reference_backlog: Vec::with_capacity(reference_backlog_cap(sample_rate)),
@@ -663,6 +697,9 @@ impl BusRenderer {
     /// Fill `out` (interleaved stereo, pre-zeroed) with the mixed bus.
     fn render(&mut self, out: &mut [f32]) {
         self.refresh_tracks();
+        // Within the reserved capacity unless the device hands a block over 100 ms.
+        self.satellite_mix.clear();
+        self.satellite_mix.resize(out.len(), 0.0);
         for track in &mut self.tracks {
             // A reader mid-append is taken on the next callback; the cushion covers it.
             if let Ok(mut incoming) = track.feed.incoming.try_lock() {
@@ -674,7 +711,11 @@ impl BusRenderer {
                     incoming.samples.clear();
                 }
             }
-            track.buffer.mix_into(out, self.limits);
+            if track.feed.satellite {
+                track.buffer.mix_into(&mut self.satellite_mix, self.limits);
+            } else {
+                track.buffer.mix_into(out, self.limits);
+            }
         }
         // Cues are mixed on either side of the deafen ramp: most go silent with the call,
         // your own mute toggle is still heard. A busy cue list waits for the next block.
@@ -685,13 +726,19 @@ impl BusRenderer {
         self.master_gain = apply_master_gain(
             out,
             self.master_gain,
-            if self.bus.muted.load(Ordering::Relaxed) {
-                0.0
-            } else {
-                1.0
-            },
+            self.bus.voice_target(),
             self.sample_rate,
         );
+        // Satellites have their own deafen ramp: they stay up when the listener keeps them.
+        self.satellite_gain = apply_master_gain(
+            &mut self.satellite_mix,
+            self.satellite_gain,
+            self.bus.satellite_target(),
+            self.sample_rate,
+        );
+        for (sample, satellite) in out.iter_mut().zip(&self.satellite_mix) {
+            *sample += *satellite;
+        }
         if let Some(cues) = cues.as_mut() {
             cues.mix_into(out, true);
         }
@@ -969,6 +1016,13 @@ impl OutputMixer {
         self.bus.muted.store(muted, Ordering::Relaxed);
     }
 
+    /// While deafened, keep playing others' satellites (shared system and app audio).
+    pub fn set_keep_satellites_when_muted(&self, keep: bool) {
+        self.bus
+            .keep_satellites_when_muted
+            .store(keep, Ordering::Relaxed);
+    }
+
     pub fn is_muted(&self) -> bool {
         self.bus.muted.load(Ordering::Relaxed)
     }
@@ -1060,8 +1114,9 @@ impl OutputMixer {
         }
     }
 
-    pub(crate) fn ensure_track(&self, key: &str) {
-        self.bus.ensure_track(key);
+    /// Register a track. `satellite` marks shared system or app audio rather than a voice.
+    pub(crate) fn ensure_track(&self, key: &str, satellite: bool) {
+        self.bus.ensure_track(key, satellite);
     }
 
     /// Queue audio for a track registered with [`Self::ensure_track`]; others take nothing.
@@ -1892,7 +1947,7 @@ mod tests {
     #[test]
     fn a_removed_track_is_not_brought_back_by_a_late_push() {
         let bus = MixBus::default();
-        bus.ensure_track("track");
+        bus.ensure_track("track", false);
         bus.remove_track("track");
         bus.push("track", &[0.5; 960]);
         assert!(bus.tracks.lock().unwrap().is_empty());
@@ -2098,7 +2153,7 @@ mod tests {
         let mut played = Vec::new();
         for _ in 0..blocks {
             let feed = vec![amplitude; 480 * BUS_CHANNELS];
-            renderer.bus.ensure_track("track");
+            renderer.bus.ensure_track("track", false);
             renderer.bus.push("track", &feed);
             let mut out = vec![0.0; 480 * BUS_CHANNELS];
             renderer.render(&mut out);
@@ -2113,6 +2168,73 @@ mod tests {
             Arc::new(RenderReference::default()),
             48_000,
         )
+    }
+
+    /// Render a voice and a satellite, each steady at `amplitude`, and return each one's
+    /// played audio: the voice alone, then the satellite alone.
+    fn render_voice_and_satellite(renderer: &mut BusRenderer, blocks: usize) -> Vec<f32> {
+        let mut played = Vec::new();
+        for _ in 0..blocks {
+            renderer.bus.ensure_track("voice", false);
+            renderer.bus.ensure_track("satellite", true);
+            renderer.bus.push("voice", &vec![0.1; 480 * BUS_CHANNELS]);
+            renderer
+                .bus
+                .push("satellite", &vec![0.2; 480 * BUS_CHANNELS]);
+            let mut out = vec![0.0; 480 * BUS_CHANNELS];
+            renderer.render(&mut out);
+            played.extend(out);
+        }
+        played
+    }
+
+    /// The largest step between two neighbouring frames of the left channel.
+    fn largest_step(samples: &[f32]) -> f32 {
+        samples
+            .chunks(BUS_CHANNELS)
+            .zip(samples.chunks(BUS_CHANNELS).skip(1))
+            .fold(0.0_f32, |step, (a, b)| step.max((a[0] - b[0]).abs()))
+    }
+
+    #[test]
+    fn deafen_can_keep_satellites_while_voices_go_silent() {
+        let mut renderer = track_renderer();
+        renderer
+            .bus
+            .keep_satellites_when_muted
+            .store(true, Ordering::Relaxed);
+        let warm = render_voice_and_satellite(&mut renderer, 20);
+        let before = *warm.last().unwrap();
+        assert!(
+            (before - 0.3).abs() < 1e-3,
+            "voice and satellite both play ({before})"
+        );
+        renderer.bus.muted.store(true, Ordering::Relaxed);
+        let deafened = render_voice_and_satellite(&mut renderer, 20);
+        let after = *deafened.last().unwrap();
+        assert!(
+            (after - 0.2).abs() < 1e-3,
+            "only the satellite plays ({after})"
+        );
+        assert!(largest_step(&deafened) < 0.01, "the voice ramps out");
+    }
+
+    #[test]
+    fn deafen_silences_satellites_unless_kept() {
+        let mut renderer = track_renderer();
+        render_voice_and_satellite(&mut renderer, 20);
+        renderer.bus.muted.store(true, Ordering::Relaxed);
+        let deafened = render_voice_and_satellite(&mut renderer, 20);
+        assert_eq!(
+            *deafened.last().unwrap(),
+            0.0,
+            "voice and satellite both silent"
+        );
+        assert!(largest_step(&deafened) < 0.01, "both ramp out");
+        renderer.bus.muted.store(false, Ordering::Relaxed);
+        let back = render_voice_and_satellite(&mut renderer, 20);
+        assert!((back.last().unwrap() - 0.3).abs() < 1e-3);
+        assert!(largest_step(&back) < 0.01, "both ramp back in");
     }
 
     fn set_bus_volume(renderer: &BusRenderer, volume_db: f32) {
