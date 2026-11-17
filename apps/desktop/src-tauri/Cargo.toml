@@ -147,6 +147,9 @@ x11-dl = "2.21"
 [target.'cfg(target_os = "macos")'.dependencies]
 # Native macOS display/window and system/app audio capture via ScreenCaptureKit.
 screencapturekit = { version = "8.0.0", features = ["macos_13_0"] }
+# Camera permission. Already built as part of nokhwa; named here because nokhwa only says
+# whether access is granted, not whether macOS has asked yet or was refused.
+nokhwa-bindings-macos = "0.2.4"
 # Closing the main window in full screen waits for AppKit to finish leaving it.
 block2 = "0.6"
 objc2 = "0.6"
