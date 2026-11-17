@@ -10,7 +10,7 @@ import { seedAttachment } from "@/lib/chat/media";
 import { hasUnread } from "@/lib/chat/reducer";
 import { accountScope } from "@/lib/chat/outbox";
 import { ChatStore } from "@/lib/chat/store";
-import type { ChatEvent, ChatState, ConversationState } from "@/lib/chat/types";
+import type { ChatConversation, ChatEvent, ChatState, ConversationState } from "@/lib/chat/types";
 import { eventStream } from "@/lib/eventStream";
 import { setTaskbarUnread } from "@/lib/taskbarBadge";
 import { trayCommands } from "@/lib/tray";
@@ -237,6 +237,11 @@ export function useOpenPerson(store: ChatStore | null, onNavigate: (view: RavenV
     [store, onNavigate],
   );
   return { open, openingId };
+}
+
+/** Raven's own conversation (notes from Raven and the server), unless it is archived. */
+export function useRavenConversation(store: ChatStore | null): ChatConversation | null {
+  return useChatSelector(store, (state) => Object.values(state.conversations).find(({ summary }) => summary.kind === "raven" && !summary.archived)?.summary ?? null, null);
 }
 
 /**
