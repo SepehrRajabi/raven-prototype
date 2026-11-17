@@ -582,8 +582,8 @@ func (s *Server) routes() {
 
 func (s *Server) getServerProperties(c *fiber.Ctx) error {
 	avatar := s.serverAvatar
-	var storedAvatar string
-	if err := s.db.QueryRow(`SELECT avatar_object_key FROM server_settings WHERE id = 1`).Scan(&storedAvatar); err == nil && storedAvatar != "" {
+	var storedAvatar, storedName string
+	if err := s.db.QueryRow(`SELECT avatar_object_key, display_name FROM server_settings WHERE id = 1`).Scan(&storedAvatar, &storedName); err == nil && storedAvatar != "" {
 		avatar = serverAvatarRoute(storedAvatar)
 	}
 	chat := map[string]any{"version": chatProtocolVersion, "maxMessageLength": chatMaxBodyRunes, "editWindowSeconds": int(chatEditWindow.Seconds()), "maxGroupMembers": chatMaxGroupMembers}
@@ -609,7 +609,7 @@ func (s *Server) getServerProperties(c *fiber.Ctx) error {
 		properties["library"] = library
 	}
 	return c.JSON(ServerProperties{
-		Name:         fallbackString(s.serverName, "Raven"),
+		Name:         fallbackString(storedName, fallbackString(s.serverName, "Raven")),
 		Description:  fallbackString(s.serverDescription, "Desktop RTC for private Nests"),
 		Avatar:       avatar,
 		RTCServerURL: fallbackString(s.liveKitURL, "ws://127.0.0.1:7880"),

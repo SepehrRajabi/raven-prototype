@@ -161,6 +161,8 @@ GET    /v1/admin/settings/capabilities
 POST   /v1/admin/settings/capabilities
 GET    /v1/admin/settings/accounts
 POST   /v1/admin/settings/accounts
+GET    /v1/admin/settings/server
+POST   /v1/admin/settings/server
 POST   /v1/admin/server/avatar
 
 GET    /v1/admin/users?q=&status=
@@ -193,6 +195,8 @@ DELETE /v1/admin/spaces/:id/rooms/:roomId
 Creating a user takes `{ "username", "displayName", "role" }` and answers with the
 account and a `temporaryPassword`, shown this once; the account must replace it at first
 sign-in. Passing a `password` of at least 10 characters skips the temporary one.
+
+The server's display name is `{ "name", "defaultName" }`. `POST` takes `{ "name" }`: spaces are collapsed, up to 64 characters, no control characters, and an empty name goes back to `defaultName` (`RAVEN_SERVER_NAME`, or "Raven"). `GET /v1/server/properties` returns the name in effect as `name`.
 
 A capability is set per account with
 `{ "capabilities": [{ "capability": "spaces.create", "mode": "inherit" | "allow" | "deny", "limit": 3 }] }`.

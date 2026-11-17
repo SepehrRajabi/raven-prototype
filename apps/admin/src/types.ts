@@ -90,6 +90,12 @@ export interface UserDetail {
 }
 
 /** The server's two switches for new accounts. */
+/** The server's display name: what an administrator set (empty for none), and what the apps show then. */
+export interface ServerNameSettings {
+  name: string;
+  defaultName: string;
+}
+
 export interface AccountSettings {
   signUpOpen: boolean;
   invitationsOpen: boolean;

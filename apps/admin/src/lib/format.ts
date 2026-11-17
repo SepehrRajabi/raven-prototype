@@ -105,6 +105,7 @@ const ACTION_TEXT: Record<string, string> = {
   "room.renamed": "Renamed room",
   "room.removed": "Removed room",
   "settings.capability_defaults_changed": "Changed default permissions",
+  "settings.server_name_changed": "Changed server name",
   "settings.server_image_changed": "Changed server image",
   "settings.accounts_changed": "Changed who can join",
   "user.signed_up": "Signed up",
