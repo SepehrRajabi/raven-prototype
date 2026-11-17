@@ -253,6 +253,52 @@ bun run tauri build --target aarch64-apple-darwin --bundles app,dmg   # or x86_6
 
 An Intel build needs `nasm` (`brew install nasm`) for mozjpeg's SIMD code.
 
+## Android builds
+
+GitHub Actions (`.github/workflows/android-builds.yml`) builds the Android app,
+`Raven_X.Y.Z_arm64.apk`, for arm64 phones on Android 8.0 (API 26) or later, on Ubuntu
+with JDK 17, SDK platform 36, build tools 35.0.0 and NDK 27.2.12479018. The server a fresh
+install signs in to is `https://mimir.rvn.bluehour.cloud` (the repository variable
+`RAVEN_API_URL` overrides it); release builds refuse `http:`.
+
+Each build is checked before it is kept: the signature verifies, the application id is
+`app.raven.mobile`, and the only native code is arm64-v8a. It runs when the frontend or
+the Rust crate changes, on every `v*` tag, and by hand. On a release tag the APK goes on
+the GitHub release with `SHA256SUMS-android`. If that step failed, run it again on the
+tag:
+
+```sh
+gh workflow run android-builds.yml --ref vX.Y.Z -f attach_to_release=true
+```
+
+There are no Android updater artifacts: `latest.json` has no Android entry, so people
+update by installing the new APK over the old one, which Android allows only when both are
+signed with the same key.
+
+### The Android release key
+
+Builds of a `v*` tag are signed with Raven's Android release key from the repository
+secrets `ANDROID_RELEASE_KEYSTORE` (base64 of the PKCS12 keystore) and
+`ANDROID_RELEASE_KEYSTORE_PASSWORD`; the key's alias is `raven`. Every other build is
+signed with a throwaway key made in that run, only to check that signing works. A tag
+build signed any other way fails.
+
+The key was made on 2026-11-17 on the release PC and is kept in
+`%USERPROFILE%\.raven\android\`: `raven-android-release.jks`, its password protected with
+DPAPI in `raven-android-release.password.dpapi`, and its SHA-256 fingerprint in
+`fingerprint.txt`. It is RSA 4096 and valid until 2054.
+
+- Keep a backup of that folder, with the password, off this PC. If the key is lost,
+  nobody can update the installed app: everyone has to uninstall it, losing its local
+  data, and install a build signed with a new key.
+- To read the password, in PowerShell:
+  `Get-Content $env:USERPROFILE\.raven\android\raven-android-release.password.dpapi | ConvertTo-SecureString`
+  and convert the secure string; DPAPI ties it to this Windows account.
+- To set the secrets again: `gh secret set ANDROID_RELEASE_KEYSTORE --body <base64 of the .jks>`
+  and `gh secret set ANDROID_RELEASE_KEYSTORE_PASSWORD --body <password>`.
+
+To build one locally, see docs/development.md (Android).
+
 ## What a friend sees
 
 Raven checks about ten seconds after it starts and every six hours. When a newer version

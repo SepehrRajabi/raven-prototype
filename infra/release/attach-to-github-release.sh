@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Adds one workflow's files to the GitHub release of the tag being built, and creates the
-# release first when there is none yet. Run by the macOS and Linux package workflows from
+# release first when there is none yet. Run by the macOS, Android and Linux package workflows from
 # the repository root:
 #
 #   infra/release/attach-to-github-release.sh SHA256SUMS-macos builds

@@ -6,10 +6,11 @@
 - **Linux, any distribution:** `Raven_{{version}}_amd64.AppImage`. Run `chmod +x` on it. On newer Ubuntu, install `libfuse2t64` first.
 - **Linux packages:** `Raven_{{version}}_amd64.deb` (Debian 12+, Ubuntu 22.04+), `Raven_{{version}}_x86_64_fedora.rpm` (Fedora 44+), `Raven_{{version}}_x86_64_el10.rpm` (RHEL, AlmaLinux and Rocky Linux 10, with EPEL and CRB enabled), `Raven_{{version}}_x86_64_opensuse.rpm` (openSUSE Leap 16, Tumbleweed), `raven-desktop-{{version}}-1-x86_64.pkg.tar.zst` (Arch Linux). Install it with your package manager. The packages are not signed.
 - **macOS 13 or later:** `Raven_{{version}}_aarch64.dmg` (Apple silicon) or `Raven_{{version}}_x64.dmg` (Intel). macOS refuses the first launch: open System Settings › Privacy & Security and choose "Open Anyway" under the message about Raven, once.
+- **Android 8.0 or later (arm64), early preview:** `Raven_{{version}}_arm64.apk`. Open it on the phone and allow installing from that source when Android asks. To update, install the new file over the old one.
 
-The Windows installer and the AppImage are built on the release workstation; the other files are built by GitHub Actions and appear when their builds finish. `SHA256SUMS`, `SHA256SUMS-linux-packages` and `SHA256SUMS-macos` list their checksums.
+The Windows installer and the AppImage are built on the release workstation; the other files are built by GitHub Actions and appear when their builds finish. `SHA256SUMS`, `SHA256SUMS-linux-packages`, `SHA256SUMS-macos` and `SHA256SUMS-android` list their checksums.
 
-Raven tells you when a newer version is out. The Windows installer and the AppImage update from inside Raven; for the packages and macOS, install the new file.
+Raven tells you when a newer version is out. The Windows installer and the AppImage update from inside Raven; for the packages, macOS and Android, install the new file.
 
 ## Your own server
 
