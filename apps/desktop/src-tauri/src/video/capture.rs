@@ -2570,26 +2570,45 @@ mod screen {
     pub(super) fn list_displays() -> Result<Vec<DisplayTarget>, VideoCaptureError> {
         let displays = shareable_content()?.displays();
         let primary_id = displays.first().map(SCDisplay::display_id);
+        let thumbnails = thumbnails(&displays, |display| {
+            let filter = SCContentFilter::create()
+                .with_display(display)
+                .with_excluding_windows(&[])
+                .build();
+            thumbnail(&filter, display.width(), display.height())
+        });
         Ok(displays
-            .into_iter()
+            .iter()
+            .zip(thumbnails)
             .enumerate()
-            .map(|(index, display)| DisplayTarget {
+            .map(|(index, (display, thumbnail_data_url))| DisplayTarget {
                 id: display.display_id().to_string(),
                 name: format!("Display {}", index + 1),
                 width: display.width(),
                 height: display.height(),
                 is_primary: primary_id == Some(display.display_id()),
-                thumbnail_data_url: None,
+                thumbnail_data_url,
             })
             .collect())
     }
 
     pub(super) fn list_windows() -> Result<Vec<WindowTarget>, VideoCaptureError> {
-        let mut windows: Vec<WindowTarget> = shareable_content()?
+        let listed: Vec<(SCWindow, WindowTarget)> = shareable_content()?
             .windows()
             .into_iter()
-            .filter(|window| window.is_on_screen())
-            .filter_map(window_target)
+            .filter_map(|window| window_target(&window).map(|target| (window, target)))
+            .collect();
+        let thumbnails = thumbnails(&listed, |(window, target)| {
+            let filter = SCContentFilter::create().with_window(window).build();
+            thumbnail(&filter, target.width, target.height)
+        });
+        let mut windows: Vec<WindowTarget> = listed
+            .into_iter()
+            .zip(thumbnails)
+            .map(|((_, target), thumbnail_data_url)| WindowTarget {
+                thumbnail_data_url,
+                ..target
+            })
             .collect();
         windows.sort_by(|a, b| {
             a.app_name
@@ -2661,13 +2680,105 @@ mod screen {
             .find(|window| window.window_id() == window_id))
     }
 
-    fn window_target(window: SCWindow) -> Option<WindowTarget> {
+    /// Widest picker thumbnail, as on Windows.
+    const MAX_THUMB_WIDTH: u32 = 320;
+    /// How many thumbnails are captured at once. Each is one ScreenCaptureKit screenshot.
+    const THUMB_WORKERS: usize = 6;
+
+    /// One thumbnail per item, in order, captured a few at a time: the picker waits for
+    /// the whole list, and a screenshot each one after the other added up with many
+    /// windows open.
+    fn thumbnails<T: Sync>(
+        items: &[T],
+        capture: impl Fn(&T) -> Option<String> + Sync,
+    ) -> Vec<Option<String>> {
+        let mut out = vec![None; items.len()];
+        std::thread::scope(|scope| {
+            for (chunk, slots) in items
+                .chunks(THUMB_WORKERS.max(1))
+                .zip(out.chunks_mut(THUMB_WORKERS.max(1)))
+            {
+                let handles: Vec<_> = chunk
+                    .iter()
+                    .map(|item| scope.spawn(|| capture(item)))
+                    .collect();
+                for (slot, handle) in slots.iter_mut().zip(handles) {
+                    *slot = handle.join().ok().flatten();
+                }
+            }
+        });
+        out
+    }
+
+    /// A PNG data URL of what the filter shows, at most `MAX_THUMB_WIDTH` wide, for the
+    /// share picker. It is drawn here and never leaves the device.
+    ///
+    /// ScreenCaptureKit's screenshot call needs macOS 14; on macOS 13 it fails and the
+    /// picker shows the name without a picture, as it did before.
+    fn thumbnail(filter: &SCContentFilter, width: u32, height: u32) -> Option<String> {
+        use base64::Engine as _;
+        use screencapturekit::screenshot_manager::{CGImageExt, SCScreenshotManager};
+
+        if width == 0 || height == 0 {
+            return None;
+        }
+        let scale = (MAX_THUMB_WIDTH as f64 / width as f64).min(1.0);
+        let thumb_width = ((width as f64 * scale).round() as u32).max(1);
+        let thumb_height = ((height as f64 * scale).round() as u32).max(1);
+        let config = SCStreamConfiguration::new()
+            .with_width(thumb_width)
+            .with_height(thumb_height)
+            .with_shows_cursor(false)
+            .with_scales_to_fit(true);
+        let image = SCScreenshotManager::capture_image(filter, &config).ok()?;
+        let (image_width, image_height) = (image.width() as u32, image.height() as u32);
+        let rgba = image.rgba_data().ok()?;
+        if image_width == 0
+            || image_height == 0
+            || rgba.len() < (image_width as usize) * (image_height as usize) * 4
+        {
+            return None;
+        }
+        let mut png_bytes = Vec::new();
+        {
+            let mut encoder = png::Encoder::new(&mut png_bytes, image_width, image_height);
+            encoder.set_color(png::ColorType::Rgba);
+            encoder.set_depth(png::BitDepth::Eight);
+            let mut writer = encoder.write_header().ok()?;
+            writer
+                .write_image_data(&rgba[..(image_width as usize) * (image_height as usize) * 4])
+                .ok()?;
+        }
+        let encoded = base64::engine::general_purpose::STANDARD.encode(&png_bytes);
+        Some(format!("data:image/png;base64,{encoded}"))
+    }
+
+    /// Smallest window worth offering. System helpers that pass the other checks (status
+    /// dots, hidden utility panels) are smaller than this.
+    const MIN_WINDOW_SIDE: f64 = 64.0;
+
+    /// A window someone would pick to share, or None. ScreenCaptureKit also reports the
+    /// system's own windows (the menu bar, the orange microphone dot, Control Center
+    /// panels), which sit above the normal layer and often belong to no app.
+    fn window_target(window: &SCWindow) -> Option<WindowTarget> {
+        if window.window_layer() != 0 {
+            return None;
+        }
         let title = window.title()?;
         if title.trim().is_empty() {
             return None;
         }
         let frame = window.frame();
+        if frame.size.width < MIN_WINDOW_SIDE || frame.size.height < MIN_WINDOW_SIDE {
+            return None;
+        }
         let application = window.owning_application();
+        if application
+            .as_ref()
+            .is_none_or(|app| app.bundle_identifier().trim().is_empty())
+        {
+            return None;
+        }
         let app_name = application
             .as_ref()
             .map(SCRunningApplication::application_name)
@@ -2690,10 +2801,14 @@ mod screen {
         })
     }
 
+    /// Every window, not only those on screen: a window on another desktop (Space), in
+    /// a hidden app or minimized is not on screen, and people share those too. Sharing
+    /// one works because the stream filter follows the window, not the screen.
+    /// `window_target` keeps out the system's own windows.
     fn shareable_content() -> Result<SCShareableContent, VideoCaptureError> {
         SCShareableContent::create()
             .with_exclude_desktop_windows(true)
-            .with_on_screen_windows_only(true)
+            .with_on_screen_windows_only(false)
             .get()
             .map_err(|error| VideoCaptureError::DeviceUnavailable {
                 message: format!(
