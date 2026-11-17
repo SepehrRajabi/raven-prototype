@@ -26,7 +26,11 @@ capture backend ─► I420 frame ─► ProfiledVideoFrameSink ─► RelayVide
 - **Capture** (`capture.rs`, `VideoCaptureManager::reconcile`), one runtime per source:
   - Camera — `nokhwa` (Media Foundation / AVFoundation / V4L2). On Windows,
     `directshow.rs` adds a DirectShow backend for devices Media Foundation cannot open,
-    notably software cameras such as OBS Virtual Camera.
+    notably software cameras such as OBS Virtual Camera. On macOS, `camera_access`
+    asks for permission before nokhwa opens the device (nokhwa locks the device first,
+    which fails without permission and never shows the macOS prompt), and
+    `alternative_formats` works around nokhwa's `Closest` matching only the exact
+    requested format and size, since Mac cameras offer no MJPEG.
   - Display and window — Windows.Graphics.Capture through `windows-capture` on
     Windows; ScreenCaptureKit on macOS; xdg-desktop-portal + PipeWire (`ashpd`) on
     Linux. `screen_capture_runtime_readiness` reports whether sharing can work.
