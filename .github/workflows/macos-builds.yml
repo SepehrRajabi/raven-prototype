@@ -1,0 +1,222 @@
+# The desktop app for macOS, one build per processor, each on a runner of that kind:
+#
+#   Raven_X.Y.Z_aarch64.dmg   Apple silicon (M1 and later)   built on macos-26
+#   Raven_X.Y.Z_x64.dmg       Intel                          built on macos-26-intel
+#
+# Both run on macOS 13 and later (bundle.macOS.minimumSystemVersion); the runners only
+# need to be new enough to build them: screencapturekit's Metal bridge (apple-metal)
+# needs the macOS 26 SDK, which macOS 15 images do not have by default. Each build is then
+# checked: the binary is for the right processor and macOS version, its signature holds,
+# and it loads nothing from outside macOS and the app itself.
+#
+# Release tags (v*) are signed with Raven's own certificate, "Raven Release Signing", when
+# the repository has it (scripts/macos-release-signing-certificate.sh), so an update keeps
+# the microphone, camera and screen recording permissions people gave the last version.
+# Everything else is signed ad hoc. Neither is a Developer ID and nothing is notarized, so
+# Gatekeeper asks before the first launch (see docs/releasing.md).
+#
+# A pushed v* tag that matches the app's version publishes the DMGs on its GitHub release,
+# creating the release if release.ps1 hasn't yet (infra/release/attach-to-github-release.sh).
+# Running this workflow by hand on the tag with "attach to release" ticked does the same,
+# for a run that failed.
+name: macOS builds
+
+on:
+  push:
+    branches: ["**"]
+    tags: ["v*"]
+    paths:
+      - ".github/workflows/macos-builds.yml"
+      - "apps/desktop/src-tauri/**"
+      - "apps/desktop/package.json"
+      - "apps/desktop/bun.lock"
+  pull_request:
+    paths:
+      - ".github/workflows/macos-builds.yml"
+      - "apps/desktop/src-tauri/**"
+      - "apps/desktop/package.json"
+      - "apps/desktop/bun.lock"
+  workflow_dispatch:
+    inputs:
+      attach_to_release:
+        description: "Attach the builds to the GitHub release of this tag (run on a v* tag)"
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: macos-builds-${{ github.ref }}
+  cancel-in-progress: ${{ !startsWith(github.ref, 'refs/tags/') }}
+
+env:
+  # The server a fresh install signs in to, as in release.ps1.
+  VITE_RAVEN_API_URL: ${{ vars.RAVEN_API_URL || 'https://mimir.rvn.bluehour.cloud' }}
+
+jobs:
+  build:
+    name: Build ${{ matrix.name }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 150
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: apple-silicon
+            runner: macos-26
+            target: aarch64-apple-darwin
+            arch: arm64
+          - name: intel
+            runner: macos-26-intel
+            target: x86_64-apple-darwin
+            arch: x86_64
+    steps:
+      - uses: actions/checkout@v5
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.4
+      - name: Install Rust
+        run: |
+          rustup toolchain install stable --profile minimal --target ${{ matrix.target }}
+          rustup default stable
+      # mozjpeg assembles its x86 SIMD code with NASM.
+      - name: Install NASM
+        if: matrix.arch == 'x86_64'
+        run: brew install nasm
+      # Downloaded crates and compiled dependencies, one cache per processor, keyed on
+      # Cargo.lock and the compiler; Raven's own crate is always rebuilt. Pull requests
+      # read the cache but don't save to it, so they can't push out the main branch's.
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: apps/desktop/src-tauri -> target
+          key: ${{ matrix.target }}
+          save-if: ${{ github.event_name != 'pull_request' }}
+      # Only release tags get the certificate, so a branch or pull request run never sees
+      # it. It goes into a keychain of its own, and Tauri is given just the identity's
+      # name: handed the certificate itself (APPLE_CERTIFICATE), Tauri imports it and then
+      # looks the identity up in a way that skips certificates macOS doesn't trust, and
+      # fails. No notarization variables are set: Apple notarizes Developer ID builds only.
+      - name: Choose the signature
+        env:
+          CERTIFICATE: ${{ startsWith(github.ref, 'refs/tags/v') && secrets.MACOS_SIGNING_CERTIFICATE || '' }}
+          CERTIFICATE_PASSWORD: ${{ startsWith(github.ref, 'refs/tags/v') && secrets.MACOS_SIGNING_CERTIFICATE_PASSWORD || '' }}
+        run: |
+          set -euo pipefail
+          if [ -z "$CERTIFICATE" ]; then
+            # Ad hoc: every part of the bundle signed consistently, with no identity behind it.
+            echo "RAVEN_SIGNED_BY=-" >> "$GITHUB_ENV"
+            exit 0
+          fi
+          keychain="$RUNNER_TEMP/raven-signing.keychain-db"
+          keychain_password=$(openssl rand -hex 24)
+          security create-keychain -p "$keychain_password" "$keychain"
+          security set-keychain-settings -lut 21600 "$keychain"
+          security unlock-keychain -p "$keychain_password" "$keychain"
+          printf '%s' "$CERTIFICATE" | base64 --decode > "$RUNNER_TEMP/signing.p12"
+          security import "$RUNNER_TEMP/signing.p12" -k "$keychain" -P "$CERTIFICATE_PASSWORD" -T /usr/bin/codesign
+          rm -f "$RUNNER_TEMP/signing.p12"
+          # Lets codesign use the key without a prompt nobody is there to answer.
+          security set-key-partition-list -S apple-tool:,apple: -s -k "$keychain_password" "$keychain" > /dev/null
+          security list-keychains -d user -s "$keychain" $(security list-keychains -d user | tr -d '"')
+          echo "RAVEN_SIGNED_BY=Raven Release Signing" >> "$GITHUB_ENV"
+      - name: Build
+        working-directory: apps/desktop
+        env:
+          APPLE_SIGNING_IDENTITY: ${{ env.RAVEN_SIGNED_BY }}
+        run: |
+          bun install --frozen-lockfile
+          bun run tauri build --target ${{ matrix.target }} --bundles app,dmg
+      - name: Check the app
+        working-directory: apps/desktop/src-tauri/target/${{ matrix.target }}/release/bundle
+        run: |
+          set -euo pipefail
+          app=macos/Raven.app
+          binary="$app/Contents/MacOS/raven-desktop"
+
+          archs=$(lipo -archs "$binary")
+          echo "Architectures: $archs"
+          if [ "$archs" != "${{ matrix.arch }}" ]; then
+            echo "Expected only ${{ matrix.arch }}." >&2
+            exit 1
+          fi
+
+          minos=$(vtool -show-build "$binary" | awk '$1 == "minos" { print $2; exit }')
+          echo "Minimum macOS: $minos"
+          if [ "$(printf '%s\n' "$minos" 13.0 | sort -V | tail -n 1)" != 13.0 ]; then
+            echo "The binary needs a newer macOS than 13.0, the oldest this app supports." >&2
+            exit 1
+          fi
+
+          codesign --verify --deep --strict --verbose=2 "$app"
+
+          # A release must carry the certificate, or every update asks for permissions again.
+          signature=$(codesign -dvv "$app" 2>&1)
+          if [ "$RAVEN_SIGNED_BY" = "-" ]; then
+            echo "$signature" | grep -q "^Signature=adhoc" || { echo "Expected an ad hoc signature." >&2; exit 1; }
+            echo "Signed ad hoc."
+          else
+            echo "$signature" | grep -qx "Authority=$RAVEN_SIGNED_BY" || { echo "Not signed by $RAVEN_SIGNED_BY." >&2; echo "$signature" >&2; exit 1; }
+            echo "Signed by $RAVEN_SIGNED_BY."
+          fi
+
+          # Everything the binary loads must come with macOS or with the app.
+          missing=0
+          for library in $(otool -L "$binary" | tail -n +2 | awk '{ print $1 }'); do
+            case "$library" in
+              /System/Library/* | /usr/lib/*) ;;
+              @rpath/* | @executable_path/* | @loader_path/*)
+                name=${library#*/}
+                if [ ! -e "$app/Contents/Frameworks/$name" ]; then
+                  echo "Not in the app: $library" >&2
+                  missing=1
+                fi
+                ;;
+              *)
+                echo "Outside macOS and the app: $library" >&2
+                missing=1
+                ;;
+            esac
+          done
+          if [ "$missing" -ne 0 ]; then
+            exit 1
+          fi
+          echo "All $(otool -L "$binary" | tail -n +2 | wc -l | tr -d ' ') linked libraries are part of macOS or the app."
+
+          dmg=$(ls dmg/*.dmg)
+          hdiutil verify "$dmg"
+      - name: Remove the signing keychain
+        if: always()
+        run: |
+          keychain="$RUNNER_TEMP/raven-signing.keychain-db"
+          if [ -f "$keychain" ]; then security delete-keychain "$keychain"; fi
+      - uses: actions/upload-artifact@v4
+        with:
+          name: macos-${{ matrix.name }}
+          path: apps/desktop/src-tauri/target/${{ matrix.target }}/release/bundle/dmg/*.dmg
+          if-no-files-found: error
+
+  attach:
+    name: Publish on the GitHub release
+    if: github.ref_type == 'tag' && (github.event_name == 'push' || inputs.attach_to_release)
+    needs: build
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          sparse-checkout: |
+            apps/desktop/src-tauri/tauri.conf.json
+            docs/release-notes
+            infra/release
+          sparse-checkout-cone-mode: false
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: macos-*
+          path: ${{ runner.temp }}/builds
+          merge-multiple: true
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: infra/release/attach-to-github-release.sh SHA256SUMS-macos "$RUNNER_TEMP/builds"

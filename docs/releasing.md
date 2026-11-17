@@ -104,19 +104,154 @@ The installers can also be downloaded from
 .\release.ps1 github -Version X.Y.Z
 ```
 
-The release holds the Windows installer, the AppImage and `SHA256SUMS`, with the release
-notes and install steps as its text. The server is not attached: self-hosters use the
+The release holds the Windows installer, the AppImage and `SHA256SUMS` from this command,
+and the [Linux packages](#linux-distribution-packages) and [macOS builds](#macos-builds)
+from GitHub Actions, with the release notes and install steps for all of them as its text
+(`infra/release/github-release.md`). The server is not attached: self-hosters use the
 Docker images, and the text links to them. Raven does not update from GitHub; it only ever
 reads `latest.json` on the Raven host.
+
+### Two ways in, one release
+
+Pushing a `v*` tag runs both workflows, and each publishes its files on that tag's GitHub
+release when its builds and checks pass. `release.ps1 github` pushes the tag itself, so a
+normal release needs nothing more. Whichever gets there first creates the release, with the
+same text; the other adds its files to it:
+
+- The command usually creates it, since the workflows take several minutes. They then add
+  their files, about 20 minutes later on a cold cache.
+- A tag pushed by hand (`git tag -a vX.Y.Z -m "Raven X.Y.Z" && git push origin vX.Y.Z`)
+  gets a release with the Linux packages and macOS builds only. Running the command for
+  that version later adds the Windows installer, the AppImage and `SHA256SUMS`.
+
+Neither side replaces a file that is already on the release. A workflow skips its files
+when its checksum file (`SHA256SUMS-macos`, `SHA256SUMS-linux-packages`) is already
+there, and stops if only some of its files are, naming the ones to delete. The command
+adds only what is missing and compares the rest with its build.
+
+A tag that doesn't match the app's version (`tauri.conf.json`) builds but is never
+published. That catches a forgotten version bump, and makes a test tag safe: for example,
+push `v0.0.0-signing-test` to check the macOS release signing, then delete the tag.
+
+A tag on GitHub, from either path, also publishes nothing to the Raven host: `latest.json`,
+the updater files and the Docker images still come only from `release.ps1`.
 
 This makes code public, because the repository is. The command tags the commit the
 installers were built from as `vX.Y.Z` and pushes the tag. It also moves GitHub's `main`
 forward to that commit, and stops if GitHub's `main` has diverged. Commits after the
 release commit stay local. Rehearsal builds are refused. It needs `gh auth login` once.
 
-A release that already exists is left alone and compared with this build. It downloads
-the release back and stops if a file differs: bump the version instead. If an upload died
-half way, the command names the draft to delete before running it again.
+A release that already exists gets only the files it lacks. The command then downloads its
+own files back and stops if one differs: bump the version instead. If an upload died half
+way, the command names the draft to delete before running it again.
+
+## Linux distribution packages
+
+GitHub Actions (`.github/workflows/linux-packages.yml`) builds native packages next to
+the AppImage. Each is built in its family's oldest supported release, then installed with
+the distro's package manager on the releases listed, where the binary's libraries are
+checked:
+
+| Package | Built on | Install-tested on |
+| --- | --- | --- |
+| `Raven_X.Y.Z_amd64.deb` | Ubuntu 22.04 | Debian 12, 13; Ubuntu 22.04, 24.04 |
+| `Raven_X.Y.Z_x86_64_fedora.rpm` | Fedora 44 | Fedora 44 |
+| `Raven_X.Y.Z_x86_64_el10.rpm` | AlmaLinux 10 | AlmaLinux 10, Rocky Linux 10 (EPEL and CRB enabled) |
+| `Raven_X.Y.Z_x86_64_opensuse.rpm` | openSUSE Leap 16.0 | Leap 16.0, Tumbleweed |
+| `raven-desktop-X.Y.Z-1-x86_64.pkg.tar.zst` | Arch Linux | Arch Linux |
+
+It runs on pushes and pull requests that touch the desktop's Rust side or the packaging,
+on every `v*` tag, and by hand. Each run keeps the packages as workflow artifacts. On a
+release tag they also go on the GitHub release with `SHA256SUMS-linux-packages` (see
+[Two ways in, one release](#two-ways-in-one-release)). If that step failed, run it again on
+the tag:
+
+```sh
+gh workflow run linux-packages.yml --ref vX.Y.Z -f attach_to_release=true
+```
+
+The packages are not signed, and the in-app updater only knows how
+to replace the AppImage: Raven installed from one of these packages still says when a
+new version is out, but installing it from Raven fails, so people update by installing
+the new package.
+
+To build one locally, with Docker, from the repository root (after `bun run build` in
+`apps/desktop`):
+
+```sh
+docker run --rm -v "$PWD:/src" -w /src fedora:44 sh -c \
+  'infra/release/linux/install-build-deps.sh && infra/release/linux/build-package.sh rpm out fedora'
+```
+
+## macOS builds
+
+GitHub Actions (`.github/workflows/macos-builds.yml`) builds the app for both kinds of
+Mac, each natively on a runner of that kind:
+
+| Build | For | Built on |
+| --- | --- | --- |
+| `Raven_X.Y.Z_aarch64.dmg` | Apple silicon (M1 and later), macOS 13+ | `macos-26` |
+| `Raven_X.Y.Z_x64.dmg` | Intel, macOS 13+ | `macos-26-intel` |
+
+Each build is checked before it is kept: the binary is for that processor only, needs no
+macOS newer than 13.0, its signature verifies, and it loads nothing from outside macOS
+and the app (no Homebrew libraries). The runners are macOS 26 because screencapturekit's
+Metal bridge needs its SDK; what the app runs on is set by the deployment target, not the
+runner.
+
+It runs when the same things change as for the Linux packages, on every `v*` tag, and by
+hand. The DMGs are kept as workflow artifacts. On a release tag they also go on the GitHub
+release with `SHA256SUMS-macos` (see [Two ways in, one release](#two-ways-in-one-release)).
+If that step failed, run it again on the tag:
+
+```sh
+gh workflow run macos-builds.yml --ref vX.Y.Z -f attach_to_release=true
+```
+
+Neither is signed with an Apple Developer ID
+or notarized, so macOS refuses the first launch of a downloaded copy: open **System
+Settings › Privacy & Security** and choose **Open Anyway** under the message about Raven,
+once. There are no macOS updater artifacts either (`latest.json` has no macOS entry), so
+people update by installing the new DMG.
+
+### The release signing certificate
+
+Builds of a `v*` tag are signed with Raven's own self-signed certificate, "Raven Release
+Signing", when the repository has it; every other build is signed ad hoc. macOS keeps a
+permission (microphone, camera, screen recording) for the certificate an app is signed
+with, so a new version signed with the same one keeps the permissions people gave the last.
+An ad hoc build is identified by the hash of its own code, so each version is asked again.
+The certificate does not make Raven trusted: the first launch still needs **Open Anyway**.
+
+Make it once, on a Mac, and keep it:
+
+```sh
+apps/desktop/scripts/macos-release-signing-certificate.sh ~/raven-release-signing
+base64 -i ~/raven-release-signing/raven-release-signing.p12 | gh secret set MACOS_SIGNING_CERTIFICATE
+gh secret set MACOS_SIGNING_CERTIFICATE_PASSWORD < ~/raven-release-signing/password.txt
+```
+
+- Keep the folder offline and backed up. Do not make a second one: a new certificate is a
+  new identity, so everyone is asked for the permissions again.
+- The certificate lasts ten years (`certificate.txt` has its expiry and fingerprint).
+- The workflow imports it into a keychain of its own and gives Tauri only the identity's
+  name. Do not set `APPLE_CERTIFICATE` instead: Tauri then imports the certificate itself
+  and fails to find the identity, because it skips certificates macOS doesn't trust.
+- Only release tags get the secret, so branch and pull request runs never see it. The
+  workflow fails a tag build that is not signed by the certificate, but only when the
+  secret is set: without it a tag build is signed ad hoc and passes.
+- It is not in the login keychain. Local builds use "Raven Local Code Signing"
+  (`scripts/macos-signing-identity.sh`), so an app built on a developer's Mac never
+  inherits the permissions people gave a release.
+- Switching to an Apple Developer ID later is also a new identity, and asks everyone once.
+
+To build one locally, on a Mac, from `apps/desktop`:
+
+```sh
+bun run tauri build --target aarch64-apple-darwin --bundles app,dmg   # or x86_64-apple-darwin
+```
+
+An Intel build needs `nasm` (`brew install nasm`) for mozjpeg's SIMD code.
 
 ## What a friend sees
 
