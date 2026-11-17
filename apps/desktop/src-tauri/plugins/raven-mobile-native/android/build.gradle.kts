@@ -7,12 +7,18 @@ android {
     namespace = "app.raven.mobilenative.plugin"
     compileSdk = 36
     defaultConfig { minSdk = 26; consumerProguardFiles("consumer-rules.pro") }
-    sourceSets.getByName("main").jniLibs.srcDir(providers.gradleProperty("ravenNativeLibs").get())
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_1_8
         targetCompatibility = JavaVersion.VERSION_1_8
     }
     kotlinOptions { jvmTarget = "1.8" }
+}
+
+// The WebRTC native libraries staged by the Rust build. Added through the variant API:
+// with AGP 9, android.sourceSets in a library hands back a type its Kotlin DSL cannot cast.
+val ravenNativeLibs = providers.gradleProperty("ravenNativeLibs").get()
+androidComponents {
+    onVariants { variant -> variant.sources.jniLibs?.addStaticSourceDirectory(ravenNativeLibs) }
 }
 
 dependencies {
