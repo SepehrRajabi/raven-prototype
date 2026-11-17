@@ -97,7 +97,7 @@ export function HomeView({
           {liveNests.length > 0 ? (
             <section>
               <SectionLabel className="mb-1">Live now</SectionLabel>
-              <div className="grid gap-3 sm:grid-cols-2">
+              <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
                 {liveNests.map((nest) => (
                   <LiveNestCard
                     key={nest.id}

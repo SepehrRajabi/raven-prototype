@@ -33,5 +33,13 @@ apps/desktop/src-tauri/permissions/generated/
 # Finder folder settings on macOS.
 .DS_Store
 
+# Tauri-generated Android application projects.
+/apps/desktop/src-tauri/gen/android/
+/apps/desktop/src-tauri/plugins/raven-mobile-native/android/build/
+/apps/desktop/src-tauri/plugins/raven-mobile-native/android/.gradle/
+/apps/desktop/src-tauri/plugins/raven-mobile-native/android/.tauri/
+# Schemas written by Android builds; capabilities validate against desktop-schema.json.
+/apps/desktop/src-tauri/gen/schemas/android-schema.json
+/apps/desktop/src-tauri/gen/schemas/mobile-schema.json
 # LLM-written plans never enter the repo (see CLAUDE.md).
 docs/plans/

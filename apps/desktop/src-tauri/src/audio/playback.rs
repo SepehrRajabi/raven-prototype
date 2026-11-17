@@ -921,6 +921,10 @@ impl OutputMixer {
     /// opened (or why it could not) through session health, and keeps retrying, so a
     /// missing or busy speaker never blocks joining or publishing.
     pub(crate) fn start(self: &Arc<Self>, app: &AppHandle, shared: &SharedAudioEngineState) {
+        // Never play over another app that holds audio focus (e.g. a phone call).
+        if !crate::media_eligibility::audio_allowed(app) {
+            return;
+        }
         if self.running.swap(true, Ordering::SeqCst) {
             return;
         }

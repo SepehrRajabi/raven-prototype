@@ -345,1686 +345,6 @@
       "description": "Permission identifier",
       "oneOf": [
         {
-          "description": "Raven's main window: every Raven command.\n#### This permission set includes:\n\n- `allow-secret-get`\n- `allow-secret-set`\n- `allow-secret-delete`\n- `allow-attachment-prepare`\n- `allow-attachment-read`\n- `allow-attachment-discard`\n- `allow-attachment-sweep`\n- `allow-attachment-save`\n- `allow-library-stage`\n- `allow-library-read`\n- `allow-library-discard`\n- `allow-library-pick-pack`\n- `allow-read-ravenpack`\n- `allow-save-export-file`\n- `allow-audio-get-state`\n- `allow-audio-get-capabilities`\n- `allow-audio-get-network-totals`\n- `allow-audio-get-channel-health`\n- `allow-audio-list-input-devices`\n- `allow-audio-list-output-devices`\n- `allow-audio-get-selected-output-device`\n- `allow-audio-set-output-device`\n- `allow-audio-set-output-muted`\n- `allow-audio-set-output-volume`\n- `allow-audio-play-ui-sound`\n- `allow-audio-play-sound-cue`\n- `allow-audio-preview-sound-cue`\n- `allow-audio-set-sound-cue-settings`\n- `allow-audio-test-output-device`\n- `allow-audio-set-remote-audio-receiving`\n- `allow-audio-list-app-audio-sources`\n- `allow-audio-list-presets`\n- `allow-audio-apply-preset-to-local-channel`\n- `allow-audio-apply-preset-to-remote-track`\n- `allow-audio-save-local-channel-as-preset`\n- `allow-audio-save-remote-track-as-preset`\n- `allow-audio-delete-user-preset`\n- `allow-audio-rename-user-preset`\n- `allow-audio-reset-local-channel-processor-chain`\n- `allow-audio-reset-remote-track-processor-chain`\n- `allow-audio-reset-local-channel-to-safe-defaults`\n- `allow-audio-reset-remote-track-to-safe-defaults`\n- `allow-audio-set-local-safety-limiter-ceiling`\n- `allow-audio-set-remote-safety-limiter-ceiling`\n- `allow-audio-add-local-source`\n- `allow-audio-remove-local-source`\n- `allow-audio-rename-local-source`\n- `allow-audio-set-local-source-enabled`\n- `allow-audio-set-local-source-capture-device`\n- `allow-audio-set-local-channel-gain`\n- `allow-audio-set-local-channel-mute`\n- `allow-audio-set-local-webrtc-processing`\n- `allow-audio-publish-audio-source`\n- `allow-audio-unpublish-audio-source`\n- `allow-audio-connect-room`\n- `allow-audio-disconnect-room`\n- `allow-audio-set-call-active`\n- `allow-audio-set-monitoring`\n- `allow-audio-publish-local-source-metadata`\n- `allow-audio-unpublish-local-source-metadata`\n- `allow-audio-update-published-track-metadata`\n- `allow-audio-add-or-update-remote-track`\n- `allow-audio-remove-remote-track`\n- `allow-audio-set-remote-track-gain`\n- `allow-audio-set-auto-level`\n- `allow-audio-resume-auto-level`\n- `allow-audio-set-remote-track-mute`\n- `allow-audio-set-remote-noise-cleanup`\n- `allow-audio-add-processor-to-remote-track`\n- `allow-audio-set-remote-processor-enabled`\n- `allow-audio-remove-processor-from-remote-track`\n- `allow-audio-update-remote-processor-parameter`\n- `allow-audio-reorder-remote-processors`\n- `allow-audio-set-processor-enabled`\n- `allow-audio-set-processor-parameter`\n- `allow-audio-add-processor-to-local-channel`\n- `allow-audio-remove-processor-from-local-channel`\n- `allow-audio-update-processor-parameter`\n- `allow-audio-reorder-processors`\n- `allow-video-get-state`\n- `allow-video-get-capabilities`\n- `allow-video-get-network-totals`\n- `allow-video-get-quality-report`\n- `allow-video-get-stream-stats`\n- `allow-video-get-stream-endpoint`\n- `allow-video-set-local-preview-enabled`\n- `allow-video-set-self-preview-mode`\n- `allow-video-set-presentation-profile`\n- `allow-video-set-remote-video-receiving`\n- `allow-video-list-cameras`\n- `allow-video-list-displays`\n- `allow-video-list-windows`\n- `allow-video-connect-room`\n- `allow-video-disconnect-room`\n- `allow-video-start-camera`\n- `allow-video-start-display-share`\n- `allow-video-start-window-share`\n- `allow-video-set-source-profile`\n- `allow-video-stop-source`\n- `allow-overlay-is-supported`\n- `allow-overlay-get-settings`\n- `allow-overlay-update-settings`\n- `allow-overlay-toggle`\n- `allow-overlay-show`\n- `allow-overlay-hide`\n- `allow-overlay-set-content-size`\n- `allow-overlay-drag`\n- `allow-overlay-drag-release`\n- `allow-overlay-reset-position`\n- `allow-overlay-get-layout`\n- `allow-overlay-get-snapshot`\n- `allow-overlay-update-snapshot`\n- `allow-overlay-action`\n- `allow-media-hotkeys-get-settings`\n- `allow-media-hotkeys-update-settings`\n- `allow-push-to-talk-get-settings`\n- `allow-push-to-talk-update-settings`\n- `allow-thumbnail-toolbar-update`\n- `allow-notifications-supported`\n- `allow-notify-knock`\n- `allow-notify-message`\n- `allow-tray-update`\n- `allow-window-show-main`\n- `allow-window-lock-aspect`\n- `allow-tray-set-unread`\n- `allow-tray-get-settings`\n- `allow-tray-update-settings`\n- `allow-updater-get-state`\n- `allow-updater-check`\n- `allow-updater-download`\n- `allow-updater-install`\n- `allow-updater-set-busy`\n- `allow-diagnostics-log-ui-error`\n- `allow-workshop-publish`\n- `allow-workshop-stop`\n- `allow-workshop-connect`\n- `allow-workshop-disconnect`\n- `allow-workshop-stop-all`",
-          "type": "string",
-          "const": "main-window",
-          "markdownDescription": "Raven's main window: every Raven command.\n#### This permission set includes:\n\n- `allow-secret-get`\n- `allow-secret-set`\n- `allow-secret-delete`\n- `allow-attachment-prepare`\n- `allow-attachment-read`\n- `allow-attachment-discard`\n- `allow-attachment-sweep`\n- `allow-attachment-save`\n- `allow-library-stage`\n- `allow-library-read`\n- `allow-library-discard`\n- `allow-library-pick-pack`\n- `allow-read-ravenpack`\n- `allow-save-export-file`\n- `allow-audio-get-state`\n- `allow-audio-get-capabilities`\n- `allow-audio-get-network-totals`\n- `allow-audio-get-channel-health`\n- `allow-audio-list-input-devices`\n- `allow-audio-list-output-devices`\n- `allow-audio-get-selected-output-device`\n- `allow-audio-set-output-device`\n- `allow-audio-set-output-muted`\n- `allow-audio-set-output-volume`\n- `allow-audio-play-ui-sound`\n- `allow-audio-play-sound-cue`\n- `allow-audio-preview-sound-cue`\n- `allow-audio-set-sound-cue-settings`\n- `allow-audio-test-output-device`\n- `allow-audio-set-remote-audio-receiving`\n- `allow-audio-list-app-audio-sources`\n- `allow-audio-list-presets`\n- `allow-audio-apply-preset-to-local-channel`\n- `allow-audio-apply-preset-to-remote-track`\n- `allow-audio-save-local-channel-as-preset`\n- `allow-audio-save-remote-track-as-preset`\n- `allow-audio-delete-user-preset`\n- `allow-audio-rename-user-preset`\n- `allow-audio-reset-local-channel-processor-chain`\n- `allow-audio-reset-remote-track-processor-chain`\n- `allow-audio-reset-local-channel-to-safe-defaults`\n- `allow-audio-reset-remote-track-to-safe-defaults`\n- `allow-audio-set-local-safety-limiter-ceiling`\n- `allow-audio-set-remote-safety-limiter-ceiling`\n- `allow-audio-add-local-source`\n- `allow-audio-remove-local-source`\n- `allow-audio-rename-local-source`\n- `allow-audio-set-local-source-enabled`\n- `allow-audio-set-local-source-capture-device`\n- `allow-audio-set-local-channel-gain`\n- `allow-audio-set-local-channel-mute`\n- `allow-audio-set-local-webrtc-processing`\n- `allow-audio-publish-audio-source`\n- `allow-audio-unpublish-audio-source`\n- `allow-audio-connect-room`\n- `allow-audio-disconnect-room`\n- `allow-audio-set-call-active`\n- `allow-audio-set-monitoring`\n- `allow-audio-publish-local-source-metadata`\n- `allow-audio-unpublish-local-source-metadata`\n- `allow-audio-update-published-track-metadata`\n- `allow-audio-add-or-update-remote-track`\n- `allow-audio-remove-remote-track`\n- `allow-audio-set-remote-track-gain`\n- `allow-audio-set-auto-level`\n- `allow-audio-resume-auto-level`\n- `allow-audio-set-remote-track-mute`\n- `allow-audio-set-remote-noise-cleanup`\n- `allow-audio-add-processor-to-remote-track`\n- `allow-audio-set-remote-processor-enabled`\n- `allow-audio-remove-processor-from-remote-track`\n- `allow-audio-update-remote-processor-parameter`\n- `allow-audio-reorder-remote-processors`\n- `allow-audio-set-processor-enabled`\n- `allow-audio-set-processor-parameter`\n- `allow-audio-add-processor-to-local-channel`\n- `allow-audio-remove-processor-from-local-channel`\n- `allow-audio-update-processor-parameter`\n- `allow-audio-reorder-processors`\n- `allow-video-get-state`\n- `allow-video-get-capabilities`\n- `allow-video-get-network-totals`\n- `allow-video-get-quality-report`\n- `allow-video-get-stream-stats`\n- `allow-video-get-stream-endpoint`\n- `allow-video-set-local-preview-enabled`\n- `allow-video-set-self-preview-mode`\n- `allow-video-set-presentation-profile`\n- `allow-video-set-remote-video-receiving`\n- `allow-video-list-cameras`\n- `allow-video-list-displays`\n- `allow-video-list-windows`\n- `allow-video-connect-room`\n- `allow-video-disconnect-room`\n- `allow-video-start-camera`\n- `allow-video-start-display-share`\n- `allow-video-start-window-share`\n- `allow-video-set-source-profile`\n- `allow-video-stop-source`\n- `allow-overlay-is-supported`\n- `allow-overlay-get-settings`\n- `allow-overlay-update-settings`\n- `allow-overlay-toggle`\n- `allow-overlay-show`\n- `allow-overlay-hide`\n- `allow-overlay-set-content-size`\n- `allow-overlay-drag`\n- `allow-overlay-drag-release`\n- `allow-overlay-reset-position`\n- `allow-overlay-get-layout`\n- `allow-overlay-get-snapshot`\n- `allow-overlay-update-snapshot`\n- `allow-overlay-action`\n- `allow-media-hotkeys-get-settings`\n- `allow-media-hotkeys-update-settings`\n- `allow-push-to-talk-get-settings`\n- `allow-push-to-talk-update-settings`\n- `allow-thumbnail-toolbar-update`\n- `allow-notifications-supported`\n- `allow-notify-knock`\n- `allow-notify-message`\n- `allow-tray-update`\n- `allow-window-show-main`\n- `allow-window-lock-aspect`\n- `allow-tray-set-unread`\n- `allow-tray-get-settings`\n- `allow-tray-update-settings`\n- `allow-updater-get-state`\n- `allow-updater-check`\n- `allow-updater-download`\n- `allow-updater-install`\n- `allow-updater-set-busy`\n- `allow-diagnostics-log-ui-error`\n- `allow-workshop-publish`\n- `allow-workshop-stop`\n- `allow-workshop-connect`\n- `allow-workshop-disconnect`\n- `allow-workshop-stop-all`"
-        },
-        {
-          "description": "Picture-in-picture windows: read the video state and the loopback frame endpoint, keep their aspect, and raise the main window.\n#### This permission set includes:\n\n- `allow-video-get-state`\n- `allow-video-get-stream-endpoint`\n- `allow-window-lock-aspect`\n- `allow-window-show-main`\n- `allow-diagnostics-log-ui-error`",
-          "type": "string",
-          "const": "picture-in-picture-commands",
-          "markdownDescription": "Picture-in-picture windows: read the video state and the loopback frame endpoint, keep their aspect, and raise the main window.\n#### This permission set includes:\n\n- `allow-video-get-state`\n- `allow-video-get-stream-endpoint`\n- `allow-window-lock-aspect`\n- `allow-window-show-main`\n- `allow-diagnostics-log-ui-error`"
-        },
-        {
-          "description": "The Studio (mixer) window: mixer and playback controls. Capture, monitoring and joining a call stay with the main window.\n#### This permission set includes:\n\n- `allow-audio-get-state`\n- `allow-audio-get-capabilities`\n- `allow-audio-get-network-totals`\n- `allow-audio-get-channel-health`\n- `allow-audio-list-input-devices`\n- `allow-audio-list-output-devices`\n- `allow-audio-get-selected-output-device`\n- `allow-audio-set-output-device`\n- `allow-audio-set-output-muted`\n- `allow-audio-set-output-volume`\n- `allow-audio-play-ui-sound`\n- `allow-audio-play-sound-cue`\n- `allow-audio-preview-sound-cue`\n- `allow-audio-set-sound-cue-settings`\n- `allow-audio-test-output-device`\n- `allow-audio-set-remote-audio-receiving`\n- `allow-audio-list-presets`\n- `allow-audio-apply-preset-to-local-channel`\n- `allow-audio-apply-preset-to-remote-track`\n- `allow-audio-save-local-channel-as-preset`\n- `allow-audio-save-remote-track-as-preset`\n- `allow-audio-delete-user-preset`\n- `allow-audio-rename-user-preset`\n- `allow-audio-reset-local-channel-processor-chain`\n- `allow-audio-reset-remote-track-processor-chain`\n- `allow-audio-reset-local-channel-to-safe-defaults`\n- `allow-audio-reset-remote-track-to-safe-defaults`\n- `allow-audio-set-local-safety-limiter-ceiling`\n- `allow-audio-set-remote-safety-limiter-ceiling`\n- `allow-audio-remove-local-source`\n- `allow-audio-rename-local-source`\n- `allow-audio-set-local-channel-gain`\n- `allow-audio-set-local-channel-mute`\n- `allow-audio-set-local-webrtc-processing`\n- `allow-audio-unpublish-audio-source`\n- `allow-audio-disconnect-room`\n- `allow-audio-publish-local-source-metadata`\n- `allow-audio-unpublish-local-source-metadata`\n- `allow-audio-update-published-track-metadata`\n- `allow-audio-add-or-update-remote-track`\n- `allow-audio-remove-remote-track`\n- `allow-audio-set-remote-track-gain`\n- `allow-audio-set-auto-level`\n- `allow-audio-resume-auto-level`\n- `allow-audio-set-remote-track-mute`\n- `allow-audio-set-remote-noise-cleanup`\n- `allow-audio-add-processor-to-remote-track`\n- `allow-audio-set-remote-processor-enabled`\n- `allow-audio-remove-processor-from-remote-track`\n- `allow-audio-update-remote-processor-parameter`\n- `allow-audio-reorder-remote-processors`\n- `allow-audio-set-processor-enabled`\n- `allow-audio-set-processor-parameter`\n- `allow-audio-add-processor-to-local-channel`\n- `allow-audio-remove-processor-from-local-channel`\n- `allow-audio-update-processor-parameter`\n- `allow-audio-reorder-processors`\n- `allow-diagnostics-log-ui-error`",
-          "type": "string",
-          "const": "studio-window-commands",
-          "markdownDescription": "The Studio (mixer) window: mixer and playback controls. Capture, monitoring and joining a call stay with the main window.\n#### This permission set includes:\n\n- `allow-audio-get-state`\n- `allow-audio-get-capabilities`\n- `allow-audio-get-network-totals`\n- `allow-audio-get-channel-health`\n- `allow-audio-list-input-devices`\n- `allow-audio-list-output-devices`\n- `allow-audio-get-selected-output-device`\n- `allow-audio-set-output-device`\n- `allow-audio-set-output-muted`\n- `allow-audio-set-output-volume`\n- `allow-audio-play-ui-sound`\n- `allow-audio-play-sound-cue`\n- `allow-audio-preview-sound-cue`\n- `allow-audio-set-sound-cue-settings`\n- `allow-audio-test-output-device`\n- `allow-audio-set-remote-audio-receiving`\n- `allow-audio-list-presets`\n- `allow-audio-apply-preset-to-local-channel`\n- `allow-audio-apply-preset-to-remote-track`\n- `allow-audio-save-local-channel-as-preset`\n- `allow-audio-save-remote-track-as-preset`\n- `allow-audio-delete-user-preset`\n- `allow-audio-rename-user-preset`\n- `allow-audio-reset-local-channel-processor-chain`\n- `allow-audio-reset-remote-track-processor-chain`\n- `allow-audio-reset-local-channel-to-safe-defaults`\n- `allow-audio-reset-remote-track-to-safe-defaults`\n- `allow-audio-set-local-safety-limiter-ceiling`\n- `allow-audio-set-remote-safety-limiter-ceiling`\n- `allow-audio-remove-local-source`\n- `allow-audio-rename-local-source`\n- `allow-audio-set-local-channel-gain`\n- `allow-audio-set-local-channel-mute`\n- `allow-audio-set-local-webrtc-processing`\n- `allow-audio-unpublish-audio-source`\n- `allow-audio-disconnect-room`\n- `allow-audio-publish-local-source-metadata`\n- `allow-audio-unpublish-local-source-metadata`\n- `allow-audio-update-published-track-metadata`\n- `allow-audio-add-or-update-remote-track`\n- `allow-audio-remove-remote-track`\n- `allow-audio-set-remote-track-gain`\n- `allow-audio-set-auto-level`\n- `allow-audio-resume-auto-level`\n- `allow-audio-set-remote-track-mute`\n- `allow-audio-set-remote-noise-cleanup`\n- `allow-audio-add-processor-to-remote-track`\n- `allow-audio-set-remote-processor-enabled`\n- `allow-audio-remove-processor-from-remote-track`\n- `allow-audio-update-remote-processor-parameter`\n- `allow-audio-reorder-remote-processors`\n- `allow-audio-set-processor-enabled`\n- `allow-audio-set-processor-parameter`\n- `allow-audio-add-processor-to-local-channel`\n- `allow-audio-remove-processor-from-local-channel`\n- `allow-audio-update-processor-parameter`\n- `allow-audio-reorder-processors`\n- `allow-diagnostics-log-ui-error`"
-        },
-        {
-          "description": "The voice overlay: reads its settings, layout and snapshot, sizes and drags itself, sends card actions to the main window, and reads the hotkeys it shows in its titles.\n#### This permission set includes:\n\n- `allow-overlay-get-settings`\n- `allow-overlay-get-layout`\n- `allow-overlay-get-snapshot`\n- `allow-overlay-set-content-size`\n- `allow-overlay-drag`\n- `allow-overlay-drag-release`\n- `allow-overlay-action`\n- `allow-media-hotkeys-get-settings`\n- `allow-diagnostics-log-ui-error`",
-          "type": "string",
-          "const": "voice-overlay-commands",
-          "markdownDescription": "The voice overlay: reads its settings, layout and snapshot, sizes and drags itself, sends card actions to the main window, and reads the hotkeys it shows in its titles.\n#### This permission set includes:\n\n- `allow-overlay-get-settings`\n- `allow-overlay-get-layout`\n- `allow-overlay-get-snapshot`\n- `allow-overlay-set-content-size`\n- `allow-overlay-drag`\n- `allow-overlay-drag-release`\n- `allow-overlay-action`\n- `allow-media-hotkeys-get-settings`\n- `allow-diagnostics-log-ui-error`"
-        },
-        {
-          "description": "Enables the attachment_discard command without any pre-configured scope.",
-          "type": "string",
-          "const": "allow-attachment-discard",
-          "markdownDescription": "Enables the attachment_discard command without any pre-configured scope."
-        },
-        {
-          "description": "Enables the attachment_prepare command without any pre-configured scope.",
-          "type": "string",
-          "const": "allow-attachment-prepare",
-          "markdownDescription": "Enables the attachment_prepare command without any pre-configured scope."
-        },
-        {
-          "description": "Enables the attachment_read command without any pre-configured scope.",
-          "type": "string",
-          "const": "allow-attachment-read",
-          "markdownDescription": "Enables the attachment_read command without any pre-configured scope."
-        },
-        {
-          "description": "Enables the attachment_save command without any pre-configured scope.",
-          "type": "string",
-          "const": "allow-attachment-save",
-          "markdownDescription": "Enables the attachment_save command without any pre-configured scope."
-        },
-        {
-          "description": "Enables the attachment_sweep command without any pre-configured scope.",
-          "type": "string",
-          "const": "allow-attachment-sweep",
-          "markdownDescription": "Enables the attachment_sweep command without any pre-configured scope."
-        },
-        {
-          "description": "Enables the audio_add_local_source command without any pre-configured scope.",
-          "type": "string",
-          "const": "allow-audio-add-local-source",
-          "markdownDescription": "Enables the audio_add_local_source command without any pre-configured scope."
-        },
-        {
-          "description": "Enables the audio_add_or_update_remote_track command without any pre-configured scope.",
-          "type": "string",
-          "const": "allow-audio-add-or-update-remote-track",
-          "markdownDescription": "Enables the audio_add_or_update_remote_track command without any pre-configured scope."
-        },
-        {
-          "description": "Enables the audio_add_processor_to_local_channel command without any pre-configured scope.",
-          "type": "string",
-          "const": "allow-audio-add-processor-to-local-channel",
-          "markdownDescription": "Enables the audio_add_processor_to_local_channel command without any pre-configured scope."
-        },
-        {
-          "description": "Enables the audio_add_processor_to_remote_track command without any pre-configured scope.",
-          "type": "string",
-          "const": "allow-audio-add-processor-to-remote-track",
-          "markdownDescription": "Enables the audio_add_processor_to_remote_track command without any pre-configured scope."
-        },
-        {
-          "description": "Enables the audio_apply_preset_to_local_channel command without any pre-configured scope.",
-          "type": "string",
-          "const": "allow-audio-apply-preset-to-local-channel",
-          "markdownDescription": "Enables the audio_apply_preset_to_local_channel command without any pre-configured scope."
-        },
-        {
-          "description": "Enables the audio_apply_preset_to_remote_track command without any pre-configured scope.",
-          "type": "string",
-          "const": "allow-audio-apply-preset-to-remote-track",
-          "markdownDescription": "Enables the audio_apply_preset_to_remote_track command without any pre-configured scope."
-        },
-        {
-          "description": "Enables the audio_connect_room command without any pre-configured scope.",
-          "type": "string",
-          "const": "allow-audio-connect-room",
-          "markdownDescription": "Enables the audio_connect_room command without any pre-configured scope."
-        },
-        {
-          "description": "Enables the audio_delete_user_preset command without any pre-configured scope.",
-          "type": "string",
-          "const": "allow-audio-delete-user-preset",
-          "markdownDescription": "Enables the audio_delete_user_preset command without any pre-configured scope."
-        },
-        {
-          "description": "Enables the audio_disconnect_room command without any pre-configured scope.",
-          "type": "string",
-          "const": "allow-audio-disconnect-room",
-          "markdownDescription": "Enables the audio_disconnect_room command without any pre-configured scope."
-        },
-        {
-          "description": "Enables the audio_get_capabilities command without any pre-configured scope.",
-          "type": "string",
-          "const": "allow-audio-get-capabilities",
-          "markdownDescription": "Enables the audio_get_capabilities command without any pre-configured scope."
-        },
-        {
-          "description": "Enables the audio_get_channel_health command without any pre-configured scope.",
-          "type": "string",
-          "const": "allow-audio-get-channel-health",
-          "markdownDescription": "Enables the audio_get_channel_health command without any pre-configured scope."
-        },
-        {
-          "description": "Enables the audio_get_network_totals command without any pre-configured scope.",
-          "type": "string",
-          "const": "allow-audio-get-network-totals",
-          "markdownDescription": "Enables the audio_get_network_totals command without any pre-configured scope."
-        },
-        {
-          "description": "Enables the audio_get_selected_output_device command without any pre-configured scope.",
-          "type": "string",
-          "const": "allow-audio-get-selected-output-device",
-          "markdownDescription": "Enables the audio_get_selected_output_device command without any pre-configured scope."
-        },
-        {
-          "description": "Enables the audio_get_state command without any pre-configured scope.",
-          "type": "string",
-          "const": "allow-audio-get-state",
-          "markdownDescription": "Enables the audio_get_state command without any pre-configured scope."
-        },
-        {
-          "description": "Enables the audio_list_app_audio_sources command without any pre-configured scope.",
-          "type": "string",
-          "const": "allow-audio-list-app-audio-sources",
-          "markdownDescription": "Enables the audio_list_app_audio_sources command without any pre-configured scope."
-        },
-        {
-          "description": "Enables the audio_list_input_devices command without any pre-configured scope.",
-          "type": "string",
-          "const": "allow-audio-list-input-devices",
-          "markdownDescription": "Enables the audio_list_input_devices command without any pre-configured scope."
-        },
-        {
-          "description": "Enables the audio_list_output_devices command without any pre-configured scope.",
-          "type": "string",
-          "const": "allow-audio-list-output-devices",
-          "markdownDescription": "Enables the audio_list_output_devices command without any pre-configured scope."
-        },
-        {
-          "description": "Enables the audio_list_presets command without any pre-configured scope.",
-          "type": "string",
-          "const": "allow-audio-list-presets",
-          "markdownDescription": "Enables the audio_list_presets command without any pre-configured scope."
-        },
-        {
-          "description": "Enables the audio_play_sound_cue command without any pre-configured scope.",
-          "type": "string",
-          "const": "allow-audio-play-sound-cue",
-          "markdownDescription": "Enables the audio_play_sound_cue command without any pre-configured scope."
-        },
-        {
-          "description": "Enables the audio_play_ui_sound command without any pre-configured scope.",
-          "type": "string",
-          "const": "allow-audio-play-ui-sound",
-          "markdownDescription": "Enables the audio_play_ui_sound command without any pre-configured scope."
-        },
-        {
-          "description": "Enables the audio_preview_sound_cue command without any pre-configured scope.",
-          "type": "string",
-          "const": "allow-audio-preview-sound-cue",
-          "markdownDescription": "Enables the audio_preview_sound_cue command without any pre-configured scope."
-        },
-        {
-          "description": "Enables the audio_publish_audio_source command without any pre-configured scope.",
-          "type": "string",
-          "const": "allow-audio-publish-audio-source",
-          "markdownDescription": "Enables the audio_publish_audio_source command without any pre-configured scope."
-        },
-        {
-          "description": "Enables the audio_publish_local_source_metadata command without any pre-configured scope.",
-          "type": "string",
-          "const": "allow-audio-publish-local-source-metadata",
-          "markdownDescription": "Enables the audio_publish_local_source_metadata command without any pre-configured scope."
-        },
-        {
-          "description": "Enables the audio_remove_local_source command without any pre-configured scope.",
-          "type": "string",
-          "const": "allow-audio-remove-local-source",
-          "markdownDescription": "Enables the audio_remove_local_source command without any pre-configured scope."
-        },
-        {
-          "description": "Enables the audio_remove_processor_from_local_channel command without any pre-configured scope.",
-          "type": "string",
-          "const": "allow-audio-remove-processor-from-local-channel",
-          "markdownDescription": "Enables the audio_remove_processor_from_local_channel command without any pre-configured scope."
-        },
-        {
-          "description": "Enables the audio_remove_processor_from_remote_track command without any pre-configured scope.",
-          "type": "string",
-          "const": "allow-audio-remove-processor-from-remote-track",
-          "markdownDescription": "Enables the audio_remove_processor_from_remote_track command without any pre-configured scope."
-        },
-        {
-          "description": "Enables the audio_remove_remote_track command without any pre-configured scope.",
-          "type": "string",
-          "const": "allow-audio-remove-remote-track",
-          "markdownDescription": "Enables the audio_remove_remote_track command without any pre-configured scope."
-        },
-        {
-          "description": "Enables the audio_rename_local_source command without any pre-configured scope.",
-          "type": "string",
-          "const": "allow-audio-rename-local-source",
-          "markdownDescription": "Enables the audio_rename_local_source command without any pre-configured scope."
-        },
-        {
-          "description": "Enables the audio_rename_user_preset command without any pre-configured scope.",
-          "type": "string",
-          "const": "allow-audio-rename-user-preset",
-          "markdownDescription": "Enables the audio_rename_user_preset command without any pre-configured scope."
-        },
-        {
-          "description": "Enables the audio_reorder_processors command without any pre-configured scope.",
-          "type": "string",
-          "const": "allow-audio-reorder-processors",
-          "markdownDescription": "Enables the audio_reorder_processors command without any pre-configured scope."
-        },
-        {
-          "description": "Enables the audio_reorder_remote_processors command without any pre-configured scope.",
-          "type": "string",
-          "const": "allow-audio-reorder-remote-processors",
-          "markdownDescription": "Enables the audio_reorder_remote_processors command without any pre-configured scope."
-        },
-        {
-          "description": "Enables the audio_reset_local_channel_processor_chain command without any pre-configured scope.",
-          "type": "string",
-          "const": "allow-audio-reset-local-channel-processor-chain",
-          "markdownDescription": "Enables the audio_reset_local_channel_processor_chain command without any pre-configured scope."
-        },
-        {
-          "description": "Enables the audio_reset_local_channel_to_safe_defaults command without any pre-configured scope.",
-          "type": "string",
-          "const": "allow-audio-reset-local-channel-to-safe-defaults",
-          "markdownDescription": "Enables the audio_reset_local_channel_to_safe_defaults command without any pre-configured scope."
-        },
-        {
-          "description": "Enables the audio_reset_remote_track_processor_chain command without any pre-configured scope.",
-          "type": "string",
-          "const": "allow-audio-reset-remote-track-processor-chain",
-          "markdownDescription": "Enables the audio_reset_remote_track_processor_chain command without any pre-configured scope."
-        },
-        {
-          "description": "Enables the audio_reset_remote_track_to_safe_defaults command without any pre-configured scope.",
-          "type": "string",
-          "const": "allow-audio-reset-remote-track-to-safe-defaults",
-          "markdownDescription": "Enables the audio_reset_remote_track_to_safe_defaults command without any pre-configured scope."
-        },
-        {
-          "description": "Enables the audio_resume_auto_level command without any pre-configured scope.",
-          "type": "string",
-          "const": "allow-audio-resume-auto-level",
-          "markdownDescription": "Enables the audio_resume_auto_level command without any pre-configured scope."
-        },
-        {
-          "description": "Enables the audio_save_local_channel_as_preset command without any pre-configured scope.",
-          "type": "string",
-          "const": "allow-audio-save-local-channel-as-preset",
-          "markdownDescription": "Enables the audio_save_local_channel_as_preset command without any pre-configured scope."
-        },
-        {
-          "description": "Enables the audio_save_remote_track_as_preset command without any pre-configured scope.",
-          "type": "string",
-          "const": "allow-audio-save-remote-track-as-preset",
-          "markdownDescription": "Enables the audio_save_remote_track_as_preset command without any pre-configured scope."
-        },
-        {
-          "description": "Enables the audio_set_auto_level command without any pre-configured scope.",
-          "type": "string",
-          "const": "allow-audio-set-auto-level",
-          "markdownDescription": "Enables the audio_set_auto_level command without any pre-configured scope."
-        },
-        {
-          "description": "Enables the audio_set_call_active command without any pre-configured scope.",
-          "type": "string",
-          "const": "allow-audio-set-call-active",
-          "markdownDescription": "Enables the audio_set_call_active command without any pre-configured scope."
-        },
-        {
-          "description": "Enables the audio_set_local_channel_gain command without any pre-configured scope.",
-          "type": "string",
-          "const": "allow-audio-set-local-channel-gain",
-          "markdownDescription": "Enables the audio_set_local_channel_gain command without any pre-configured scope."
-        },
-        {
-          "description": "Enables the audio_set_local_channel_mute command without any pre-configured scope.",
-          "type": "string",
-          "const": "allow-audio-set-local-channel-mute",
-          "markdownDescription": "Enables the audio_set_local_channel_mute command without any pre-configured scope."
-        },
-        {
-          "description": "Enables the audio_set_local_safety_limiter_ceiling command without any pre-configured scope.",
-          "type": "string",
-          "const": "allow-audio-set-local-safety-limiter-ceiling",
-          "markdownDescription": "Enables the audio_set_local_safety_limiter_ceiling command without any pre-configured scope."
-        },
-        {
-          "description": "Enables the audio_set_local_source_capture_device command without any pre-configured scope.",
-          "type": "string",
-          "const": "allow-audio-set-local-source-capture-device",
-          "markdownDescription": "Enables the audio_set_local_source_capture_device command without any pre-configured scope."
-        },
-        {
-          "description": "Enables the audio_set_local_source_enabled command without any pre-configured scope.",
-          "type": "string",
-          "const": "allow-audio-set-local-source-enabled",
-          "markdownDescription": "Enables the audio_set_local_source_enabled command without any pre-configured scope."
-        },
-        {
-          "description": "Enables the audio_set_local_webrtc_processing command without any pre-configured scope.",
-          "type": "string",
-          "const": "allow-audio-set-local-webrtc-processing",
-          "markdownDescription": "Enables the audio_set_local_webrtc_processing command without any pre-configured scope."
-        },
-        {
-          "description": "Enables the audio_set_monitoring command without any pre-configured scope.",
-          "type": "string",
-          "const": "allow-audio-set-monitoring",
-          "markdownDescription": "Enables the audio_set_monitoring command without any pre-configured scope."
-        },
-        {
-          "description": "Enables the audio_set_output_device command without any pre-configured scope.",
-          "type": "string",
-          "const": "allow-audio-set-output-device",
-          "markdownDescription": "Enables the audio_set_output_device command without any pre-configured scope."
-        },
-        {
-          "description": "Enables the audio_set_output_muted command without any pre-configured scope.",
-          "type": "string",
-          "const": "allow-audio-set-output-muted",
-          "markdownDescription": "Enables the audio_set_output_muted command without any pre-configured scope."
-        },
-        {
-          "description": "Enables the audio_set_output_volume command without any pre-configured scope.",
-          "type": "string",
-          "const": "allow-audio-set-output-volume",
-          "markdownDescription": "Enables the audio_set_output_volume command without any pre-configured scope."
-        },
-        {
-          "description": "Enables the audio_set_processor_enabled command without any pre-configured scope.",
-          "type": "string",
-          "const": "allow-audio-set-processor-enabled",
-          "markdownDescription": "Enables the audio_set_processor_enabled command without any pre-configured scope."
-        },
-        {
-          "description": "Enables the audio_set_processor_parameter command without any pre-configured scope.",
-          "type": "string",
-          "const": "allow-audio-set-processor-parameter",
-          "markdownDescription": "Enables the audio_set_processor_parameter command without any pre-configured scope."
-        },
-        {
-          "description": "Enables the audio_set_remote_audio_receiving command without any pre-configured scope.",
-          "type": "string",
-          "const": "allow-audio-set-remote-audio-receiving",
-          "markdownDescription": "Enables the audio_set_remote_audio_receiving command without any pre-configured scope."
-        },
-        {
-          "description": "Enables the audio_set_remote_noise_cleanup command without any pre-configured scope.",
-          "type": "string",
-          "const": "allow-audio-set-remote-noise-cleanup",
-          "markdownDescription": "Enables the audio_set_remote_noise_cleanup command without any pre-configured scope."
-        },
-        {
-          "description": "Enables the audio_set_remote_processor_enabled command without any pre-configured scope.",
-          "type": "string",
-          "const": "allow-audio-set-remote-processor-enabled",
-          "markdownDescription": "Enables the audio_set_remote_processor_enabled command without any pre-configured scope."
-        },
-        {
-          "description": "Enables the audio_set_remote_safety_limiter_ceiling command without any pre-configured scope.",
-          "type": "string",
-          "const": "allow-audio-set-remote-safety-limiter-ceiling",
-          "markdownDescription": "Enables the audio_set_remote_safety_limiter_ceiling command without any pre-configured scope."
-        },
-        {
-          "description": "Enables the audio_set_remote_track_gain command without any pre-configured scope.",
-          "type": "string",
-          "const": "allow-audio-set-remote-track-gain",
-          "markdownDescription": "Enables the audio_set_remote_track_gain command without any pre-configured scope."
-        },
-        {
-          "description": "Enables the audio_set_remote_track_mute command without any pre-configured scope.",
-          "type": "string",
-          "const": "allow-audio-set-remote-track-mute",
-          "markdownDescription": "Enables the audio_set_remote_track_mute command without any pre-configured scope."
-        },
-        {
-          "description": "Enables the audio_set_sound_cue_settings command without any pre-configured scope.",
-          "type": "string",
-          "const": "allow-audio-set-sound-cue-settings",
-          "markdownDescription": "Enables the audio_set_sound_cue_settings command without any pre-configured scope."
-        },
-        {
-          "description": "Enables the audio_test_output_device command without any pre-configured scope.",
-          "type": "string",
-          "const": "allow-audio-test-output-device",
-          "markdownDescription": "Enables the audio_test_output_device command without any pre-configured scope."
-        },
-        {
-          "description": "Enables the audio_unpublish_audio_source command without any pre-configured scope.",
-          "type": "string",
-          "const": "allow-audio-unpublish-audio-source",
-          "markdownDescription": "Enables the audio_unpublish_audio_source command without any pre-configured scope."
-        },
-        {
-          "description": "Enables the audio_unpublish_local_source_metadata command without any pre-configured scope.",
-          "type": "string",
-          "const": "allow-audio-unpublish-local-source-metadata",
-          "markdownDescription": "Enables the audio_unpublish_local_source_metadata command without any pre-configured scope."
-        },
-        {
-          "description": "Enables the audio_update_processor_parameter command without any pre-configured scope.",
-          "type": "string",
-          "const": "allow-audio-update-processor-parameter",
-          "markdownDescription": "Enables the audio_update_processor_parameter command without any pre-configured scope."
-        },
-        {
-          "description": "Enables the audio_update_published_track_metadata command without any pre-configured scope.",
-          "type": "string",
-          "const": "allow-audio-update-published-track-metadata",
-          "markdownDescription": "Enables the audio_update_published_track_metadata command without any pre-configured scope."
-        },
-        {
-          "description": "Enables the audio_update_remote_processor_parameter command without any pre-configured scope.",
-          "type": "string",
-          "const": "allow-audio-update-remote-processor-parameter",
-          "markdownDescription": "Enables the audio_update_remote_processor_parameter command without any pre-configured scope."
-        },
-        {
-          "description": "Enables the diagnostics_log_ui_error command without any pre-configured scope.",
-          "type": "string",
-          "const": "allow-diagnostics-log-ui-error",
-          "markdownDescription": "Enables the diagnostics_log_ui_error command without any pre-configured scope."
-        },
-        {
-          "description": "Enables the library_discard command without any pre-configured scope.",
-          "type": "string",
-          "const": "allow-library-discard",
-          "markdownDescription": "Enables the library_discard command without any pre-configured scope."
-        },
-        {
-          "description": "Enables the library_pick_pack command without any pre-configured scope.",
-          "type": "string",
-          "const": "allow-library-pick-pack",
-          "markdownDescription": "Enables the library_pick_pack command without any pre-configured scope."
-        },
-        {
-          "description": "Enables the library_read command without any pre-configured scope.",
-          "type": "string",
-          "const": "allow-library-read",
-          "markdownDescription": "Enables the library_read command without any pre-configured scope."
-        },
-        {
-          "description": "Enables the library_stage command without any pre-configured scope.",
-          "type": "string",
-          "const": "allow-library-stage",
-          "markdownDescription": "Enables the library_stage command without any pre-configured scope."
-        },
-        {
-          "description": "Enables the media_hotkeys_get_settings command without any pre-configured scope.",
-          "type": "string",
-          "const": "allow-media-hotkeys-get-settings",
-          "markdownDescription": "Enables the media_hotkeys_get_settings command without any pre-configured scope."
-        },
-        {
-          "description": "Enables the media_hotkeys_update_settings command without any pre-configured scope.",
-          "type": "string",
-          "const": "allow-media-hotkeys-update-settings",
-          "markdownDescription": "Enables the media_hotkeys_update_settings command without any pre-configured scope."
-        },
-        {
-          "description": "Enables the notifications_supported command without any pre-configured scope.",
-          "type": "string",
-          "const": "allow-notifications-supported",
-          "markdownDescription": "Enables the notifications_supported command without any pre-configured scope."
-        },
-        {
-          "description": "Enables the notify_knock command without any pre-configured scope.",
-          "type": "string",
-          "const": "allow-notify-knock",
-          "markdownDescription": "Enables the notify_knock command without any pre-configured scope."
-        },
-        {
-          "description": "Enables the notify_message command without any pre-configured scope.",
-          "type": "string",
-          "const": "allow-notify-message",
-          "markdownDescription": "Enables the notify_message command without any pre-configured scope."
-        },
-        {
-          "description": "Enables the overlay_action command without any pre-configured scope.",
-          "type": "string",
-          "const": "allow-overlay-action",
-          "markdownDescription": "Enables the overlay_action command without any pre-configured scope."
-        },
-        {
-          "description": "Enables the overlay_drag command without any pre-configured scope.",
-          "type": "string",
-          "const": "allow-overlay-drag",
-          "markdownDescription": "Enables the overlay_drag command without any pre-configured scope."
-        },
-        {
-          "description": "Enables the overlay_drag_release command without any pre-configured scope.",
-          "type": "string",
-          "const": "allow-overlay-drag-release",
-          "markdownDescription": "Enables the overlay_drag_release command without any pre-configured scope."
-        },
-        {
-          "description": "Enables the overlay_get_layout command without any pre-configured scope.",
-          "type": "string",
-          "const": "allow-overlay-get-layout",
-          "markdownDescription": "Enables the overlay_get_layout command without any pre-configured scope."
-        },
-        {
-          "description": "Enables the overlay_get_settings command without any pre-configured scope.",
-          "type": "string",
-          "const": "allow-overlay-get-settings",
-          "markdownDescription": "Enables the overlay_get_settings command without any pre-configured scope."
-        },
-        {
-          "description": "Enables the overlay_get_snapshot command without any pre-configured scope.",
-          "type": "string",
-          "const": "allow-overlay-get-snapshot",
-          "markdownDescription": "Enables the overlay_get_snapshot command without any pre-configured scope."
-        },
-        {
-          "description": "Enables the overlay_hide command without any pre-configured scope.",
-          "type": "string",
-          "const": "allow-overlay-hide",
-          "markdownDescription": "Enables the overlay_hide command without any pre-configured scope."
-        },
-        {
-          "description": "Enables the overlay_is_supported command without any pre-configured scope.",
-          "type": "string",
-          "const": "allow-overlay-is-supported",
-          "markdownDescription": "Enables the overlay_is_supported command without any pre-configured scope."
-        },
-        {
-          "description": "Enables the overlay_reset_position command without any pre-configured scope.",
-          "type": "string",
-          "const": "allow-overlay-reset-position",
-          "markdownDescription": "Enables the overlay_reset_position command without any pre-configured scope."
-        },
-        {
-          "description": "Enables the overlay_set_content_size command without any pre-configured scope.",
-          "type": "string",
-          "const": "allow-overlay-set-content-size",
-          "markdownDescription": "Enables the overlay_set_content_size command without any pre-configured scope."
-        },
-        {
-          "description": "Enables the overlay_show command without any pre-configured scope.",
-          "type": "string",
-          "const": "allow-overlay-show",
-          "markdownDescription": "Enables the overlay_show command without any pre-configured scope."
-        },
-        {
-          "description": "Enables the overlay_toggle command without any pre-configured scope.",
-          "type": "string",
-          "const": "allow-overlay-toggle",
-          "markdownDescription": "Enables the overlay_toggle command without any pre-configured scope."
-        },
-        {
-          "description": "Enables the overlay_update_settings command without any pre-configured scope.",
-          "type": "string",
-          "const": "allow-overlay-update-settings",
-          "markdownDescription": "Enables the overlay_update_settings command without any pre-configured scope."
-        },
-        {
-          "description": "Enables the overlay_update_snapshot command without any pre-configured scope.",
-          "type": "string",
-          "const": "allow-overlay-update-snapshot",
-          "markdownDescription": "Enables the overlay_update_snapshot command without any pre-configured scope."
-        },
-        {
-          "description": "Enables the push_to_talk_get_settings command without any pre-configured scope.",
-          "type": "string",
-          "const": "allow-push-to-talk-get-settings",
-          "markdownDescription": "Enables the push_to_talk_get_settings command without any pre-configured scope."
-        },
-        {
-          "description": "Enables the push_to_talk_update_settings command without any pre-configured scope.",
-          "type": "string",
-          "const": "allow-push-to-talk-update-settings",
-          "markdownDescription": "Enables the push_to_talk_update_settings command without any pre-configured scope."
-        },
-        {
-          "description": "Enables the read_ravenpack command without any pre-configured scope.",
-          "type": "string",
-          "const": "allow-read-ravenpack",
-          "markdownDescription": "Enables the read_ravenpack command without any pre-configured scope."
-        },
-        {
-          "description": "Enables the save_export_file command without any pre-configured scope.",
-          "type": "string",
-          "const": "allow-save-export-file",
-          "markdownDescription": "Enables the save_export_file command without any pre-configured scope."
-        },
-        {
-          "description": "Enables the secret_delete command without any pre-configured scope.",
-          "type": "string",
-          "const": "allow-secret-delete",
-          "markdownDescription": "Enables the secret_delete command without any pre-configured scope."
-        },
-        {
-          "description": "Enables the secret_get command without any pre-configured scope.",
-          "type": "string",
-          "const": "allow-secret-get",
-          "markdownDescription": "Enables the secret_get command without any pre-configured scope."
-        },
-        {
-          "description": "Enables the secret_set command without any pre-configured scope.",
-          "type": "string",
-          "const": "allow-secret-set",
-          "markdownDescription": "Enables the secret_set command without any pre-configured scope."
-        },
-        {
-          "description": "Enables the thumbnail_toolbar_update command without any pre-configured scope.",
-          "type": "string",
-          "const": "allow-thumbnail-toolbar-update",
-          "markdownDescription": "Enables the thumbnail_toolbar_update command without any pre-configured scope."
-        },
-        {
-          "description": "Enables the tray_get_settings command without any pre-configured scope.",
-          "type": "string",
-          "const": "allow-tray-get-settings",
-          "markdownDescription": "Enables the tray_get_settings command without any pre-configured scope."
-        },
-        {
-          "description": "Enables the tray_set_unread command without any pre-configured scope.",
-          "type": "string",
-          "const": "allow-tray-set-unread",
-          "markdownDescription": "Enables the tray_set_unread command without any pre-configured scope."
-        },
-        {
-          "description": "Enables the tray_update command without any pre-configured scope.",
-          "type": "string",
-          "const": "allow-tray-update",
-          "markdownDescription": "Enables the tray_update command without any pre-configured scope."
-        },
-        {
-          "description": "Enables the tray_update_settings command without any pre-configured scope.",
-          "type": "string",
-          "const": "allow-tray-update-settings",
-          "markdownDescription": "Enables the tray_update_settings command without any pre-configured scope."
-        },
-        {
-          "description": "Enables the updater_check command without any pre-configured scope.",
-          "type": "string",
-          "const": "allow-updater-check",
-          "markdownDescription": "Enables the updater_check command without any pre-configured scope."
-        },
-        {
-          "description": "Enables the updater_download command without any pre-configured scope.",
-          "type": "string",
-          "const": "allow-updater-download",
-          "markdownDescription": "Enables the updater_download command without any pre-configured scope."
-        },
-        {
-          "description": "Enables the updater_get_state command without any pre-configured scope.",
-          "type": "string",
-          "const": "allow-updater-get-state",
-          "markdownDescription": "Enables the updater_get_state command without any pre-configured scope."
-        },
-        {
-          "description": "Enables the updater_install command without any pre-configured scope.",
-          "type": "string",
-          "const": "allow-updater-install",
-          "markdownDescription": "Enables the updater_install command without any pre-configured scope."
-        },
-        {
-          "description": "Enables the updater_set_busy command without any pre-configured scope.",
-          "type": "string",
-          "const": "allow-updater-set-busy",
-          "markdownDescription": "Enables the updater_set_busy command without any pre-configured scope."
-        },
-        {
-          "description": "Enables the video_connect_room command without any pre-configured scope.",
-          "type": "string",
-          "const": "allow-video-connect-room",
-          "markdownDescription": "Enables the video_connect_room command without any pre-configured scope."
-        },
-        {
-          "description": "Enables the video_disconnect_room command without any pre-configured scope.",
-          "type": "string",
-          "const": "allow-video-disconnect-room",
-          "markdownDescription": "Enables the video_disconnect_room command without any pre-configured scope."
-        },
-        {
-          "description": "Enables the video_get_capabilities command without any pre-configured scope.",
-          "type": "string",
-          "const": "allow-video-get-capabilities",
-          "markdownDescription": "Enables the video_get_capabilities command without any pre-configured scope."
-        },
-        {
-          "description": "Enables the video_get_network_totals command without any pre-configured scope.",
-          "type": "string",
-          "const": "allow-video-get-network-totals",
-          "markdownDescription": "Enables the video_get_network_totals command without any pre-configured scope."
-        },
-        {
-          "description": "Enables the video_get_quality_report command without any pre-configured scope.",
-          "type": "string",
-          "const": "allow-video-get-quality-report",
-          "markdownDescription": "Enables the video_get_quality_report command without any pre-configured scope."
-        },
-        {
-          "description": "Enables the video_get_state command without any pre-configured scope.",
-          "type": "string",
-          "const": "allow-video-get-state",
-          "markdownDescription": "Enables the video_get_state command without any pre-configured scope."
-        },
-        {
-          "description": "Enables the video_get_stream_endpoint command without any pre-configured scope.",
-          "type": "string",
-          "const": "allow-video-get-stream-endpoint",
-          "markdownDescription": "Enables the video_get_stream_endpoint command without any pre-configured scope."
-        },
-        {
-          "description": "Enables the video_get_stream_stats command without any pre-configured scope.",
-          "type": "string",
-          "const": "allow-video-get-stream-stats",
-          "markdownDescription": "Enables the video_get_stream_stats command without any pre-configured scope."
-        },
-        {
-          "description": "Enables the video_list_cameras command without any pre-configured scope.",
-          "type": "string",
-          "const": "allow-video-list-cameras",
-          "markdownDescription": "Enables the video_list_cameras command without any pre-configured scope."
-        },
-        {
-          "description": "Enables the video_list_displays command without any pre-configured scope.",
-          "type": "string",
-          "const": "allow-video-list-displays",
-          "markdownDescription": "Enables the video_list_displays command without any pre-configured scope."
-        },
-        {
-          "description": "Enables the video_list_windows command without any pre-configured scope.",
-          "type": "string",
-          "const": "allow-video-list-windows",
-          "markdownDescription": "Enables the video_list_windows command without any pre-configured scope."
-        },
-        {
-          "description": "Enables the video_set_local_preview_enabled command without any pre-configured scope.",
-          "type": "string",
-          "const": "allow-video-set-local-preview-enabled",
-          "markdownDescription": "Enables the video_set_local_preview_enabled command without any pre-configured scope."
-        },
-        {
-          "description": "Enables the video_set_presentation_profile command without any pre-configured scope.",
-          "type": "string",
-          "const": "allow-video-set-presentation-profile",
-          "markdownDescription": "Enables the video_set_presentation_profile command without any pre-configured scope."
-        },
-        {
-          "description": "Enables the video_set_remote_video_receiving command without any pre-configured scope.",
-          "type": "string",
-          "const": "allow-video-set-remote-video-receiving",
-          "markdownDescription": "Enables the video_set_remote_video_receiving command without any pre-configured scope."
-        },
-        {
-          "description": "Enables the video_set_self_preview_mode command without any pre-configured scope.",
-          "type": "string",
-          "const": "allow-video-set-self-preview-mode",
-          "markdownDescription": "Enables the video_set_self_preview_mode command without any pre-configured scope."
-        },
-        {
-          "description": "Enables the video_set_source_profile command without any pre-configured scope.",
-          "type": "string",
-          "const": "allow-video-set-source-profile",
-          "markdownDescription": "Enables the video_set_source_profile command without any pre-configured scope."
-        },
-        {
-          "description": "Enables the video_start_camera command without any pre-configured scope.",
-          "type": "string",
-          "const": "allow-video-start-camera",
-          "markdownDescription": "Enables the video_start_camera command without any pre-configured scope."
-        },
-        {
-          "description": "Enables the video_start_display_share command without any pre-configured scope.",
-          "type": "string",
-          "const": "allow-video-start-display-share",
-          "markdownDescription": "Enables the video_start_display_share command without any pre-configured scope."
-        },
-        {
-          "description": "Enables the video_start_window_share command without any pre-configured scope.",
-          "type": "string",
-          "const": "allow-video-start-window-share",
-          "markdownDescription": "Enables the video_start_window_share command without any pre-configured scope."
-        },
-        {
-          "description": "Enables the video_stop_source command without any pre-configured scope.",
-          "type": "string",
-          "const": "allow-video-stop-source",
-          "markdownDescription": "Enables the video_stop_source command without any pre-configured scope."
-        },
-        {
-          "description": "Enables the window_lock_aspect command without any pre-configured scope.",
-          "type": "string",
-          "const": "allow-window-lock-aspect",
-          "markdownDescription": "Enables the window_lock_aspect command without any pre-configured scope."
-        },
-        {
-          "description": "Enables the window_show_main command without any pre-configured scope.",
-          "type": "string",
-          "const": "allow-window-show-main",
-          "markdownDescription": "Enables the window_show_main command without any pre-configured scope."
-        },
-        {
-          "description": "Enables the workshop_connect command without any pre-configured scope.",
-          "type": "string",
-          "const": "allow-workshop-connect",
-          "markdownDescription": "Enables the workshop_connect command without any pre-configured scope."
-        },
-        {
-          "description": "Enables the workshop_disconnect command without any pre-configured scope.",
-          "type": "string",
-          "const": "allow-workshop-disconnect",
-          "markdownDescription": "Enables the workshop_disconnect command without any pre-configured scope."
-        },
-        {
-          "description": "Enables the workshop_publish command without any pre-configured scope.",
-          "type": "string",
-          "const": "allow-workshop-publish",
-          "markdownDescription": "Enables the workshop_publish command without any pre-configured scope."
-        },
-        {
-          "description": "Enables the workshop_stop command without any pre-configured scope.",
-          "type": "string",
-          "const": "allow-workshop-stop",
-          "markdownDescription": "Enables the workshop_stop command without any pre-configured scope."
-        },
-        {
-          "description": "Enables the workshop_stop_all command without any pre-configured scope.",
-          "type": "string",
-          "const": "allow-workshop-stop-all",
-          "markdownDescription": "Enables the workshop_stop_all command without any pre-configured scope."
-        },
-        {
-          "description": "Denies the attachment_discard command without any pre-configured scope.",
-          "type": "string",
-          "const": "deny-attachment-discard",
-          "markdownDescription": "Denies the attachment_discard command without any pre-configured scope."
-        },
-        {
-          "description": "Denies the attachment_prepare command without any pre-configured scope.",
-          "type": "string",
-          "const": "deny-attachment-prepare",
-          "markdownDescription": "Denies the attachment_prepare command without any pre-configured scope."
-        },
-        {
-          "description": "Denies the attachment_read command without any pre-configured scope.",
-          "type": "string",
-          "const": "deny-attachment-read",
-          "markdownDescription": "Denies the attachment_read command without any pre-configured scope."
-        },
-        {
-          "description": "Denies the attachment_save command without any pre-configured scope.",
-          "type": "string",
-          "const": "deny-attachment-save",
-          "markdownDescription": "Denies the attachment_save command without any pre-configured scope."
-        },
-        {
-          "description": "Denies the attachment_sweep command without any pre-configured scope.",
-          "type": "string",
-          "const": "deny-attachment-sweep",
-          "markdownDescription": "Denies the attachment_sweep command without any pre-configured scope."
-        },
-        {
-          "description": "Denies the audio_add_local_source command without any pre-configured scope.",
-          "type": "string",
-          "const": "deny-audio-add-local-source",
-          "markdownDescription": "Denies the audio_add_local_source command without any pre-configured scope."
-        },
-        {
-          "description": "Denies the audio_add_or_update_remote_track command without any pre-configured scope.",
-          "type": "string",
-          "const": "deny-audio-add-or-update-remote-track",
-          "markdownDescription": "Denies the audio_add_or_update_remote_track command without any pre-configured scope."
-        },
-        {
-          "description": "Denies the audio_add_processor_to_local_channel command without any pre-configured scope.",
-          "type": "string",
-          "const": "deny-audio-add-processor-to-local-channel",
-          "markdownDescription": "Denies the audio_add_processor_to_local_channel command without any pre-configured scope."
-        },
-        {
-          "description": "Denies the audio_add_processor_to_remote_track command without any pre-configured scope.",
-          "type": "string",
-          "const": "deny-audio-add-processor-to-remote-track",
-          "markdownDescription": "Denies the audio_add_processor_to_remote_track command without any pre-configured scope."
-        },
-        {
-          "description": "Denies the audio_apply_preset_to_local_channel command without any pre-configured scope.",
-          "type": "string",
-          "const": "deny-audio-apply-preset-to-local-channel",
-          "markdownDescription": "Denies the audio_apply_preset_to_local_channel command without any pre-configured scope."
-        },
-        {
-          "description": "Denies the audio_apply_preset_to_remote_track command without any pre-configured scope.",
-          "type": "string",
-          "const": "deny-audio-apply-preset-to-remote-track",
-          "markdownDescription": "Denies the audio_apply_preset_to_remote_track command without any pre-configured scope."
-        },
-        {
-          "description": "Denies the audio_connect_room command without any pre-configured scope.",
-          "type": "string",
-          "const": "deny-audio-connect-room",
-          "markdownDescription": "Denies the audio_connect_room command without any pre-configured scope."
-        },
-        {
-          "description": "Denies the audio_delete_user_preset command without any pre-configured scope.",
-          "type": "string",
-          "const": "deny-audio-delete-user-preset",
-          "markdownDescription": "Denies the audio_delete_user_preset command without any pre-configured scope."
-        },
-        {
-          "description": "Denies the audio_disconnect_room command without any pre-configured scope.",
-          "type": "string",
-          "const": "deny-audio-disconnect-room",
-          "markdownDescription": "Denies the audio_disconnect_room command without any pre-configured scope."
-        },
-        {
-          "description": "Denies the audio_get_capabilities command without any pre-configured scope.",
-          "type": "string",
-          "const": "deny-audio-get-capabilities",
-          "markdownDescription": "Denies the audio_get_capabilities command without any pre-configured scope."
-        },
-        {
-          "description": "Denies the audio_get_channel_health command without any pre-configured scope.",
-          "type": "string",
-          "const": "deny-audio-get-channel-health",
-          "markdownDescription": "Denies the audio_get_channel_health command without any pre-configured scope."
-        },
-        {
-          "description": "Denies the audio_get_network_totals command without any pre-configured scope.",
-          "type": "string",
-          "const": "deny-audio-get-network-totals",
-          "markdownDescription": "Denies the audio_get_network_totals command without any pre-configured scope."
-        },
-        {
-          "description": "Denies the audio_get_selected_output_device command without any pre-configured scope.",
-          "type": "string",
-          "const": "deny-audio-get-selected-output-device",
-          "markdownDescription": "Denies the audio_get_selected_output_device command without any pre-configured scope."
-        },
-        {
-          "description": "Denies the audio_get_state command without any pre-configured scope.",
-          "type": "string",
-          "const": "deny-audio-get-state",
-          "markdownDescription": "Denies the audio_get_state command without any pre-configured scope."
-        },
-        {
-          "description": "Denies the audio_list_app_audio_sources command without any pre-configured scope.",
-          "type": "string",
-          "const": "deny-audio-list-app-audio-sources",
-          "markdownDescription": "Denies the audio_list_app_audio_sources command without any pre-configured scope."
-        },
-        {
-          "description": "Denies the audio_list_input_devices command without any pre-configured scope.",
-          "type": "string",
-          "const": "deny-audio-list-input-devices",
-          "markdownDescription": "Denies the audio_list_input_devices command without any pre-configured scope."
-        },
-        {
-          "description": "Denies the audio_list_output_devices command without any pre-configured scope.",
-          "type": "string",
-          "const": "deny-audio-list-output-devices",
-          "markdownDescription": "Denies the audio_list_output_devices command without any pre-configured scope."
-        },
-        {
-          "description": "Denies the audio_list_presets command without any pre-configured scope.",
-          "type": "string",
-          "const": "deny-audio-list-presets",
-          "markdownDescription": "Denies the audio_list_presets command without any pre-configured scope."
-        },
-        {
-          "description": "Denies the audio_play_sound_cue command without any pre-configured scope.",
-          "type": "string",
-          "const": "deny-audio-play-sound-cue",
-          "markdownDescription": "Denies the audio_play_sound_cue command without any pre-configured scope."
-        },
-        {
-          "description": "Denies the audio_play_ui_sound command without any pre-configured scope.",
-          "type": "string",
-          "const": "deny-audio-play-ui-sound",
-          "markdownDescription": "Denies the audio_play_ui_sound command without any pre-configured scope."
-        },
-        {
-          "description": "Denies the audio_preview_sound_cue command without any pre-configured scope.",
-          "type": "string",
-          "const": "deny-audio-preview-sound-cue",
-          "markdownDescription": "Denies the audio_preview_sound_cue command without any pre-configured scope."
-        },
-        {
-          "description": "Denies the audio_publish_audio_source command without any pre-configured scope.",
-          "type": "string",
-          "const": "deny-audio-publish-audio-source",
-          "markdownDescription": "Denies the audio_publish_audio_source command without any pre-configured scope."
-        },
-        {
-          "description": "Denies the audio_publish_local_source_metadata command without any pre-configured scope.",
-          "type": "string",
-          "const": "deny-audio-publish-local-source-metadata",
-          "markdownDescription": "Denies the audio_publish_local_source_metadata command without any pre-configured scope."
-        },
-        {
-          "description": "Denies the audio_remove_local_source command without any pre-configured scope.",
-          "type": "string",
-          "const": "deny-audio-remove-local-source",
-          "markdownDescription": "Denies the audio_remove_local_source command without any pre-configured scope."
-        },
-        {
-          "description": "Denies the audio_remove_processor_from_local_channel command without any pre-configured scope.",
-          "type": "string",
-          "const": "deny-audio-remove-processor-from-local-channel",
-          "markdownDescription": "Denies the audio_remove_processor_from_local_channel command without any pre-configured scope."
-        },
-        {
-          "description": "Denies the audio_remove_processor_from_remote_track command without any pre-configured scope.",
-          "type": "string",
-          "const": "deny-audio-remove-processor-from-remote-track",
-          "markdownDescription": "Denies the audio_remove_processor_from_remote_track command without any pre-configured scope."
-        },
-        {
-          "description": "Denies the audio_remove_remote_track command without any pre-configured scope.",
-          "type": "string",
-          "const": "deny-audio-remove-remote-track",
-          "markdownDescription": "Denies the audio_remove_remote_track command without any pre-configured scope."
-        },
-        {
-          "description": "Denies the audio_rename_local_source command without any pre-configured scope.",
-          "type": "string",
-          "const": "deny-audio-rename-local-source",
-          "markdownDescription": "Denies the audio_rename_local_source command without any pre-configured scope."
-        },
-        {
-          "description": "Denies the audio_rename_user_preset command without any pre-configured scope.",
-          "type": "string",
-          "const": "deny-audio-rename-user-preset",
-          "markdownDescription": "Denies the audio_rename_user_preset command without any pre-configured scope."
-        },
-        {
-          "description": "Denies the audio_reorder_processors command without any pre-configured scope.",
-          "type": "string",
-          "const": "deny-audio-reorder-processors",
-          "markdownDescription": "Denies the audio_reorder_processors command without any pre-configured scope."
-        },
-        {
-          "description": "Denies the audio_reorder_remote_processors command without any pre-configured scope.",
-          "type": "string",
-          "const": "deny-audio-reorder-remote-processors",
-          "markdownDescription": "Denies the audio_reorder_remote_processors command without any pre-configured scope."
-        },
-        {
-          "description": "Denies the audio_reset_local_channel_processor_chain command without any pre-configured scope.",
-          "type": "string",
-          "const": "deny-audio-reset-local-channel-processor-chain",
-          "markdownDescription": "Denies the audio_reset_local_channel_processor_chain command without any pre-configured scope."
-        },
-        {
-          "description": "Denies the audio_reset_local_channel_to_safe_defaults command without any pre-configured scope.",
-          "type": "string",
-          "const": "deny-audio-reset-local-channel-to-safe-defaults",
-          "markdownDescription": "Denies the audio_reset_local_channel_to_safe_defaults command without any pre-configured scope."
-        },
-        {
-          "description": "Denies the audio_reset_remote_track_processor_chain command without any pre-configured scope.",
-          "type": "string",
-          "const": "deny-audio-reset-remote-track-processor-chain",
-          "markdownDescription": "Denies the audio_reset_remote_track_processor_chain command without any pre-configured scope."
-        },
-        {
-          "description": "Denies the audio_reset_remote_track_to_safe_defaults command without any pre-configured scope.",
-          "type": "string",
-          "const": "deny-audio-reset-remote-track-to-safe-defaults",
-          "markdownDescription": "Denies the audio_reset_remote_track_to_safe_defaults command without any pre-configured scope."
-        },
-        {
-          "description": "Denies the audio_resume_auto_level command without any pre-configured scope.",
-          "type": "string",
-          "const": "deny-audio-resume-auto-level",
-          "markdownDescription": "Denies the audio_resume_auto_level command without any pre-configured scope."
-        },
-        {
-          "description": "Denies the audio_save_local_channel_as_preset command without any pre-configured scope.",
-          "type": "string",
-          "const": "deny-audio-save-local-channel-as-preset",
-          "markdownDescription": "Denies the audio_save_local_channel_as_preset command without any pre-configured scope."
-        },
-        {
-          "description": "Denies the audio_save_remote_track_as_preset command without any pre-configured scope.",
-          "type": "string",
-          "const": "deny-audio-save-remote-track-as-preset",
-          "markdownDescription": "Denies the audio_save_remote_track_as_preset command without any pre-configured scope."
-        },
-        {
-          "description": "Denies the audio_set_auto_level command without any pre-configured scope.",
-          "type": "string",
-          "const": "deny-audio-set-auto-level",
-          "markdownDescription": "Denies the audio_set_auto_level command without any pre-configured scope."
-        },
-        {
-          "description": "Denies the audio_set_call_active command without any pre-configured scope.",
-          "type": "string",
-          "const": "deny-audio-set-call-active",
-          "markdownDescription": "Denies the audio_set_call_active command without any pre-configured scope."
-        },
-        {
-          "description": "Denies the audio_set_local_channel_gain command without any pre-configured scope.",
-          "type": "string",
-          "const": "deny-audio-set-local-channel-gain",
-          "markdownDescription": "Denies the audio_set_local_channel_gain command without any pre-configured scope."
-        },
-        {
-          "description": "Denies the audio_set_local_channel_mute command without any pre-configured scope.",
-          "type": "string",
-          "const": "deny-audio-set-local-channel-mute",
-          "markdownDescription": "Denies the audio_set_local_channel_mute command without any pre-configured scope."
-        },
-        {
-          "description": "Denies the audio_set_local_safety_limiter_ceiling command without any pre-configured scope.",
-          "type": "string",
-          "const": "deny-audio-set-local-safety-limiter-ceiling",
-          "markdownDescription": "Denies the audio_set_local_safety_limiter_ceiling command without any pre-configured scope."
-        },
-        {
-          "description": "Denies the audio_set_local_source_capture_device command without any pre-configured scope.",
-          "type": "string",
-          "const": "deny-audio-set-local-source-capture-device",
-          "markdownDescription": "Denies the audio_set_local_source_capture_device command without any pre-configured scope."
-        },
-        {
-          "description": "Denies the audio_set_local_source_enabled command without any pre-configured scope.",
-          "type": "string",
-          "const": "deny-audio-set-local-source-enabled",
-          "markdownDescription": "Denies the audio_set_local_source_enabled command without any pre-configured scope."
-        },
-        {
-          "description": "Denies the audio_set_local_webrtc_processing command without any pre-configured scope.",
-          "type": "string",
-          "const": "deny-audio-set-local-webrtc-processing",
-          "markdownDescription": "Denies the audio_set_local_webrtc_processing command without any pre-configured scope."
-        },
-        {
-          "description": "Denies the audio_set_monitoring command without any pre-configured scope.",
-          "type": "string",
-          "const": "deny-audio-set-monitoring",
-          "markdownDescription": "Denies the audio_set_monitoring command without any pre-configured scope."
-        },
-        {
-          "description": "Denies the audio_set_output_device command without any pre-configured scope.",
-          "type": "string",
-          "const": "deny-audio-set-output-device",
-          "markdownDescription": "Denies the audio_set_output_device command without any pre-configured scope."
-        },
-        {
-          "description": "Denies the audio_set_output_muted command without any pre-configured scope.",
-          "type": "string",
-          "const": "deny-audio-set-output-muted",
-          "markdownDescription": "Denies the audio_set_output_muted command without any pre-configured scope."
-        },
-        {
-          "description": "Denies the audio_set_output_volume command without any pre-configured scope.",
-          "type": "string",
-          "const": "deny-audio-set-output-volume",
-          "markdownDescription": "Denies the audio_set_output_volume command without any pre-configured scope."
-        },
-        {
-          "description": "Denies the audio_set_processor_enabled command without any pre-configured scope.",
-          "type": "string",
-          "const": "deny-audio-set-processor-enabled",
-          "markdownDescription": "Denies the audio_set_processor_enabled command without any pre-configured scope."
-        },
-        {
-          "description": "Denies the audio_set_processor_parameter command without any pre-configured scope.",
-          "type": "string",
-          "const": "deny-audio-set-processor-parameter",
-          "markdownDescription": "Denies the audio_set_processor_parameter command without any pre-configured scope."
-        },
-        {
-          "description": "Denies the audio_set_remote_audio_receiving command without any pre-configured scope.",
-          "type": "string",
-          "const": "deny-audio-set-remote-audio-receiving",
-          "markdownDescription": "Denies the audio_set_remote_audio_receiving command without any pre-configured scope."
-        },
-        {
-          "description": "Denies the audio_set_remote_noise_cleanup command without any pre-configured scope.",
-          "type": "string",
-          "const": "deny-audio-set-remote-noise-cleanup",
-          "markdownDescription": "Denies the audio_set_remote_noise_cleanup command without any pre-configured scope."
-        },
-        {
-          "description": "Denies the audio_set_remote_processor_enabled command without any pre-configured scope.",
-          "type": "string",
-          "const": "deny-audio-set-remote-processor-enabled",
-          "markdownDescription": "Denies the audio_set_remote_processor_enabled command without any pre-configured scope."
-        },
-        {
-          "description": "Denies the audio_set_remote_safety_limiter_ceiling command without any pre-configured scope.",
-          "type": "string",
-          "const": "deny-audio-set-remote-safety-limiter-ceiling",
-          "markdownDescription": "Denies the audio_set_remote_safety_limiter_ceiling command without any pre-configured scope."
-        },
-        {
-          "description": "Denies the audio_set_remote_track_gain command without any pre-configured scope.",
-          "type": "string",
-          "const": "deny-audio-set-remote-track-gain",
-          "markdownDescription": "Denies the audio_set_remote_track_gain command without any pre-configured scope."
-        },
-        {
-          "description": "Denies the audio_set_remote_track_mute command without any pre-configured scope.",
-          "type": "string",
-          "const": "deny-audio-set-remote-track-mute",
-          "markdownDescription": "Denies the audio_set_remote_track_mute command without any pre-configured scope."
-        },
-        {
-          "description": "Denies the audio_set_sound_cue_settings command without any pre-configured scope.",
-          "type": "string",
-          "const": "deny-audio-set-sound-cue-settings",
-          "markdownDescription": "Denies the audio_set_sound_cue_settings command without any pre-configured scope."
-        },
-        {
-          "description": "Denies the audio_test_output_device command without any pre-configured scope.",
-          "type": "string",
-          "const": "deny-audio-test-output-device",
-          "markdownDescription": "Denies the audio_test_output_device command without any pre-configured scope."
-        },
-        {
-          "description": "Denies the audio_unpublish_audio_source command without any pre-configured scope.",
-          "type": "string",
-          "const": "deny-audio-unpublish-audio-source",
-          "markdownDescription": "Denies the audio_unpublish_audio_source command without any pre-configured scope."
-        },
-        {
-          "description": "Denies the audio_unpublish_local_source_metadata command without any pre-configured scope.",
-          "type": "string",
-          "const": "deny-audio-unpublish-local-source-metadata",
-          "markdownDescription": "Denies the audio_unpublish_local_source_metadata command without any pre-configured scope."
-        },
-        {
-          "description": "Denies the audio_update_processor_parameter command without any pre-configured scope.",
-          "type": "string",
-          "const": "deny-audio-update-processor-parameter",
-          "markdownDescription": "Denies the audio_update_processor_parameter command without any pre-configured scope."
-        },
-        {
-          "description": "Denies the audio_update_published_track_metadata command without any pre-configured scope.",
-          "type": "string",
-          "const": "deny-audio-update-published-track-metadata",
-          "markdownDescription": "Denies the audio_update_published_track_metadata command without any pre-configured scope."
-        },
-        {
-          "description": "Denies the audio_update_remote_processor_parameter command without any pre-configured scope.",
-          "type": "string",
-          "const": "deny-audio-update-remote-processor-parameter",
-          "markdownDescription": "Denies the audio_update_remote_processor_parameter command without any pre-configured scope."
-        },
-        {
-          "description": "Denies the diagnostics_log_ui_error command without any pre-configured scope.",
-          "type": "string",
-          "const": "deny-diagnostics-log-ui-error",
-          "markdownDescription": "Denies the diagnostics_log_ui_error command without any pre-configured scope."
-        },
-        {
-          "description": "Denies the library_discard command without any pre-configured scope.",
-          "type": "string",
-          "const": "deny-library-discard",
-          "markdownDescription": "Denies the library_discard command without any pre-configured scope."
-        },
-        {
-          "description": "Denies the library_pick_pack command without any pre-configured scope.",
-          "type": "string",
-          "const": "deny-library-pick-pack",
-          "markdownDescription": "Denies the library_pick_pack command without any pre-configured scope."
-        },
-        {
-          "description": "Denies the library_read command without any pre-configured scope.",
-          "type": "string",
-          "const": "deny-library-read",
-          "markdownDescription": "Denies the library_read command without any pre-configured scope."
-        },
-        {
-          "description": "Denies the library_stage command without any pre-configured scope.",
-          "type": "string",
-          "const": "deny-library-stage",
-          "markdownDescription": "Denies the library_stage command without any pre-configured scope."
-        },
-        {
-          "description": "Denies the media_hotkeys_get_settings command without any pre-configured scope.",
-          "type": "string",
-          "const": "deny-media-hotkeys-get-settings",
-          "markdownDescription": "Denies the media_hotkeys_get_settings command without any pre-configured scope."
-        },
-        {
-          "description": "Denies the media_hotkeys_update_settings command without any pre-configured scope.",
-          "type": "string",
-          "const": "deny-media-hotkeys-update-settings",
-          "markdownDescription": "Denies the media_hotkeys_update_settings command without any pre-configured scope."
-        },
-        {
-          "description": "Denies the notifications_supported command without any pre-configured scope.",
-          "type": "string",
-          "const": "deny-notifications-supported",
-          "markdownDescription": "Denies the notifications_supported command without any pre-configured scope."
-        },
-        {
-          "description": "Denies the notify_knock command without any pre-configured scope.",
-          "type": "string",
-          "const": "deny-notify-knock",
-          "markdownDescription": "Denies the notify_knock command without any pre-configured scope."
-        },
-        {
-          "description": "Denies the notify_message command without any pre-configured scope.",
-          "type": "string",
-          "const": "deny-notify-message",
-          "markdownDescription": "Denies the notify_message command without any pre-configured scope."
-        },
-        {
-          "description": "Denies the overlay_action command without any pre-configured scope.",
-          "type": "string",
-          "const": "deny-overlay-action",
-          "markdownDescription": "Denies the overlay_action command without any pre-configured scope."
-        },
-        {
-          "description": "Denies the overlay_drag command without any pre-configured scope.",
-          "type": "string",
-          "const": "deny-overlay-drag",
-          "markdownDescription": "Denies the overlay_drag command without any pre-configured scope."
-        },
-        {
-          "description": "Denies the overlay_drag_release command without any pre-configured scope.",
-          "type": "string",
-          "const": "deny-overlay-drag-release",
-          "markdownDescription": "Denies the overlay_drag_release command without any pre-configured scope."
-        },
-        {
-          "description": "Denies the overlay_get_layout command without any pre-configured scope.",
-          "type": "string",
-          "const": "deny-overlay-get-layout",
-          "markdownDescription": "Denies the overlay_get_layout command without any pre-configured scope."
-        },
-        {
-          "description": "Denies the overlay_get_settings command without any pre-configured scope.",
-          "type": "string",
-          "const": "deny-overlay-get-settings",
-          "markdownDescription": "Denies the overlay_get_settings command without any pre-configured scope."
-        },
-        {
-          "description": "Denies the overlay_get_snapshot command without any pre-configured scope.",
-          "type": "string",
-          "const": "deny-overlay-get-snapshot",
-          "markdownDescription": "Denies the overlay_get_snapshot command without any pre-configured scope."
-        },
-        {
-          "description": "Denies the overlay_hide command without any pre-configured scope.",
-          "type": "string",
-          "const": "deny-overlay-hide",
-          "markdownDescription": "Denies the overlay_hide command without any pre-configured scope."
-        },
-        {
-          "description": "Denies the overlay_is_supported command without any pre-configured scope.",
-          "type": "string",
-          "const": "deny-overlay-is-supported",
-          "markdownDescription": "Denies the overlay_is_supported command without any pre-configured scope."
-        },
-        {
-          "description": "Denies the overlay_reset_position command without any pre-configured scope.",
-          "type": "string",
-          "const": "deny-overlay-reset-position",
-          "markdownDescription": "Denies the overlay_reset_position command without any pre-configured scope."
-        },
-        {
-          "description": "Denies the overlay_set_content_size command without any pre-configured scope.",
-          "type": "string",
-          "const": "deny-overlay-set-content-size",
-          "markdownDescription": "Denies the overlay_set_content_size command without any pre-configured scope."
-        },
-        {
-          "description": "Denies the overlay_show command without any pre-configured scope.",
-          "type": "string",
-          "const": "deny-overlay-show",
-          "markdownDescription": "Denies the overlay_show command without any pre-configured scope."
-        },
-        {
-          "description": "Denies the overlay_toggle command without any pre-configured scope.",
-          "type": "string",
-          "const": "deny-overlay-toggle",
-          "markdownDescription": "Denies the overlay_toggle command without any pre-configured scope."
-        },
-        {
-          "description": "Denies the overlay_update_settings command without any pre-configured scope.",
-          "type": "string",
-          "const": "deny-overlay-update-settings",
-          "markdownDescription": "Denies the overlay_update_settings command without any pre-configured scope."
-        },
-        {
-          "description": "Denies the overlay_update_snapshot command without any pre-configured scope.",
-          "type": "string",
-          "const": "deny-overlay-update-snapshot",
-          "markdownDescription": "Denies the overlay_update_snapshot command without any pre-configured scope."
-        },
-        {
-          "description": "Denies the push_to_talk_get_settings command without any pre-configured scope.",
-          "type": "string",
-          "const": "deny-push-to-talk-get-settings",
-          "markdownDescription": "Denies the push_to_talk_get_settings command without any pre-configured scope."
-        },
-        {
-          "description": "Denies the push_to_talk_update_settings command without any pre-configured scope.",
-          "type": "string",
-          "const": "deny-push-to-talk-update-settings",
-          "markdownDescription": "Denies the push_to_talk_update_settings command without any pre-configured scope."
-        },
-        {
-          "description": "Denies the read_ravenpack command without any pre-configured scope.",
-          "type": "string",
-          "const": "deny-read-ravenpack",
-          "markdownDescription": "Denies the read_ravenpack command without any pre-configured scope."
-        },
-        {
-          "description": "Denies the save_export_file command without any pre-configured scope.",
-          "type": "string",
-          "const": "deny-save-export-file",
-          "markdownDescription": "Denies the save_export_file command without any pre-configured scope."
-        },
-        {
-          "description": "Denies the secret_delete command without any pre-configured scope.",
-          "type": "string",
-          "const": "deny-secret-delete",
-          "markdownDescription": "Denies the secret_delete command without any pre-configured scope."
-        },
-        {
-          "description": "Denies the secret_get command without any pre-configured scope.",
-          "type": "string",
-          "const": "deny-secret-get",
-          "markdownDescription": "Denies the secret_get command without any pre-configured scope."
-        },
-        {
-          "description": "Denies the secret_set command without any pre-configured scope.",
-          "type": "string",
-          "const": "deny-secret-set",
-          "markdownDescription": "Denies the secret_set command without any pre-configured scope."
-        },
-        {
-          "description": "Denies the thumbnail_toolbar_update command without any pre-configured scope.",
-          "type": "string",
-          "const": "deny-thumbnail-toolbar-update",
-          "markdownDescription": "Denies the thumbnail_toolbar_update command without any pre-configured scope."
-        },
-        {
-          "description": "Denies the tray_get_settings command without any pre-configured scope.",
-          "type": "string",
-          "const": "deny-tray-get-settings",
-          "markdownDescription": "Denies the tray_get_settings command without any pre-configured scope."
-        },
-        {
-          "description": "Denies the tray_set_unread command without any pre-configured scope.",
-          "type": "string",
-          "const": "deny-tray-set-unread",
-          "markdownDescription": "Denies the tray_set_unread command without any pre-configured scope."
-        },
-        {
-          "description": "Denies the tray_update command without any pre-configured scope.",
-          "type": "string",
-          "const": "deny-tray-update",
-          "markdownDescription": "Denies the tray_update command without any pre-configured scope."
-        },
-        {
-          "description": "Denies the tray_update_settings command without any pre-configured scope.",
-          "type": "string",
-          "const": "deny-tray-update-settings",
-          "markdownDescription": "Denies the tray_update_settings command without any pre-configured scope."
-        },
-        {
-          "description": "Denies the updater_check command without any pre-configured scope.",
-          "type": "string",
-          "const": "deny-updater-check",
-          "markdownDescription": "Denies the updater_check command without any pre-configured scope."
-        },
-        {
-          "description": "Denies the updater_download command without any pre-configured scope.",
-          "type": "string",
-          "const": "deny-updater-download",
-          "markdownDescription": "Denies the updater_download command without any pre-configured scope."
-        },
-        {
-          "description": "Denies the updater_get_state command without any pre-configured scope.",
-          "type": "string",
-          "const": "deny-updater-get-state",
-          "markdownDescription": "Denies the updater_get_state command without any pre-configured scope."
-        },
-        {
-          "description": "Denies the updater_install command without any pre-configured scope.",
-          "type": "string",
-          "const": "deny-updater-install",
-          "markdownDescription": "Denies the updater_install command without any pre-configured scope."
-        },
-        {
-          "description": "Denies the updater_set_busy command without any pre-configured scope.",
-          "type": "string",
-          "const": "deny-updater-set-busy",
-          "markdownDescription": "Denies the updater_set_busy command without any pre-configured scope."
-        },
-        {
-          "description": "Denies the video_connect_room command without any pre-configured scope.",
-          "type": "string",
-          "const": "deny-video-connect-room",
-          "markdownDescription": "Denies the video_connect_room command without any pre-configured scope."
-        },
-        {
-          "description": "Denies the video_disconnect_room command without any pre-configured scope.",
-          "type": "string",
-          "const": "deny-video-disconnect-room",
-          "markdownDescription": "Denies the video_disconnect_room command without any pre-configured scope."
-        },
-        {
-          "description": "Denies the video_get_capabilities command without any pre-configured scope.",
-          "type": "string",
-          "const": "deny-video-get-capabilities",
-          "markdownDescription": "Denies the video_get_capabilities command without any pre-configured scope."
-        },
-        {
-          "description": "Denies the video_get_network_totals command without any pre-configured scope.",
-          "type": "string",
-          "const": "deny-video-get-network-totals",
-          "markdownDescription": "Denies the video_get_network_totals command without any pre-configured scope."
-        },
-        {
-          "description": "Denies the video_get_quality_report command without any pre-configured scope.",
-          "type": "string",
-          "const": "deny-video-get-quality-report",
-          "markdownDescription": "Denies the video_get_quality_report command without any pre-configured scope."
-        },
-        {
-          "description": "Denies the video_get_state command without any pre-configured scope.",
-          "type": "string",
-          "const": "deny-video-get-state",
-          "markdownDescription": "Denies the video_get_state command without any pre-configured scope."
-        },
-        {
-          "description": "Denies the video_get_stream_endpoint command without any pre-configured scope.",
-          "type": "string",
-          "const": "deny-video-get-stream-endpoint",
-          "markdownDescription": "Denies the video_get_stream_endpoint command without any pre-configured scope."
-        },
-        {
-          "description": "Denies the video_get_stream_stats command without any pre-configured scope.",
-          "type": "string",
-          "const": "deny-video-get-stream-stats",
-          "markdownDescription": "Denies the video_get_stream_stats command without any pre-configured scope."
-        },
-        {
-          "description": "Denies the video_list_cameras command without any pre-configured scope.",
-          "type": "string",
-          "const": "deny-video-list-cameras",
-          "markdownDescription": "Denies the video_list_cameras command without any pre-configured scope."
-        },
-        {
-          "description": "Denies the video_list_displays command without any pre-configured scope.",
-          "type": "string",
-          "const": "deny-video-list-displays",
-          "markdownDescription": "Denies the video_list_displays command without any pre-configured scope."
-        },
-        {
-          "description": "Denies the video_list_windows command without any pre-configured scope.",
-          "type": "string",
-          "const": "deny-video-list-windows",
-          "markdownDescription": "Denies the video_list_windows command without any pre-configured scope."
-        },
-        {
-          "description": "Denies the video_set_local_preview_enabled command without any pre-configured scope.",
-          "type": "string",
-          "const": "deny-video-set-local-preview-enabled",
-          "markdownDescription": "Denies the video_set_local_preview_enabled command without any pre-configured scope."
-        },
-        {
-          "description": "Denies the video_set_presentation_profile command without any pre-configured scope.",
-          "type": "string",
-          "const": "deny-video-set-presentation-profile",
-          "markdownDescription": "Denies the video_set_presentation_profile command without any pre-configured scope."
-        },
-        {
-          "description": "Denies the video_set_remote_video_receiving command without any pre-configured scope.",
-          "type": "string",
-          "const": "deny-video-set-remote-video-receiving",
-          "markdownDescription": "Denies the video_set_remote_video_receiving command without any pre-configured scope."
-        },
-        {
-          "description": "Denies the video_set_self_preview_mode command without any pre-configured scope.",
-          "type": "string",
-          "const": "deny-video-set-self-preview-mode",
-          "markdownDescription": "Denies the video_set_self_preview_mode command without any pre-configured scope."
-        },
-        {
-          "description": "Denies the video_set_source_profile command without any pre-configured scope.",
-          "type": "string",
-          "const": "deny-video-set-source-profile",
-          "markdownDescription": "Denies the video_set_source_profile command without any pre-configured scope."
-        },
-        {
-          "description": "Denies the video_start_camera command without any pre-configured scope.",
-          "type": "string",
-          "const": "deny-video-start-camera",
-          "markdownDescription": "Denies the video_start_camera command without any pre-configured scope."
-        },
-        {
-          "description": "Denies the video_start_display_share command without any pre-configured scope.",
-          "type": "string",
-          "const": "deny-video-start-display-share",
-          "markdownDescription": "Denies the video_start_display_share command without any pre-configured scope."
-        },
-        {
-          "description": "Denies the video_start_window_share command without any pre-configured scope.",
-          "type": "string",
-          "const": "deny-video-start-window-share",
-          "markdownDescription": "Denies the video_start_window_share command without any pre-configured scope."
-        },
-        {
-          "description": "Denies the video_stop_source command without any pre-configured scope.",
-          "type": "string",
-          "const": "deny-video-stop-source",
-          "markdownDescription": "Denies the video_stop_source command without any pre-configured scope."
-        },
-        {
-          "description": "Denies the window_lock_aspect command without any pre-configured scope.",
-          "type": "string",
-          "const": "deny-window-lock-aspect",
-          "markdownDescription": "Denies the window_lock_aspect command without any pre-configured scope."
-        },
-        {
-          "description": "Denies the window_show_main command without any pre-configured scope.",
-          "type": "string",
-          "const": "deny-window-show-main",
-          "markdownDescription": "Denies the window_show_main command without any pre-configured scope."
-        },
-        {
-          "description": "Denies the workshop_connect command without any pre-configured scope.",
-          "type": "string",
-          "const": "deny-workshop-connect",
-          "markdownDescription": "Denies the workshop_connect command without any pre-configured scope."
-        },
-        {
-          "description": "Denies the workshop_disconnect command without any pre-configured scope.",
-          "type": "string",
-          "const": "deny-workshop-disconnect",
-          "markdownDescription": "Denies the workshop_disconnect command without any pre-configured scope."
-        },
-        {
-          "description": "Denies the workshop_publish command without any pre-configured scope.",
-          "type": "string",
-          "const": "deny-workshop-publish",
-          "markdownDescription": "Denies the workshop_publish command without any pre-configured scope."
-        },
-        {
-          "description": "Denies the workshop_stop command without any pre-configured scope.",
-          "type": "string",
-          "const": "deny-workshop-stop",
-          "markdownDescription": "Denies the workshop_stop command without any pre-configured scope."
-        },
-        {
-          "description": "Denies the workshop_stop_all command without any pre-configured scope.",
-          "type": "string",
-          "const": "deny-workshop-stop-all",
-          "markdownDescription": "Denies the workshop_stop_all command without any pre-configured scope."
-        },
-        {
           "description": "This permission set configures if your\napplication can enable or disable auto\nstarting the application on boot.\n\n#### Granted Permissions\n\nIt allows all to check, enable and\ndisable the automatic start on boot.\n\n\n#### This default permission set includes:\n\n- `allow-enable`\n- `allow-disable`\n- `allow-is-enabled`",
           "type": "string",
           "const": "autostart:default",
@@ -4171,6 +2491,282 @@
           "type": "string",
           "const": "dialog:deny-save",
           "markdownDescription": "Denies the save command without any pre-configured scope."
+        },
+        {
+          "description": "No features are enabled by default, as we believe\nthe shortcuts can be inherently dangerous and it is\napplication specific if specific shortcuts should be\nregistered or unregistered.\n",
+          "type": "string",
+          "const": "global-shortcut:default",
+          "markdownDescription": "No features are enabled by default, as we believe\nthe shortcuts can be inherently dangerous and it is\napplication specific if specific shortcuts should be\nregistered or unregistered.\n"
+        },
+        {
+          "description": "Enables the is_registered command without any pre-configured scope.",
+          "type": "string",
+          "const": "global-shortcut:allow-is-registered",
+          "markdownDescription": "Enables the is_registered command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the register command without any pre-configured scope.",
+          "type": "string",
+          "const": "global-shortcut:allow-register",
+          "markdownDescription": "Enables the register command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the register_all command without any pre-configured scope.",
+          "type": "string",
+          "const": "global-shortcut:allow-register-all",
+          "markdownDescription": "Enables the register_all command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the unregister command without any pre-configured scope.",
+          "type": "string",
+          "const": "global-shortcut:allow-unregister",
+          "markdownDescription": "Enables the unregister command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the unregister_all command without any pre-configured scope.",
+          "type": "string",
+          "const": "global-shortcut:allow-unregister-all",
+          "markdownDescription": "Enables the unregister_all command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the is_registered command without any pre-configured scope.",
+          "type": "string",
+          "const": "global-shortcut:deny-is-registered",
+          "markdownDescription": "Denies the is_registered command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the register command without any pre-configured scope.",
+          "type": "string",
+          "const": "global-shortcut:deny-register",
+          "markdownDescription": "Denies the register command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the register_all command without any pre-configured scope.",
+          "type": "string",
+          "const": "global-shortcut:deny-register-all",
+          "markdownDescription": "Denies the register_all command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the unregister command without any pre-configured scope.",
+          "type": "string",
+          "const": "global-shortcut:deny-unregister",
+          "markdownDescription": "Denies the unregister command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the unregister_all command without any pre-configured scope.",
+          "type": "string",
+          "const": "global-shortcut:deny-unregister-all",
+          "markdownDescription": "Denies the unregister_all command without any pre-configured scope."
+        },
+        {
+          "description": "This permission set configures which\nnotification features are by default exposed.\n\n#### Granted Permissions\n\nIt allows all notification related features.\n\n\n#### This default permission set includes:\n\n- `allow-is-permission-granted`\n- `allow-request-permission`\n- `allow-notify`\n- `allow-register-action-types`\n- `allow-register-listener`\n- `allow-remove-listener`\n- `allow-cancel`\n- `allow-get-pending`\n- `allow-remove-active`\n- `allow-get-active`\n- `allow-check-permissions`\n- `allow-show`\n- `allow-batch`\n- `allow-list-channels`\n- `allow-delete-channel`\n- `allow-create-channel`\n- `allow-permission-state`",
+          "type": "string",
+          "const": "notification:default",
+          "markdownDescription": "This permission set configures which\nnotification features are by default exposed.\n\n#### Granted Permissions\n\nIt allows all notification related features.\n\n\n#### This default permission set includes:\n\n- `allow-is-permission-granted`\n- `allow-request-permission`\n- `allow-notify`\n- `allow-register-action-types`\n- `allow-register-listener`\n- `allow-remove-listener`\n- `allow-cancel`\n- `allow-get-pending`\n- `allow-remove-active`\n- `allow-get-active`\n- `allow-check-permissions`\n- `allow-show`\n- `allow-batch`\n- `allow-list-channels`\n- `allow-delete-channel`\n- `allow-create-channel`\n- `allow-permission-state`"
+        },
+        {
+          "description": "Enables the batch command without any pre-configured scope.",
+          "type": "string",
+          "const": "notification:allow-batch",
+          "markdownDescription": "Enables the batch command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the cancel command without any pre-configured scope.",
+          "type": "string",
+          "const": "notification:allow-cancel",
+          "markdownDescription": "Enables the cancel command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the check_permissions command without any pre-configured scope.",
+          "type": "string",
+          "const": "notification:allow-check-permissions",
+          "markdownDescription": "Enables the check_permissions command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the create_channel command without any pre-configured scope.",
+          "type": "string",
+          "const": "notification:allow-create-channel",
+          "markdownDescription": "Enables the create_channel command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the delete_channel command without any pre-configured scope.",
+          "type": "string",
+          "const": "notification:allow-delete-channel",
+          "markdownDescription": "Enables the delete_channel command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the get_active command without any pre-configured scope.",
+          "type": "string",
+          "const": "notification:allow-get-active",
+          "markdownDescription": "Enables the get_active command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the get_pending command without any pre-configured scope.",
+          "type": "string",
+          "const": "notification:allow-get-pending",
+          "markdownDescription": "Enables the get_pending command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the is_permission_granted command without any pre-configured scope.",
+          "type": "string",
+          "const": "notification:allow-is-permission-granted",
+          "markdownDescription": "Enables the is_permission_granted command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the list_channels command without any pre-configured scope.",
+          "type": "string",
+          "const": "notification:allow-list-channels",
+          "markdownDescription": "Enables the list_channels command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the notify command without any pre-configured scope.",
+          "type": "string",
+          "const": "notification:allow-notify",
+          "markdownDescription": "Enables the notify command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the permission_state command without any pre-configured scope.",
+          "type": "string",
+          "const": "notification:allow-permission-state",
+          "markdownDescription": "Enables the permission_state command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the register_action_types command without any pre-configured scope.",
+          "type": "string",
+          "const": "notification:allow-register-action-types",
+          "markdownDescription": "Enables the register_action_types command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the register_listener command without any pre-configured scope.",
+          "type": "string",
+          "const": "notification:allow-register-listener",
+          "markdownDescription": "Enables the register_listener command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the remove_active command without any pre-configured scope.",
+          "type": "string",
+          "const": "notification:allow-remove-active",
+          "markdownDescription": "Enables the remove_active command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the remove_listener command without any pre-configured scope.",
+          "type": "string",
+          "const": "notification:allow-remove-listener",
+          "markdownDescription": "Enables the remove_listener command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the request_permission command without any pre-configured scope.",
+          "type": "string",
+          "const": "notification:allow-request-permission",
+          "markdownDescription": "Enables the request_permission command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the show command without any pre-configured scope.",
+          "type": "string",
+          "const": "notification:allow-show",
+          "markdownDescription": "Enables the show command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the batch command without any pre-configured scope.",
+          "type": "string",
+          "const": "notification:deny-batch",
+          "markdownDescription": "Denies the batch command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the cancel command without any pre-configured scope.",
+          "type": "string",
+          "const": "notification:deny-cancel",
+          "markdownDescription": "Denies the cancel command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the check_permissions command without any pre-configured scope.",
+          "type": "string",
+          "const": "notification:deny-check-permissions",
+          "markdownDescription": "Denies the check_permissions command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the create_channel command without any pre-configured scope.",
+          "type": "string",
+          "const": "notification:deny-create-channel",
+          "markdownDescription": "Denies the create_channel command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the delete_channel command without any pre-configured scope.",
+          "type": "string",
+          "const": "notification:deny-delete-channel",
+          "markdownDescription": "Denies the delete_channel command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the get_active command without any pre-configured scope.",
+          "type": "string",
+          "const": "notification:deny-get-active",
+          "markdownDescription": "Denies the get_active command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the get_pending command without any pre-configured scope.",
+          "type": "string",
+          "const": "notification:deny-get-pending",
+          "markdownDescription": "Denies the get_pending command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the is_permission_granted command without any pre-configured scope.",
+          "type": "string",
+          "const": "notification:deny-is-permission-granted",
+          "markdownDescription": "Denies the is_permission_granted command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the list_channels command without any pre-configured scope.",
+          "type": "string",
+          "const": "notification:deny-list-channels",
+          "markdownDescription": "Denies the list_channels command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the notify command without any pre-configured scope.",
+          "type": "string",
+          "const": "notification:deny-notify",
+          "markdownDescription": "Denies the notify command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the permission_state command without any pre-configured scope.",
+          "type": "string",
+          "const": "notification:deny-permission-state",
+          "markdownDescription": "Denies the permission_state command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the register_action_types command without any pre-configured scope.",
+          "type": "string",
+          "const": "notification:deny-register-action-types",
+          "markdownDescription": "Denies the register_action_types command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the register_listener command without any pre-configured scope.",
+          "type": "string",
+          "const": "notification:deny-register-listener",
+          "markdownDescription": "Denies the register_listener command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the remove_active command without any pre-configured scope.",
+          "type": "string",
+          "const": "notification:deny-remove-active",
+          "markdownDescription": "Denies the remove_active command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the remove_listener command without any pre-configured scope.",
+          "type": "string",
+          "const": "notification:deny-remove-listener",
+          "markdownDescription": "Denies the remove_listener command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the request_permission command without any pre-configured scope.",
+          "type": "string",
+          "const": "notification:deny-request-permission",
+          "markdownDescription": "Denies the request_permission command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the show command without any pre-configured scope.",
+          "type": "string",
+          "const": "notification:deny-show",
+          "markdownDescription": "Denies the show command without any pre-configured scope."
         },
         {
           "description": "This permission set allows opening `mailto:`, `tel:`, `https://` and `http://` urls using their default application\nas well as reveal file in directories using default file explorer\n#### This default permission set includes:\n\n- `allow-open-url`\n- `allow-reveal-item-in-dir`\n- `allow-default-urls`",

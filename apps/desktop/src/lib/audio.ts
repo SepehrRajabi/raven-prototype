@@ -186,6 +186,7 @@ export interface NativeAudioCapabilityReport {
   issues: string[];
   supportedSourceTypes: AudioSourceType[];
   supportsMicrophone: boolean;
+  supportsMonitoring: boolean;
   supportsSystemAudio: boolean;
   supportsAppAudio: boolean;
   supportsScreenAudio: boolean;

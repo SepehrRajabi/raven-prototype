@@ -85,6 +85,43 @@ bun run build
 bun run tauri build
 ```
 
+## Android (MobileNative)
+
+The Android app builds from this same frontend and Rust crate. Desktop-only Rust code is
+`#[cfg(not(mobile))]`, Android-only code `#[cfg(mobile)]`; `isAndroid`
+(`src/mobileNative/platform.ts`) picks the phone shell in `App.tsx`. The local plugin
+`src-tauri/plugins/raven-mobile-native` holds all Kotlin, Gradle, manifest and resources;
+the `src-tauri/gen/android` project is generated and ignored. The WebRTC JAR and native
+libraries are staged from the locked `webrtc-sys-build` archive at build time, so no
+binaries are checked in.
+
+Toolchain: Rust with the `aarch64-linux-android` target, JDK 17, SDK platform 36,
+build tools 35.0.0, NDK 27.2.12479018, Gradle 8.14.3. From `apps/desktop`:
+
+```sh
+bun install --frozen-lockfile
+bun run mobile-native:init    # generates src-tauri/gen/android
+bun run mobile-native:check   # frontend tests, then an arm64 debug APK
+```
+
+Set `RAVEN_MOBILE_NATIVE_API_URL` or `VITE_RAVEN_API_URL` to an API the phone can reach.
+`scripts/tauri.ts` loads the repository `.env` by plain assignment, so a value there wins
+over the shell. Release builds need an `https:` URL and allow cleartext only to the
+loopback frame service; debug builds also allow a LAN API. The debug APK is written under
+`src-tauri/gen/android/app/build/outputs/apk/universal/debug/` (arm64 only, debug signed).
+
+On Windows, Android commands use the TypeScript wrapper directly so flags such as
+`--debug` reach Tauri; desktop commands still use the PowerShell/MSVC wrapper. Keep the
+JDK, NDK and Rust on `PATH`, and use a short `CARGO_TARGET_DIR` when the checkout path is
+long.
+
+Known limits: a foreground service keeps audio calls running in the background, but
+heartbeat and rejoin still run in the WebView, which Android may throttle, so presence can
+lapse during a long background call. The camera works only in the foreground. Swiping the
+app away ends the call. Device lists are matched by name, and choosing an output may not
+change the route while `MODE_IN_COMMUNICATION` is set. Not built yet: screen and playback
+capture, audio route selection, picture-in-picture, push, iOS.
+
 ## Notes
 
 - Use Bun for all JavaScript and TypeScript package operations.

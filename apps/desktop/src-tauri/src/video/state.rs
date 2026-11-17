@@ -29,6 +29,7 @@ use crate::audio::state::{
     add_and_publish_shared_audio_source, linked_app_audio_name, remove_shared_audio_source,
     resolve_app_identity, AudioStateError, SharedAudioEngineState,
 };
+use crate::media_eligibility;
 use crate::video::capture::{
     list_cameras, list_displays, list_windows, screen_capture_runtime_readiness, window_share_size,
     CaptureEvent, CaptureEvents, VideoCaptureError, VideoCaptureManager,
@@ -397,8 +398,8 @@ pub async fn video_set_remote_video_receiving(
 // so these run on a blocking worker instead.
 
 #[tauri::command]
-pub async fn video_list_cameras() -> Result<Vec<CameraDevice>, VideoStateError> {
-    list_off_main_thread(list_cameras).await
+pub async fn video_list_cameras(app: AppHandle) -> Result<Vec<CameraDevice>, VideoStateError> {
+    list_off_main_thread(move || list_cameras(&app)).await
 }
 
 #[tauri::command]
@@ -412,7 +413,7 @@ pub async fn video_list_windows() -> Result<Vec<WindowTarget>, VideoStateError> 
 }
 
 async fn list_off_main_thread<T: Send + 'static>(
-    list: fn() -> Result<T, VideoCaptureError>,
+    list: impl FnOnce() -> Result<T, VideoCaptureError> + Send + 'static,
 ) -> Result<T, VideoStateError> {
     tauri::async_runtime::spawn_blocking(move || {
         // The shell icon lookups behind window listing need COM on the calling thread.
@@ -463,6 +464,8 @@ pub async fn video_connect_room(
     viewer_token: String,
     rejoin: Option<bool>,
 ) -> Result<VideoMixerState, VideoStateError> {
+    media_eligibility::require_call(&app)
+        .map_err(|message| VideoStateError::EngineFailed { message })?;
     let runtime = video_runtime(&state)?;
     let mut ops = runtime.ops.lock().await;
     let preferences = {
@@ -842,6 +845,19 @@ async fn finish_video_mutation(
         let guard = state.read().map_err(|_| VideoStateError::StatePoisoned)?;
         (guard.mixer.local_sources.clone(), guard.preview.clone())
     };
+    let camera_blocked = media_eligibility::require_camera(app).err();
+    // Blocked before a call is not a fault: the runtime stays idle and joining starts the camera.
+    let camera_error = camera_blocked
+        .clone()
+        .filter(|_| media_eligibility::require_call(app).is_ok());
+    if camera_blocked.is_some() {
+        for source in &mut sources {
+            if source.kind == VideoSourceKind::Camera {
+                source.enabled = false;
+                source.publishing = false;
+            }
+        }
+    }
     // Publish/unpublish LiveKit tracks first so the capture manager can attach the
     // matching publish sinks to the capture threads it starts.
     let publication_error = ops.engine.reconcile_publications(&sources).await.err();
@@ -852,6 +868,8 @@ async fn finish_video_mutation(
     let sinks = preview.wrap_publish_sinks(ops.engine.sink_map(), &source_types);
     if !ops.capture.has_event_handler() {
         ops.capture.set_event_handler(capture_events(app, state));
+        #[cfg(mobile)]
+        ops.capture.set_mobile_native_app(app.clone());
     }
     let capture = &mut ops.capture;
     let capture_error = tokio::task::block_in_place(|| capture.reconcile(&mut sources, &sinks));
@@ -871,6 +889,13 @@ async fn finish_video_mutation(
                 .find(|source| source.id == reconciled.id)
             {
                 source.runtime = reconciled.runtime;
+                // The user's desired `enabled` stays; only the reported runtime says it is blocked.
+                if let Some(reason) = &camera_error {
+                    if source.kind == VideoSourceKind::Camera && source.enabled {
+                        source.runtime.status = VideoSourceRuntimeStatus::Error;
+                        source.runtime.error = Some(reason.clone());
+                    }
+                }
             }
         }
         guard.snapshot()

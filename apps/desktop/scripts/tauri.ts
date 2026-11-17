@@ -21,7 +21,9 @@ function run(command: string, commandArgs: string[]): never {
   process.exit(result.status ?? 1);
 }
 
-if (process.platform === "win32") {
+const subcommand = args[0] ?? "";
+
+if (process.platform === "win32" && subcommand !== "android") {
   run("powershell", ["-ExecutionPolicy", "Bypass", "-File", path.join(import.meta.dir, "tauri.ps1"), ...args]);
 }
 
@@ -39,8 +41,11 @@ if (existsSync(envFile)) {
   }
 }
 
-const subcommand = args[0] ?? "";
 const extraArgs: string[] = [];
+
+if (subcommand === "android") {
+  run(process.execPath, [path.join(import.meta.dir, "mobile-native.ts"), ...args.slice(1)]);
+}
 
 if (subcommand === "dev" || subcommand === "build") {
   process.env.RAVEN_DESKTOP_API_MODE = "remote";

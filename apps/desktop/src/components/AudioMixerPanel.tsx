@@ -604,6 +604,7 @@ export function AudioMixerPanel({ deafen }: { deafen?: { deafened: boolean; onTo
               inputDevices={inputDevices}
               outputDevices={outputDevices}
               busy={busySourceIds.has(source.id)}
+              supportsMonitoring={capabilities?.supportsMonitoring}
               draftGainDb={draftGains[source.id]}
               onGainChange={scheduleGain}
               onGainCommit={flushGain}
@@ -1286,6 +1287,7 @@ function ChannelStrip({
   inputDevices,
   outputDevices,
   busy = false,
+  supportsMonitoring = false,
   draftGainDb,
   onGainChange,
   onGainCommit,
@@ -1314,6 +1316,7 @@ function ChannelStrip({
   onProcessorParameterCommit,
   draftProcessorParams = {},
 }: {
+  supportsMonitoring?: boolean;
   strip: ChannelStripView;
   presets: AudioPresetDefinition[];
   inputDevices: AudioInputDevice[];
@@ -1367,7 +1370,7 @@ function ChannelStrip({
   // captured device straight to the local output so you can hear yourself. Enabling it mutes
   // the outgoing channel (so peers don't get a double / echo); disabling restores the prior
   // mute state captured at enable time.
-  const isMonitorable = strip.mode === "local" && strip.sourceType === "microphone";
+  const isMonitorable = supportsMonitoring && strip.mode === "local" && strip.sourceType === "microphone";
   const monitorDeviceName = strip.mode === "local"
     ? strip.runtime.deviceName ?? strip.captureDeviceId
     : null;

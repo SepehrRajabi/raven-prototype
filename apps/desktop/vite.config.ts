@@ -26,6 +26,7 @@ export default defineConfig(({ mode }) => {
     envDir: repoRoot,
     define: {
       __RAVEN_CLIENT_VERSION__: JSON.stringify(desktopPackage.version),
+      __RAVEN_ANDROID__: JSON.stringify(process.env.TAURI_ENV_PLATFORM === "android"),
     },
     plugins: [react()],
     resolve: {

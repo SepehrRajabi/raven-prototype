@@ -352,10 +352,10 @@ pub async fn attachment_save(window: tauri::WebviewWindow, request: Request<'_>)
         .ok_or(AttachmentError::Unsupported)?;
     let bytes = bytes.clone();
     let extension = extension_for(&options.content_type);
-    let picker = window
-        .dialog()
-        .file()
-        .set_parent(&window)
+    let picker = window.dialog().file();
+    #[cfg(not(mobile))]
+    let picker = picker.set_parent(&window);
+    let picker = picker
         .set_file_name(options.name.rsplit(['/', '\\']).next().unwrap_or("image"))
         .add_filter("Image", &[extension]);
     tauri::async_runtime::spawn_blocking(move || {

@@ -74,6 +74,14 @@ Rules the engines are built around:
 - **A raised hand asks the room, not a host.** "I'd like to speak" is a marker on the person's own participation (`POST /v1/nests/:id/session/state`, see `docs/api.md`). The server orders the line and sends only places, never times. The client lowers the hand itself after about 3 s of the owner's own speech with the microphone live (`lib/raisedHand.ts`); speech while muted or server-muted does not count. "Your turn" is decided on the device from the voice activity already in the call: first in line and no one else speaking for 1.5 s. The hand cue plays when another person's hand goes up, never for hands already up when you arrive.
 - **A lost room is rejoined by the app.** The engines report why a connection was lost; the UI rejoins with fresh tokens and backoff, except after a duplicate sign-in, a removal, or a closed room.
 
+MobileNative, the native Android app, uses these same Rust media engines and React
+app state. A local Tauri plugin under `src-tauri/plugins/raven-mobile-native` adapts
+Android permissions, audio focus, Activity lifecycle and CameraX frames.
+Engines ask `media_eligibility` whether media may run, which stops pending capture
+when the app goes to the background or leaves a call; on desktop it always allows.
+React remains the call supervisor, through a per-shell `CallHost`, so calls run only
+in the foreground for now. See [Android (MobileNative)](development.md#android-mobilenative).
+
 ### Desktop windows and native commands
 
 The desktop app has one page, loaded in several windows: `main`, the voice overlay (`voice-overlay`), picture-in-picture windows (`pip-*`), and Nest and Studio windows (`nest-window-*`, `studio-window-*`) that the current UI does not open. Each window may call only the native commands it needs:

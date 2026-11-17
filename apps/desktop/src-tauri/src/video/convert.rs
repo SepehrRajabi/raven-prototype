@@ -328,6 +328,10 @@ fn rgb_to_v(r: u8, g: u8, b: u8) -> u8 {
 ///
 /// `src_stride` is the number of bytes per source row (may include padding). Rows/cols
 /// beyond the requested `width`/`height` are ignored.
+///
+/// The last row may be unpadded: `src` only needs `(height - 1) * src_stride + width * bpp`
+/// bytes, which is the furthest byte any row reads. Returns `None` when the stride cannot
+/// hold a row or the buffer is shorter than that minimum (including arithmetic overflow).
 pub fn packed_to_i420(
     src: &[u8],
     width: u32,
@@ -341,7 +345,9 @@ pub fn packed_to_i420(
     let bpp = format.bytes_per_pixel();
     let w = width as usize;
     let h = height as usize;
-    if src_stride < w * bpp || src.len() < src_stride * h {
+    let row_bytes = w.checked_mul(bpp)?;
+    let min_len = src_stride.checked_mul(h - 1)?.checked_add(row_bytes)?;
+    if src_stride < row_bytes || src.len() < min_len {
         return None;
     }
 
@@ -709,5 +715,45 @@ mod tests {
         };
         let resized = resize_i420_filtered(&frame, 3, 3);
         assert_eq!(resized.y[4], 139);
+    }
+
+    #[test]
+    fn packed_conversion_accepts_unpadded_last_row() {
+        let (width, height) = (3_u32, 3_usize);
+        let bpp = 4;
+        let row_bytes = width as usize * bpp;
+        let stride = row_bytes + 4;
+        let pixel =
+            |row: usize, col: usize, channel: usize| (row * 37 + col * 11 + channel * 70) as u8;
+
+        let mut padded = vec![0xFF; stride * height];
+        let mut unpadded = Vec::new();
+        for row in 0..height {
+            for col in 0..width as usize {
+                for channel in 0..bpp {
+                    padded[row * stride + col * bpp + channel] = pixel(row, col, channel);
+                }
+            }
+            if row + 1 < height {
+                unpadded.extend_from_slice(&padded[row * stride..row * stride + stride]);
+            } else {
+                unpadded.extend_from_slice(&padded[row * stride..row * stride + row_bytes]);
+            }
+        }
+        assert_eq!(unpadded.len(), stride * (height - 1) + row_bytes);
+
+        let from_padded =
+            packed_to_i420(&padded, width, height as u32, stride, PackedFormat::Rgba).unwrap();
+        let from_unpadded =
+            packed_to_i420(&unpadded, width, height as u32, stride, PackedFormat::Rgba).unwrap();
+        assert_eq!(from_unpadded.y, from_padded.y);
+        assert_eq!(from_unpadded.u, from_padded.u);
+        assert_eq!(from_unpadded.v, from_padded.v);
+
+        let one_short = &unpadded[..unpadded.len() - 1];
+        assert!(
+            packed_to_i420(one_short, width, height as u32, stride, PackedFormat::Rgba).is_none()
+        );
+        assert!(packed_to_i420(&[0; 4], 1, 3, usize::MAX, PackedFormat::Bgra).is_none());
     }
 }

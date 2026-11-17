@@ -49,10 +49,27 @@ mod tests {
         let lib = include_str!("lib.rs");
         let start = lib.find("generate_handler![").expect("generate_handler! in lib.rs")
             + "generate_handler![".len();
-        let end = start + lib[start..].find(']').expect("end of generate_handler!");
+        // The list ends at the `]` that closes it, not at one inside a `#[cfg(...)]`.
+        let mut depth = 1;
+        let end = start
+            + lib[start..]
+                .find(|c| {
+                    match c {
+                        '[' => depth += 1,
+                        ']' => depth -= 1,
+                        _ => {}
+                    }
+                    depth == 0
+                })
+                .expect("end of generate_handler!");
         lib[start..end]
             .split(',')
-            .map(|item| item.trim().rsplit("::").next().unwrap_or("").to_string())
+            .map(|item| {
+                // Drop attributes such as `#[cfg(mobile)]` written above a command.
+                let item = item.trim();
+                let name = item.rfind(']').map_or(item, |at| item[at + 1..].trim());
+                name.rsplit("::").next().unwrap_or("").to_string()
+            })
             .filter(|name| !name.is_empty())
             .collect()
     }

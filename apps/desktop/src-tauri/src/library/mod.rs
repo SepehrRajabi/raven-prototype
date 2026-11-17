@@ -286,11 +286,10 @@ pub async fn library_discard(app: tauri::AppHandle, handle: String) -> Result<()
 #[tauri::command]
 pub async fn library_pick_pack(window: tauri::WebviewWindow) -> Result<Option<String>> {
     use tauri_plugin_dialog::DialogExt;
-    let picker = window
-        .dialog()
-        .file()
-        .set_parent(&window)
-        .add_filter("Raven pack", &["ravenpack", "zip"]);
+    let picker = window.dialog().file();
+    #[cfg(not(mobile))]
+    let picker = picker.set_parent(&window);
+    let picker = picker.add_filter("Raven pack", &["ravenpack", "zip"]);
     tauri::async_runtime::spawn_blocking(move || {
         let Some(path) = picker.blocking_pick_file() else {
             return Ok(None);

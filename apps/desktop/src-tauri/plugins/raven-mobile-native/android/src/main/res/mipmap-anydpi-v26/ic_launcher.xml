@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The desktop artwork spans ~92% of its canvas; adaptive icons keep only the inner ~61%,
+     so inset the generated foreground to fit the launcher mask. -->
+<adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android">
+  <foreground>
+    <inset android:drawable="@mipmap/ic_launcher_foreground" android:inset="18%" />
+  </foreground>
+  <background android:drawable="@color/ic_launcher_background" />
+</adaptive-icon>

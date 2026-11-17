@@ -1,0 +1,18 @@
+[package]
+name = "raven-mobile-native"
+version = "0.1.0"
+edition = "2021"
+links = "raven_mobile_native"
+
+[build-dependencies]
+tauri-plugin = { version = "2", features = ["build"] }
+
+webrtc-sys-build = "=0.3.18"
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+tauri = { version = "2", features = ["wry"] }
+
+[target.'cfg(target_os = "android")'.dependencies]
+jni = "=0.21.1"
+livekit = { version = "0.7", features = ["rustls-tls-webpki-roots"] }

@@ -291,7 +291,7 @@ function EventDialog({
             onChange={(text, picked) => setDescription({ text: text.slice(0, MAX_DESCRIPTION), picked })}
           />
         </label>
-        <div className="grid gap-4 sm:grid-cols-2">
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
           <Field label={data.labels.nestSingular}>
             <Select value={room} disabled={saving} onValueChange={setRoom}>
               <SelectTrigger><SelectValue>{roomName}</SelectValue></SelectTrigger>
