@@ -50,9 +50,9 @@ while (pending.length) {
 }
 for (const id of reached) {
   const crate = crates.get(id);
-  // Crates without a source are local: Raven itself, which is not third-party, and the
-  // copies vendored under src-tauri/vendor, which are.
-  if (crate.source || id !== metadata.resolve.root) {
+  // Crates without a source are local: Raven itself and its plugins, which are not
+  // third-party, and the copies vendored under src-tauri/vendor, which are.
+  if (crate.source || crate.manifest_path.replaceAll("\\", "/").includes("/src-tauri/vendor/")) {
     add(crate.name, crate.version, crate.license, dirname(crate.manifest_path));
   }
 }
