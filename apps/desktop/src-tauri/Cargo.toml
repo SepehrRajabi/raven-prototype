@@ -151,7 +151,9 @@ x11-dl = "2.21"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 # Native macOS display/window and system/app audio capture via ScreenCaptureKit.
-screencapturekit = { version = "8.0.0", features = ["macos_13_0"] }
+# macos_14_0 adds the one-off screenshot behind the share picker's thumbnails; it is
+# checked at run time, so macOS 13 still runs Raven and shows the picker without them.
+screencapturekit = { version = "8.0.0", features = ["macos_14_0"] }
 # Camera permission. Already built as part of nokhwa; named here because nokhwa only says
 # whether access is granted, not whether macOS has asked yet or was refused.
 nokhwa-bindings-macos = "0.2.4"
