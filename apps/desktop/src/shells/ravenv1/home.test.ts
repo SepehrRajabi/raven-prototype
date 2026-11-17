@@ -62,16 +62,17 @@ const tree = (id: string, name: string): Tree => ({
 }) as Tree;
 
 describe("unreadConversations", () => {
-  test("keeps unread direct messages and groups, newest first, and skips the rest", () => {
+  test("keeps unread direct messages, groups and Raven, newest first, and skips the rest", () => {
     const result = unreadConversations([
       conversation({ id: "old", lastActivityMs: 10 }),
+      conversation({ id: "raven", kind: "raven", lastActivityMs: 20 }),
       conversation({ id: "new", kind: "group", lastActivityMs: 30 }),
       conversation({ id: "read", unreadCount: 0, lastActivityMs: 40 }),
       conversation({ id: "archived", archived: true, lastActivityMs: 50 }),
       conversation({ id: "nest", kind: "nest", lastActivityMs: 60 }),
       conversation({ id: "saved", kind: "saved", lastActivityMs: 70 }),
     ]);
-    expect(result.map((item) => item.id)).toEqual(["new", "old"]);
+    expect(result.map((item) => item.id)).toEqual(["new", "raven", "old"]);
   });
 
   test("stops at the limit", () => {

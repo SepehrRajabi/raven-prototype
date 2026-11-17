@@ -10,7 +10,7 @@ import { seedAttachment } from "@/lib/chat/media";
 import { hasUnread } from "@/lib/chat/reducer";
 import { accountScope } from "@/lib/chat/outbox";
 import { ChatStore } from "@/lib/chat/store";
-import type { ChatEvent, ChatState, ConversationState } from "@/lib/chat/types";
+import type { ChatConversation, ChatEvent, ChatState, ConversationState } from "@/lib/chat/types";
 import { eventStream } from "@/lib/eventStream";
 import { setTaskbarUnread } from "@/lib/taskbarBadge";
 import { trayCommands } from "@/lib/tray";
@@ -168,6 +168,14 @@ export function useTreeChatSummaries(store: ChatStore | null): Map<string, TreeC
 }
 
 /** Whether any direct message or group that is not archived has something unread. */
+/**
+ * Your conversation with Raven (event notices and messages from the server's admins), once
+ * the server has started it. Its unread count lights the People lens, so it is listed there.
+ */
+export function useRavenConversation(store: ChatStore | null): ChatConversation | null {
+  return useChatSelector(store, (state) => Object.values(state.conversations).find(({ summary }) => summary.kind === "raven" && !summary.archived)?.summary ?? null, null);
+}
+
 export function useMessagesUnread(store: ChatStore | null): boolean {
   return useChatSelector(store, (state) => Object.values(state.conversations).some(({ summary }) => summary.kind !== "nest" && summary.kind !== "saved" && !summary.archived && summary.unreadCount > 0), false);
 }
