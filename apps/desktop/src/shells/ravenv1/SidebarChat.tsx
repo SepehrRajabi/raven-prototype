@@ -1,7 +1,7 @@
 import { useMemo, useState } from "react";
 import { Plus, Search, UserPlus, Users } from "lucide-react";
 import { NewGroupDialog } from "@/components/chat/ChatDialogs";
-import { ConversationAvatar, ConversationRowCompact, MentionDot, MutedIndicator, RavenAvatar, SavedAvatar, SystemBadge, UnreadCount } from "@/components/chat/ConversationRow";
+import { ConversationAvatar, ConversationRowCompact, MentionDot, MutedIndicator, SavedAvatar, UnreadCount } from "@/components/chat/ConversationRow";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { Input } from "@/components/ui/input";
 import { Tooltip } from "@/components/ui/tooltip";
@@ -14,7 +14,7 @@ import { filterPeople, type FriendsAndGroupsRow } from "./friendsAndGroups";
 import { OFFLINE_RANK, personStatus, reachRank } from "./people";
 import { focusGlobalSearch } from "./searchFocus";
 import { PRESENCE, type RavenShellData, type RavenView } from "./state";
-import { useChatState, useFriendsAndGroups, useOpenPerson, useOpenSaved, useRavenConversation } from "./useChat";
+import { useChatState, useFriendsAndGroups, useOpenPerson, useOpenSaved } from "./useChat";
 
 /**
  * The People lens: who you can talk to. A find field, Saved messages, then friends and groups
@@ -202,7 +202,6 @@ export function SidebarFriendsAndGroups({
       ) : (
         <>
           {chat && data.user ? <SavedRow chat={chat} data={data} view={view} onNavigate={onNavigate} /> : null}
-          <RavenRow chat={chat} view={view} onNavigate={onNavigate} />
           {listLabel}
           {rows.length ? <div className="space-y-px">{rows.map(row)}</div> : <p className="px-2 py-1 text-small text-muted-foreground">Search for someone to add them as a friend.</p>}
         </>
@@ -238,29 +237,6 @@ function SavedRow({ chat, data, view, onNavigate }: { chat: ChatStore; data: Rav
     >
       <SavedAvatar userId={data.user!.id} name={data.preferences.displayName || data.user!.username} className="h-6 w-6 text-[10px]" />
       <span className={cn("min-w-0 flex-1 truncate text-small text-foreground", active && "font-medium")}>Saved messages</span>
-    </button>
-  );
-}
-
-/** Raven's own conversation, under Saved messages while there is one: Raven's mark, "System" and unread. */
-function RavenRow({ chat, view, onNavigate }: { chat: ChatStore | null; view: RavenView; onNavigate: (view: RavenView) => void }) {
-  const conversation = useRavenConversation(chat);
-  if (!conversation) return null;
-  const active = view.kind === "chat" && view.id === conversation.id;
-  const unread = conversation.unreadCount > 0;
-  return (
-    <button
-      type="button"
-      onClick={() => onNavigate({ kind: "chat", id: conversation.id })}
-      aria-current={active ? "page" : undefined}
-      className={cn("mb-px flex h-9 w-full items-center gap-2.5 rounded-control px-2 text-left transition-colors", active ? "bg-secondary" : "hover:bg-secondary/60")}
-    >
-      <RavenAvatar className="h-6 w-6" />
-      <span className={cn("min-w-0 flex-1 truncate text-small text-foreground", (unread || active) && "font-medium")}>
-        <bdi>{conversation.name}</bdi>
-      </span>
-      <SystemBadge />
-      {unread ? <UnreadCount count={conversation.unreadCount} /> : null}
     </button>
   );
 }

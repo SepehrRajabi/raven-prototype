@@ -5,7 +5,7 @@ import { Tooltip } from "@/components/ui/tooltip";
 import { api, type LauncherNest } from "@/lib/api";
 import { cn } from "@/lib/utils";
 import { ChevronDown, ChevronRight, House, MapPin, PanelLeftClose, PanelLeftOpen, Plus, Users } from "lucide-react";
-import { ConversationAvatar, RavenAvatar, SavedAvatar, UnreadDot } from "@/components/chat/ConversationRow";
+import { ConversationAvatar, SavedAvatar, UnreadDot } from "@/components/chat/ConversationRow";
 import type { ChatStore } from "@/lib/chat/store";
 import { LiveDot, NestGlyph, PersonAvatar, SectionLabel } from "./atoms";
 import { PendingList } from "./Inbox";
@@ -17,7 +17,7 @@ import { SidebarLive } from "./SidebarLive";
 import { TreeNests } from "./SidebarTreeNests";
 import { lensForView, readLens, storeLens, type SidebarLens } from "./sidebarLens";
 import { PRESENCE, type RavenShellData, type RavenView } from "./state";
-import { useChatSelector, useFriendsAndGroups, useMessagesUnread, useOpenPerson, useOpenSaved, useRavenConversation, useTreeChatSummaries } from "./useChat";
+import { useChatSelector, useFriendsAndGroups, useMessagesUnread, useOpenPerson, useOpenSaved, useTreeChatSummaries } from "./useChat";
 import type { RavenMediaAdapterState } from "./useRavenMediaAdapter";
 import type { NestEntryController } from "./useNestEntry";
 import { NameDialog } from "./views/dialogs";
@@ -53,7 +53,6 @@ export function Sidebar({
   const messagesUnread = useMessagesUnread(chat);
   const people = useFriendsAndGroups(chat, data, view);
   const saved = useOpenSaved(chat, onNavigate);
-  const ravenConversation = useRavenConversation(chat);
   const { open: openPerson, openingId } = useOpenPerson(chat, onNavigate);
   // The tree whose text nest is open: that nest stays listed under it.
   const activeChatId = view.kind === "chat" ? view.id : "";
@@ -179,18 +178,6 @@ export function Sidebar({
           {lens === "people" && chat && data.user ? (
             <RailButton label="Saved messages" active={view.kind === "chat" && view.id === saved.savedId} disabled={saved.opening} onClick={saved.open}>
               <SavedAvatar userId={data.user.id} name={data.preferences.displayName || data.user.username} className="h-7 w-7" />
-            </RailButton>
-          ) : null}
-          {lens === "people" && ravenConversation ? (
-            <RailButton
-              label={[ravenConversation.name, ravenConversation.unreadCount > 0 ? "unread" : null].filter(Boolean).join(" · ")}
-              active={view.kind === "chat" && view.id === ravenConversation.id}
-              onClick={() => onNavigate({ kind: "chat", id: ravenConversation.id })}
-            >
-              <span className="relative">
-                <RavenAvatar className="h-7 w-7" />
-                {ravenConversation.unreadCount > 0 ? <UnreadDot className="absolute -right-0.5 -top-0.5 h-2 w-2 outline outline-2 outline-background" /> : null}
-              </span>
             </RailButton>
           ) : null}
           {lens === "people"
