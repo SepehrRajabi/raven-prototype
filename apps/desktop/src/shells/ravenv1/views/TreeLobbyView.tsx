@@ -2,7 +2,6 @@ import { useEffect, useMemo, useState } from "react";
 import { ArrowUpDown, ChevronDown, FolderPlus, Globe2, Hand, Lock, LogIn, MoreHorizontal, Plus, Settings, UserPlus, UserRound } from "lucide-react";
 import { Avatar } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
-import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { api, type TreeDetails, type TreeMember, type TreeSearchResult } from "@/lib/api";
 import type { ChatStore } from "@/lib/chat/store";
@@ -101,18 +100,7 @@ export function TreeLobbyView({
             {tree.visibility === "public" ? <Globe2 className="h-3 w-3" /> : <Lock className="h-3 w-3" />}
             {subtitle.visibility}
             <span aria-hidden>·</span>
-            <span className="hidden min-[1100px]:inline">{subtitle.members}</span>
-            {/* The members column needs a wide window; below that the count opens the same list. */}
-            <Popover>
-              <PopoverTrigger asChild>
-                <button type="button" className="rounded-chip underline-offset-4 transition-colors hover:text-foreground hover:underline min-[1100px]:hidden">
-                  {subtitle.members}
-                </button>
-              </PopoverTrigger>
-              <PopoverContent align="start" className="max-h-[60vh] w-72 overflow-y-auto p-2">
-                {membersList}
-              </PopoverContent>
-            </Popover>
+            {subtitle.members}
             {subtitle.inside ? (
               <>
                 <span aria-hidden>·</span>
@@ -330,9 +318,10 @@ export function TreeLobbyView({
             ) : null}
           </div>
 
-          <aside className="hidden min-w-0 space-y-6 min-[1100px]:block">
+          {/* One column below 1100px, so the members follow the nests; the rules are above them there. */}
+          <aside className="min-w-0 space-y-6">
             {membersList}
-            <HouseRules rules={details.rules ?? []} />
+            <HouseRules rules={details.rules ?? []} className="hidden min-[1100px]:block" />
           </aside>
         </div>
       </ViewBody>
@@ -434,7 +423,7 @@ function MembersList({ members, selfId, data, onNavigate, onRenameSelf }: { memb
       ) : null}
       {groups.around.length ? (
         <section>
-          <SectionLabel className="mb-1 px-2">Around · {groups.around.length}</SectionLabel>
+          <SectionLabel className="mb-1 px-2">Around now · {groups.around.length}</SectionLabel>
           <div className="space-y-px">{groups.around.map(row)}</div>
         </section>
       ) : null}
@@ -457,7 +446,7 @@ function MemberRow({
   const away = presence === "offline" || presence === "invisible";
   const status = away ? null : nestName ? `In ${nestName}` : presence === "around" ? null : PRESENCE[presence].label;
   const tags = isSelf
-    ? `You · ${member.nickname ? TREE_ROLE_LABEL[member.role] : "Set your name here"}`
+    ? `You · ${TREE_ROLE_LABEL[member.role]}`
     : member.role !== "member" ? TREE_ROLE_LABEL[member.role] : "";
   return (
     <button

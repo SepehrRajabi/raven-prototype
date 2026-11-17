@@ -39,7 +39,7 @@ export function NotificationSettingsPanel() {
         onChange={(knocks) => set({ knocks })}
       />
       <SettingsToggleRow
-        label="Messages"
+        label="New messages"
         description="Show a Windows notification for new messages while Raven is in the background. Muted conversations and Do not disturb stay quiet."
         checked={settings.messages}
         onChange={(messages) => set({ messages })}

@@ -85,7 +85,7 @@ const RULES: Rule[] = [
     why: "Only media overlays sit on arbitrary video and may use black/white.",
     pattern: /\b(?:text|bg|border)-(?:white|black)(?:\/\d+)?\b|#[0-9a-fA-F]{6}\b/g,
     allowed: (file, line) =>
-      inFile(file, "MediaTile.tsx", "LiveMediaStage.tsx", "VoiceOverlayWindow.tsx", "PictureInPictureWindow.tsx") ? "label over video"
+      inFile(file, "MediaTile.tsx", "LiveMediaStage.tsx", "VoiceOverlayWindow.tsx", "PictureInPictureWindow.tsx", "HandMark.tsx") ? "label over video"
         : inFile(file, "SatelliteCluster.tsx") && line.includes("bg-black/") ? "audio-source chips drawn over a video tile"
         : inFile(file, "dialog.tsx", "drawer.tsx") && line.includes("bg-black/") ? "modal scrim"
         : line.includes("#c42b1c") ? "Windows close-button convention"
@@ -94,15 +94,18 @@ const RULES: Rule[] = [
         : inFile(file, "MessageRow.tsx") && line.includes("bg-black/") ? "time over a chat image"
         : inFile(file, "image-viewer.tsx") && line.includes("bg-black/") ? "image viewer scrim"
         : inFile(file, "AudioMixerPanel.tsx") ? "meter overlay"
+        : inFile(file, "LibraryTile.tsx", "LibraryMedia.tsx") ? "badge over a media thumbnail"
+        : inFile(file, "WatcherStack.tsx") ? "viewer chip over a shared screen"
         : null,
   },
   {
     name: "Live colour outside its job",
     why: "The live colour means someone is live or speaking. It is never a button, link, selection or accent.",
     pattern: /\b(?:bg|text|border|outline|ring)-live\b/g,
-    allowed: (file) =>
-      inFile(file, "atoms.tsx", "Sidebar.tsx", "SidebarLive.tsx", "DeviceDock.tsx", "LiveMediaStage.tsx", "badge.tsx", "VoiceOverlayWindow.tsx")
+    allowed: (file, line) =>
+      inFile(file, "atoms.tsx", "Sidebar.tsx", "SidebarLive.tsx", "SidebarTreeNests.tsx", "DeviceDock.tsx", "LiveMediaStage.tsx", "badge.tsx", "VoiceOverlayWindow.tsx")
         ? "live dot, you-are-here, mic level, speaking"
+        : inFile(file, "TreeNestsSection.tsx") && line.includes('NestGlyph kind="voice" live') ? "glyph of a nest with people in it"
         : null,
   },
   {
@@ -122,7 +125,7 @@ const RULES: Rule[] = [
     pattern: /(?:focus(?:-visible)?:)?outline-none/g,
     allowed: (file, line) =>
       inFile(file, "dialog.tsx", "drawer.tsx", "popover.tsx", "dropdown-menu.tsx", "image-viewer.tsx") ? "floating surface, focus moves inside it"
-        : inFile(file, "TopBar.tsx") && line.includes("bg-transparent") ? "search input; its container shows focus"
+        : inFile(file, "TopBar.tsx", "SettingsSearchField.tsx") && line.includes("bg-transparent") ? "search input; its container shows focus"
         : inFile(file, "AudioMixerPanel.tsx") ? "inline rename field with its own focus style"
         : null,
   },

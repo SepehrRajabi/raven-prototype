@@ -4,6 +4,7 @@ import { Virtuoso, type VirtuosoHandle } from "react-virtuoso";
 import { isLibraryMessage, type ReactionLimits } from "@/lib/chat/attachments";
 import type { ChatStore } from "@/lib/chat/store";
 import { typingLine } from "@/lib/chat/text";
+import { useGlideToEnd } from "./useGlideToEnd";
 import { unreadLabel } from "@/lib/chat/reducer";
 import { buildRows, type ChatRow as Row } from "@/lib/chat/rows";
 import { canSelect, type MessageSelection } from "@/lib/chat/selection";
@@ -92,6 +93,9 @@ function ListFooter({ context }: { context?: ListContext }) {
 }
 
 const LIST_PARTS = { Header: ListHeader, Footer: ListFooter };
+
+/** Keys that move a scrolled list towards its start. */
+const KEYS_UP = new Set(["ArrowUp", "PageUp", "Home"]);
 
 export interface MessageListHandle {
   scrollToLatest: () => void;
@@ -189,6 +193,44 @@ export const MessageList = forwardRef<MessageListHandle, MessageListProps>(funct
     store.setAtBottom(id, atBottom && !conversation.hasMoreAfter);
   }, [store, id, atBottom, conversation.hasMoreAfter]);
 
+  // Whether the view keeps up with the end of the conversation. It is set on reaching the
+  // bottom and cleared only by the person scrolling up or jumping elsewhere, not by the list
+  // growing: while the view glides down to one message, the next may already have arrived,
+  // and that one has to be followed too.
+  const following = useRef(false);
+  // The view follows on a spring of its own rather than the browser's smooth scroll, which
+  // starts abruptly, lasts about 100 ms and restarts with every message in a burst.
+  const { glide, stop: stopGlide } = useGlideToEnd(scroller);
+  const onAtBottomChange = useCallback((value: boolean) => {
+    setAtBottom(value);
+    if (value) following.current = true;
+  }, []);
+  useEffect(() => {
+    if (!scroller) return;
+    const stop = () => {
+      following.current = false;
+      stopGlide();
+    };
+    const onWheel = (event: WheelEvent) => {
+      if (event.deltaY < 0) stop();
+    };
+    const onKey = (event: KeyboardEvent) => {
+      if (KEYS_UP.has(event.key)) stop();
+    };
+    // A press on the scroller itself, not on a message in it, is a press on its scrollbar.
+    const onPointer = (event: PointerEvent) => {
+      if (event.target === scroller) stop();
+    };
+    scroller.addEventListener("wheel", onWheel, { passive: true });
+    scroller.addEventListener("keydown", onKey);
+    scroller.addEventListener("pointerdown", onPointer);
+    return () => {
+      scroller.removeEventListener("wheel", onWheel);
+      scroller.removeEventListener("keydown", onKey);
+      scroller.removeEventListener("pointerdown", onPointer);
+    };
+  }, [scroller, stopGlide]);
+
   // What is on screen has been seen, provided the person can see the window.
   const markVisibleRead = useCallback(() => {
     if (!windowActive || !scroller) return;
@@ -236,6 +278,9 @@ export const MessageList = forwardRef<MessageListHandle, MessageListProps>(funct
 
   const openReply = useCallback(
     (seq: number) => {
+      // The person went to read something further back; new messages must not pull them away.
+      following.current = false;
+      stopGlide();
       const at = rows.findIndex((row) => row.kind === "message" && row.message.seq === seq);
       const flash = (messageId: string) => {
         setHighlighted(messageId);
@@ -293,6 +338,16 @@ export const MessageList = forwardRef<MessageListHandle, MessageListProps>(funct
   const atStart = !conversation.hasMoreBefore;
   const context = useMemo<ListContext>(() => ({ loadingOlder, atStart, intro, typing }), [loadingOlder, atStart, intro, typing]);
 
+  // When someone starts typing and the view is following, glide down so the whole line is
+  // in view. Its space is always kept, so this moves at most the last few pixels.
+  const someoneTyping = typing !== "";
+  const atEnd = !conversation.hasMoreAfter;
+  useEffect(() => {
+    if (!someoneTyping || !atEnd || !scroller || !following.current) return;
+    const gap = scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight;
+    if (gap > 1) glide();
+  }, [someoneTyping, atEnd, scroller, glide]);
+
   if (!conversation.loaded) {
     return (
       <div className="flex min-h-0 flex-1 items-center justify-center text-small text-muted-foreground" role="status">
@@ -318,9 +373,14 @@ export const MessageList = forwardRef<MessageListHandle, MessageListProps>(funct
         // New messages pull the view down only at the real end of the conversation. At
         // the end of a window further back, the next page would otherwise drag the view
         // to its own end, which fetches the page after that, and so on to the newest.
-        followOutput={(isAtBottom) => (isAtBottom && !conversation.hasMoreAfter ? "auto" : false)}
+        followOutput={(isAtBottom) => {
+          // The new row is laid out in the next frame; the glide starts there and reads the
+          // end afresh on every frame.
+          if ((isAtBottom || following.current) && !conversation.hasMoreAfter) requestAnimationFrame(glide);
+          return false;
+        }}
         atBottomThreshold={48}
-        atBottomStateChange={setAtBottom}
+        atBottomStateChange={onAtBottomChange}
         increaseViewportBy={{ top: 600, bottom: 600 }}
         defaultItemHeight={USUAL_ROW_HEIGHT}
         // Row heights are applied in the frame they are measured. A frame later, a row

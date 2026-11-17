@@ -3,7 +3,7 @@ import { listen } from "@tauri-apps/api/event";
 
 export const MEDIA_HOTKEY_EVENT = "media-hotkey-pressed";
 
-export type MediaHotkeyAction = "mic" | "camera" | "deafen" | "screenShare";
+export type MediaHotkeyAction = "mic" | "camera" | "deafen" | "screenShare" | "hand";
 
 export interface MediaHotkeySettings {
   supported: boolean;
@@ -13,12 +13,14 @@ export interface MediaHotkeySettings {
   camera: string;
   deafen: string;
   screenShare: string;
+  /** "I'd like to speak". Works whether or not the bar shows its button. */
+  hand: string;
   registrationError: string | null;
 }
 
 export type MediaHotkeySettingsPatch = Pick<
   MediaHotkeySettings,
-  "mic" | "camera" | "deafen" | "screenShare"
+  "mic" | "camera" | "deafen" | "screenShare" | "hand"
 >;
 
 const PRIMARY_MODIFIER =
@@ -31,6 +33,7 @@ export const DEFAULT_MEDIA_HOTKEYS: MediaHotkeySettingsPatch = {
   camera: `${PRIMARY_MODIFIER}+Shift+V`,
   deafen: `${PRIMARY_MODIFIER}+Shift+D`,
   screenShare: `${PRIMARY_MODIFIER}+Shift+S`,
+  hand: `${PRIMARY_MODIFIER}+Shift+H`,
 };
 
 export const mediaHotkeyCommands = {

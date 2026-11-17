@@ -59,21 +59,35 @@ Each has a question it must answer, taken from the design manifesto. If somethin
 want to add does not help answer it, it belongs somewhere else.
 
 ### Title bar — `shells/ravenv1/TopBar.tsx`
-Back and forward, search (Ctrl+K or `/`, arrow keys, Enter, Escape), the inbox, window
-controls. Deliberately absent: the user's identity (it is in the dock), a refresh
-button (state arrives by events), a Home button (the sidebar's first row).
+Back and forward, search (Ctrl+K or `/`, arrow keys, Enter, Escape), a Settings gear, the
+"Reaching you" bell (tooltip and label "Reaching you", or "N reaching you"; its panel,
+Home and the sidebar use the same name), window controls. Deliberately absent: the user's
+identity (it is in the dock), a refresh button (state arrives by events), a Home button
+(the sidebar's first row).
 
 ### Sidebar — `shells/ravenv1/Sidebar.tsx`
 *Who is active, which trees are alive, where can I join quickly?*
-- The server row, which is also Home.
+- The server row, which is also Home (tooltip "Home", a small house icon after the name).
 - "Reaching you": pending knocks, invites and requests (`PendingList compact`), only
   when there are any.
-- Trees. A tree expands to show what is alive in it: live voice nests, each with who is
-  inside and a Join on hover, text nests with unread messages, and the text nest that is
-  open (`visibleTextNests`, in the lobby's order). Everything else is in the lobby. The
-  manifesto asks for a live map, not a structure explorer.
-- Temporary nests, when there are any.
-- "Friends and groups" (`SidebarChat.tsx`, ordering in `friendsAndGroups.ts`): one row
+- Two lenses, one at a time, chosen with the Trees | People switch (the nouns come from
+  `data.labels`): Places answers "where can I go?", People answers "who can I talk to?".
+  The lens is remembered per device and changes **only when the person changes it**.
+  Opening a view that is listed under the other lens never flips it; a "here" row (name
+  and where it sits, clicking it shows that lens) under the switch says where the open
+  view is. There is no heading above the Trees list, because the switch already names
+  it; a quiet "New tree" row ends the list.
+- Places: every tree that has nests has a chevron and, expanded (the default; folded
+  trees are remembered in `raven.sidebar.collapsedTrees`), lists all its nests, voice and
+  text, in the lobby's order (`TreeNests`, `SidebarTreeNests.tsx`; `existingNestRefs` and
+  `orderedNestRefs` in `lib/chat/layout.ts`, categories flattened). A voice nest shows its
+  glyph and name, with `LiveDot` and up to three avatars when people are inside and "Here"
+  when you are in it; it opens the threshold, never the call. A text nest keeps its unread
+  count and event caption. The open nest or chat is highlighted. Live nests are also in the
+  Live strip above the lenses. Nest data is `data.treeDetails`, loaded for every tree you
+  belong to; the sidebar calls no API. The manifesto asks for a live map, not a structure
+  explorer: rows stay one line, bare, with a hover fill.
+- People ("Friends and groups", `SidebarChat.tsx`, ordering in `friendsAndGroups.ts`): one row
   per friend (round avatar with presence; unread count or status on the right; opens
   your conversation with them) and per recent group (square initials avatar, no
   presence; opens the group). Reachable friends, then groups that are unread or active
@@ -83,8 +97,9 @@ button (state arrives by events), a Home button (the sidebar's first row).
   group… and Add a friend… (search). "All conversations" opens the full list. A friend's
   row is current on their profile and in their conversation.
 - Other people from your trees, in a collapsed group.
-- Collapsed, it is a 60px rail: Home, All conversations (dot when anything is unread),
-  trees, then reachable friends and anything unread, with a dot on each unread avatar.
+- Collapsed, it is a 60px rail: Home, live nests, a button for the other lens, then the
+  trees or, on People, Saved messages and reachable friends and anything unread, with a
+  dot on each unread avatar.
 
 Unread has one rule: a neutral **count** on the conversation's own row (`UnreadCount`),
 and a plain **dot** everywhere else that only points towards it: a collapsed tree row,
@@ -98,24 +113,27 @@ the rail, the Windows taskbar icon (`UnreadDot`, `lib/taskbarBadge.ts`). Counts 
   fourth have a chevron popover: device list, the few switches that matter, a test.
 - Right: a "Device problem" chip when `media.lastError` is set, the call chip (returns
   to the nest) and Leave while in a call, the network readout (in a call, at 1100px or
-  wider), and the Mixer button.
+  wider), and the Mixer button (icon alone below 1100px, with the word "Mixer" from 1100px).
 
 The same controls are reused in the fullscreen overlay, so a new dock control appears
 there too.
 
 ### Home — `views/HomeView.tsx`
 *Who is meaningfully reachable right now?* Sections appear only when they have content:
-Reaching you, Live now (`LiveNestCard`), Open to talk, Friend requests you sent. With
-nothing to show it is one calm empty state with two actions. No header, no counts, no
-feed, no recent activity.
+Reaching you, Live now (`LiveNestCard`), Open to talk, Unread, Last visited (the quiet nest
+you looked at last), Friend requests you sent. The trees are not listed: the sidebar has
+them. With nothing to show it is one calm empty state with two actions; a new account
+gets "Get started" instead. No header, no counts, no feed, no recent activity.
 
 ### Tree lobby — `views/TreeLobbyView.tsx`
 *What is alive in this group right now?* Header with avatar, name, visibility, member
-count and description. Managers get "New nest" and a `…` menu (New text nest, New
+count (always visible; people who belong; the lists below, "Here now" and "Around now", count only who is
+reachable at the moment) and description. Managers get "New nest" and a `…` menu (New text nest, New
 category, Arrange nests, Add a person, settings).
 Body: people asking to join, Live now, then the tree's nests by category
 (`TreeNestsSection.tsx`): text nests with `#` and their unread count, quiet voice nests
-with a dot. Then a read-only member list sorted by reachability. "Arrange" turns the
+with a dot. Then a read-only member list sorted by reachability, in a right column from 1100px and
+after the nests in the single column below it (house rules stay above the nests there). "Arrange" turns the
 list into one sortable column (drag a handle, or Space and the arrow keys); a row
 belongs to the category above it, and nothing is saved until Done. Role changes and removal are in Tree settings › Members.
 `PublicTreePreviewView` in the same file is the page for a tree you have found but not
@@ -219,7 +237,8 @@ General, Who can join, Members, and Delete for owners. Pieces are in
 
 ### Mixer — `MixerView` in `views/index.tsx`, `components/AudioMixerPanel.tsx`
 The deep basement: every source, level and processor. It opens in the main panel from
-the dock's last button, so muting stays one click away. Presentation only.
+the dock's last button, so muting stays one click away. Its header has "Audio settings" (opens
+Settings › Audio and video) beside Done; that page has an "Open Mixer" row. Presentation only.
 
 ### Pickers — `components/nest/VideoPickers.tsx`
 Screen and camera choosers in a `Dialog`. Thumbnails, a switch for sound, quality as

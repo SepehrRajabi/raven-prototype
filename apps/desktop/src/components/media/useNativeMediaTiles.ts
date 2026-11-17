@@ -58,6 +58,8 @@ export type NativeMediaTile = {
   /** A moderator muted or deafened them. Set by the stage, like `away`. */
   serverMuted?: boolean;
   serverDeafened?: boolean;
+  /** "I'd like to speak": place in line, 0 when the hand is down. Set by the stage, like `away`. */
+  handOrder?: number;
 };
 
 export function useNativeMediaTiles(
@@ -65,6 +67,8 @@ export function useNativeMediaTiles(
   endpoint: VideoStreamEndpoint | null,
   selfPreviewMode: SelfPreviewMode,
   speakingActivity: ParticipantVoiceActivityMap,
+  /** Your name in this place, for the moment before the engine lists you. */
+  localDisplayName = "",
 ) {
   const shareStartOrderRef = useRef(new Map<string, number>());
   const shareSequenceRef = useRef(0);
@@ -76,7 +80,7 @@ export function useNativeMediaTiles(
       ? state.participants
       : [{
           participantId: "local",
-          displayName: "You",
+          displayName: localDisplayName,
           isLocal: true,
           audioMuted: true,
           speaking: false,
@@ -124,7 +128,7 @@ export function useNativeMediaTiles(
       next.push({
         key: `${participant.participantId}:camera`,
         participantId: participant.participantId,
-        displayName: participant.isLocal ? "You" : participant.displayName,
+        displayName: participant.isLocal ? participant.displayName || localDisplayName : participant.displayName,
         isLocal: participant.isLocal,
         source: "camera",
         streamUrl: cameraStreamUrl,
@@ -154,7 +158,7 @@ export function useNativeMediaTiles(
         next.push({
           key,
           participantId: participant.participantId,
-          displayName: participant.isLocal ? "You" : participant.displayName,
+          displayName: participant.isLocal ? participant.displayName || localDisplayName : participant.displayName,
           isLocal: participant.isLocal,
           source: "screenshare",
           streamUrl: screenStreamUrl,
@@ -186,7 +190,7 @@ export function useNativeMediaTiles(
       if (!activeShareKeys.has(key)) shareStartOrderRef.current.delete(key);
     }
     return next;
-  }, [endpoint, selfPreviewMode, speakingActivity, state]);
+  }, [endpoint, localDisplayName, selfPreviewMode, speakingActivity, state]);
 
   return { tiles };
 }

@@ -433,7 +433,8 @@ export type SoundCue =
   | "shareStopped"
   | "personJoined"
   | "personLeft"
-  | "entryHeadsUp";
+  | "entryHeadsUp"
+  | "handRaised";
 
 /** Kept on this device with the other media settings and pushed to the engine. */
 export interface SoundCueSettings {
@@ -446,6 +447,8 @@ export interface SoundCueSettings {
   screenShares: boolean;
   people: boolean;
   entryHeadsUp: boolean;
+  /** Someone else raised their hand. */
+  hands: boolean;
 }
 
 export interface AudioNetworkTotals {

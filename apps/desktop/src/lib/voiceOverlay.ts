@@ -1,7 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { api, type NestDetails, type SessionSummary, type User, type KnockReply } from "@/lib/api";
-import { callStatesByUser, callStateSupported } from "@/lib/callState";
+import { callStatesByUser, callStateSupported, raisedHandSupported } from "@/lib/callState";
 import type { AudioMixerState, RemoteAudioTrackState } from "@/lib/audio";
 import { gainDbToVolumePercent } from "@/components/media/audioSatellites";
 import type { VideoConnectionQuality, VideoMixerState } from "@/lib/video";
@@ -52,6 +52,8 @@ export interface VoiceOverlayButtons {
   mute: boolean;
   deafen: boolean;
   away: boolean;
+  /** "I'd like to speak". Off by default. */
+  hand: boolean;
 }
 
 /** A button or scroll on the card. The main window carries it out. */
@@ -59,6 +61,7 @@ export type VoiceOverlayAction =
   | { kind: "mic" }
   | { kind: "deafen" }
   | { kind: "away"; away: boolean }
+  | { kind: "hand"; hand: boolean }
   | { kind: "volume"; userId: string; percent: number }
   /** Open the knock in Raven (`open`) or dismiss it. */
   | { kind: "knock"; knockId: string; open: boolean }
@@ -155,6 +158,8 @@ export interface VoiceOverlayParticipant {
   deafened: boolean;
   /** "Back in a bit". */
   away: boolean;
+  /** "I'd like to speak": place in line, 0 when the hand is down. */
+  handOrder: number;
   screenSharing: boolean;
   /** Others watching this person's screen share, by user id, in name order. */
   watchers: string[];
@@ -177,6 +182,8 @@ export interface VoiceOverlaySnapshot {
   localMutedHint: boolean;
   /** False against a server that predates the shared call state: no Back in a bit button. */
   awaySupported: boolean;
+  /** False against a server that predates raised hands: no hand button. */
+  handSupported: boolean;
   /** Knocks and messages that could still show, oldest first. Knocks come with or without a call. */
   headsUp: VoiceOverlayHeadsUp[];
   participants: VoiceOverlayParticipant[];
@@ -190,6 +197,7 @@ export const EMPTY_VOICE_OVERLAY_SNAPSHOT: VoiceOverlaySnapshot = {
   reconnecting: false,
   localMutedHint: false,
   awaySupported: false,
+  handSupported: false,
   headsUp: [],
   participants: [],
 };
@@ -277,7 +285,7 @@ export function buildVoiceOverlaySnapshot({
   reconnecting: boolean;
   localMutedHint: boolean;
   /** What you just set; the server's echo of it arrives a moment later. */
-  localCallState?: { away: boolean; deafened: boolean };
+  localCallState?: { away: boolean; deafened: boolean; hand: boolean };
   headsUp?: VoiceOverlayHeadsUp[];
 }): VoiceOverlaySnapshot {
   const callStates = callStatesByUser(
@@ -365,6 +373,7 @@ export function buildVoiceOverlaySnapshot({
     reconnecting,
     localMutedHint,
     awaySupported: callStateSupported(activeSession),
+    handSupported: raisedHandSupported(activeSession),
     headsUp,
     participants: Array.from(participants.values()).map((participant) => {
       const voice = resolveParticipantVoicePresentation(
@@ -383,6 +392,7 @@ export function buildVoiceOverlaySnapshot({
           : isRemoteMuted(mixerState, participant.userId),
         deafened: callStates.get(participant.userId)?.deafened ?? false,
         away: callStates.get(participant.userId)?.away ?? false,
+        handOrder: callStates.get(participant.userId)?.handOrder ?? 0,
         screenSharing: screenSharing.has(participant.userId),
         watchers: screenSharing.has(participant.userId) ? (watchers.get(participant.userId) ?? []) : [],
         cameraOn: cameraUsers.has(participant.userId),

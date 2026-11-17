@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
-import type { ChatConversation, ConversationState } from "@/lib/chat/types";
-import { filterPeople, friendsAndGroups, GROUP_RECENT_MS, GROUPS_SHOWN, visibleTextNests, type FriendsAndGroupsRow } from "./friendsAndGroups";
+import type { ChatConversation } from "@/lib/chat/types";
+import { filterPeople, friendsAndGroups, GROUP_RECENT_MS, GROUPS_SHOWN, type FriendsAndGroupsRow } from "./friendsAndGroups";
 import { strangerNamed } from "./people";
 import type { ShellPerson } from "./state";
 
@@ -94,17 +94,6 @@ describe("friendsAndGroups", () => {
   test("the open group is listed even when it is old", () => {
     const result = run([], [group("old", { lastActivityMs: 0 })], "old");
     expect(result.shown.map(label)).toEqual(["group:old"]);
-  });
-});
-
-describe("visibleTextNests", () => {
-  const nest = (id: string, unreadCount = 0) => ({ summary: conversation({ id, kind: "nest", treeId: "t", unreadCount }) }) as ConversationState;
-
-  test("lists only unread text nests and the open one, in the order given", () => {
-    const nests = [nest("general"), nest("links", 3), nest("random"), nest("plans", 1)];
-    expect(visibleTextNests(nests).map((item) => item.summary.id)).toEqual(["links", "plans"]);
-    expect(visibleTextNests(nests, "random").map((item) => item.summary.id)).toEqual(["links", "random", "plans"]);
-    expect(visibleTextNests([nest("general")])).toEqual([]);
   });
 });
 

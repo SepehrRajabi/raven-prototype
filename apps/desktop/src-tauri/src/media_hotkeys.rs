@@ -19,6 +19,8 @@ pub struct MediaHotkeySettings {
     pub camera: String,
     pub deafen: String,
     pub screen_share: String,
+    /// "I'd like to speak". It works whether or not the bar shows its button.
+    pub hand: String,
 }
 
 impl Default for MediaHotkeySettings {
@@ -33,6 +35,7 @@ impl Default for MediaHotkeySettings {
             camera: format!("{primary_modifier}+Shift+V"),
             deafen: format!("{primary_modifier}+Shift+D"),
             screen_share: format!("{primary_modifier}+Shift+S"),
+            hand: format!("{primary_modifier}+Shift+H"),
         }
     }
 }
@@ -44,6 +47,7 @@ pub struct MediaHotkeySettingsPatch {
     pub camera: Option<String>,
     pub deafen: Option<String>,
     pub screen_share: Option<String>,
+    pub hand: Option<String>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -56,6 +60,7 @@ pub struct MediaHotkeySettingsView {
     pub camera: String,
     pub deafen: String,
     pub screen_share: String,
+    pub hand: String,
     pub registration_error: Option<String>,
 }
 
@@ -151,6 +156,9 @@ fn apply_patch(
     if let Some(value) = patch.screen_share {
         next.screen_share = normalized(value, defaults.screen_share);
     }
+    if let Some(value) = patch.hand {
+        next.hand = normalized(value, defaults.hand);
+    }
     next
 }
 
@@ -169,6 +177,7 @@ fn bindings(settings: &MediaHotkeySettings) -> Vec<(String, String)> {
         (settings.camera.clone(), "camera".into()),
         (settings.deafen.clone(), "deafen".into()),
         (settings.screen_share.clone(), "screenShare".into()),
+        (settings.hand.clone(), "hand".into()),
     ]
 }
 
@@ -196,6 +205,7 @@ fn settings_view(
         camera: settings.camera.clone(),
         deafen: settings.deafen.clone(),
         screen_share: settings.screen_share.clone(),
+        hand: settings.hand.clone(),
         registration_error: state
             .registration_error
             .lock()
@@ -231,6 +241,7 @@ fn platform_specific_settings(mut settings: MediaHotkeySettings) -> MediaHotkeyS
     settings.camera = settings.camera.replace("CommandOrControl", modifier);
     settings.deafen = settings.deafen.replace("CommandOrControl", modifier);
     settings.screen_share = settings.screen_share.replace("CommandOrControl", modifier);
+    settings.hand = settings.hand.replace("CommandOrControl", modifier);
     settings
 }
 

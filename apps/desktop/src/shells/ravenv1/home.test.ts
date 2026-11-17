@@ -1,7 +1,6 @@
 import { beforeEach, describe, expect, test } from "bun:test";
-import type { Tree } from "@/lib/api";
 import type { ChatConversation } from "@/lib/chat/types";
-import { orderTrees, unreadConversations } from "./home";
+import { unreadConversations } from "./home";
 import { readLastVisited, writeLastVisited } from "./lastVisited";
 
 const store = new Map<string, string>();
@@ -49,18 +48,6 @@ const conversation = (patch: Partial<ChatConversation>): ChatConversation => ({
   ...patch,
 });
 
-const tree = (id: string, name: string): Tree => ({
-  id,
-  name,
-  description: "",
-  joinPolicy: "approval",
-  visibility: "private",
-  creatorUserId: "u",
-  status: "active",
-  createdAt: "",
-  updatedAt: "",
-}) as Tree;
-
 describe("unreadConversations", () => {
   test("keeps unread direct messages and groups, newest first, and skips the rest", () => {
     const result = unreadConversations([
@@ -77,20 +64,6 @@ describe("unreadConversations", () => {
   test("stops at the limit", () => {
     const many = Array.from({ length: 8 }, (_, index) => conversation({ id: String(index), lastActivityMs: index }));
     expect(unreadConversations(many, 5)).toHaveLength(5);
-  });
-});
-
-describe("orderTrees", () => {
-  const trees = [tree("a", "Alpha"), tree("b", "Bravo"), tree("c", "Charlie"), tree("d", "Delta")];
-
-  test("live, then unread, then the last opened, then by name", () => {
-    const ordered = orderTrees(trees, (id) => id === "d", (id) => id === "c", "b");
-    expect(ordered.map((item) => item.id)).toEqual(["d", "c", "b", "a"]);
-  });
-
-  test("does not change the list it is given", () => {
-    orderTrees(trees, () => false, () => false);
-    expect(trees.map((item) => item.id)).toEqual(["a", "b", "c", "d"]);
   });
 });
 

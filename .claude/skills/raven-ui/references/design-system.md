@@ -143,7 +143,7 @@ system changes, not per call site.
 | `Dialog` | `open`, `onOpenChange`, `title`, `description`, `widthClassName`. Escape, backdrop and focus trap are built in. |
 | `ConfirmDialog` | `title`, `description`, `confirmLabel`, `destructive`, `onConfirm`. For anything that cannot be undone. |
 | `Drawer` | Right sheet. Used only for channel tools inside the Mixer. Do not use it for new top-level surfaces: it covers the dock. |
-| `Popover…` | `Popover`, `PopoverTrigger`, `PopoverContent`. For device menus, the inbox, small inspectors. |
+| `Popover…` | `Popover`, `PopoverTrigger`, `PopoverContent`. For device menus, the “Reaching you” panel, small inspectors. |
 | `Tooltip` | `label` (node), `shortcut`, `side`. Wrap every icon-only control. |
 | `Switch` | On/off. Never a native checkbox. |
 | `toast()` | `toast({ title, description?, tone? })` with `tone` `neutral`, `success` or `error`. `<Toaster />` is already mounted by the shell. |

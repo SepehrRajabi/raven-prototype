@@ -5,7 +5,7 @@ import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover
 import { Tooltip } from "@/components/ui/tooltip";
 import { api } from "@/lib/api";
 import { cn } from "@/lib/utils";
-import { ArrowDownToLine, Bell, Check, ChevronLeft, ChevronRight, Command, Copy, Minus, Search, Square, UserMinus, UserPlus, X } from "lucide-react";
+import { ArrowDownToLine, Bell, Check, ChevronLeft, ChevronRight, Command, Copy, Minus, Search, Settings, Square, UserMinus, UserPlus, X } from "lucide-react";
 import type { RavenShellData, RavenView } from "./state";
 import { displayNameFor } from "./state";
 import { PendingList } from "./Inbox";
@@ -50,7 +50,17 @@ export function TopBar({
 
       <div className="flex items-center justify-end">
         <UpdateNotice update={update} onOpen={() => onNavigate({ kind: "settings", section: "updates" })} />
-        <InboxButton data={data} onNavigate={onNavigate} />
+        <Tooltip label="Settings" side="bottom">
+          <button
+            type="button"
+            aria-label="Settings"
+            onClick={() => onNavigate({ kind: "settings" })}
+            className="raven-no-drag mr-1 flex h-7 w-7 items-center justify-center rounded-control text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground"
+          >
+            <Settings className="h-4 w-4" />
+          </button>
+        </Tooltip>
+        <ReachingYouButton data={data} onNavigate={onNavigate} />
         <WindowCaptionControls />
       </div>
     </header>
@@ -70,16 +80,16 @@ export function BareTopBar({ title = "Raven" }: { title?: string }) {
   );
 }
 
-function InboxButton({ data, onNavigate }: { data: RavenShellData; onNavigate: (view: RavenView) => void }) {
+function ReachingYouButton({ data, onNavigate }: { data: RavenShellData; onNavigate: (view: RavenView) => void }) {
   const [open, setOpen] = useState(false);
   const count = data.pending.length;
   return (
     <Popover open={open} onOpenChange={setOpen}>
-      <Tooltip label={count ? `${count} waiting for you` : "Inbox"} side="bottom">
+      <Tooltip label={count ? `${count} reaching you` : "Reaching you"} side="bottom">
         <PopoverTrigger asChild>
           <button
             type="button"
-            aria-label={count ? `Inbox, ${count} waiting for you` : "Inbox"}
+            aria-label={count ? `${count} reaching you` : "Reaching you"}
             className={cn(
               "raven-no-drag relative mr-1 flex h-7 w-7 items-center justify-center rounded-control text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground",
               open && "bg-secondary text-foreground",
