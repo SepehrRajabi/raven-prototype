@@ -1186,7 +1186,7 @@ export function useRavenMediaAdapter(
     }
     try {
       if (!(await callHost.requestCapture("microphone"))) {
-        setSafeError("Raven does not have microphone permission.", "permission_denied", "Allow microphone access in app permissions, or continue listening.");
+        setNonFatalError("Raven does not have microphone permission.", "permission_denied", "Allow microphone access in app permissions, or continue listening.");
         return;
       }
       const primaryMic = await ensureDefaultMic();
@@ -1200,7 +1200,7 @@ export function useRavenMediaAdapter(
     } catch (err) {
       setNonFatalError(classifyMediaError(err, "Microphone could not be published").message, classifyMediaError(err).kind, "Check microphone permission or pick another input device.");
     }
-  }, [audioCapabilities?.supportsMicrophone, callHost, ensureDefaultMic, micSources, setSafeError, setNonFatalError]);
+  }, [audioCapabilities?.supportsMicrophone, callHost, ensureDefaultMic, micSources, setNonFatalError]);
 
   const unpublishMic = useCallback(async () => {
     setError("");
@@ -1258,14 +1258,14 @@ export function useRavenMediaAdapter(
   const requestCameraAccess = useCallback(async () => {
     try {
       const granted = await callHost.requestCapture("camera");
-      if (!granted) setSafeError("Raven does not have camera permission.", "permission_denied", "Allow camera access in app permissions, or continue without video.");
+      if (!granted) setNonFatalError("Raven does not have camera permission.", "permission_denied", "Allow camera access in app permissions, or continue without video.");
       return granted;
     } catch (err) {
       const classified = classifyMediaError(err, "Camera permission could not be checked");
-      setSafeError(classified.message, classified.kind, "Check camera permission in app permissions.");
+      setNonFatalError(classified.message, classified.kind, "Check camera permission in app permissions.");
       return false;
     }
-  }, [callHost, setSafeError]);
+  }, [callHost, setNonFatalError]);
 
   const startCamera = useCallback(async (camera: CameraDevice, profile: VideoQualityProfile = DEFAULT_VIDEO_PROFILE) => {
     setError("");
@@ -1283,7 +1283,7 @@ export function useRavenMediaAdapter(
       const classified = classifyMediaError(err, "Camera could not be started");
       setNonFatalError(classified.message, classified.kind, "Check camera permission or choose another camera.");
     }
-  }, [cameraSource, setNonFatalError, requestCameraAccess, setSafeError, videoCapabilities?.supportsCamera]);
+  }, [cameraSource, setNonFatalError, requestCameraAccess, videoCapabilities?.supportsCamera]);
 
   const setCameraDevice = useCallback(async (deviceId: string | null) => {
     setError("");
@@ -1340,7 +1340,7 @@ export function useRavenMediaAdapter(
       return;
     }
     await startCamera(camera, preferredCameraProfile);
-  }, [cameras, localCameraEnabled, preferredCameraId, preferredCameraProfile, setNonFatalError, requestCameraAccess, setSafeError, startCamera, stopCamera]);
+  }, [cameras, localCameraEnabled, preferredCameraId, preferredCameraProfile, setNonFatalError, requestCameraAccess, startCamera, stopCamera]);
 
   const setRemoteAudioReceiving = useCallback(async (enabled: boolean) => {
     try {

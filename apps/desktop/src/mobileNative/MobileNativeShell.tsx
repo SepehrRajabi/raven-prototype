@@ -13,6 +13,7 @@ import type { RavenShellData, RavenView } from "@/shells/ravenv1/state";
 import type { RavenMediaAdapterState } from "@/shells/ravenv1/useRavenMediaAdapter";
 import { useMessageNotifications } from "@/shells/ravenv1/useMessageNotifications";
 import { MainView } from "@/shells/ravenv1/views";
+import { SidebarFriendsAndGroups } from "@/shells/ravenv1/SidebarChat";
 import { RoomKnockToasts } from "@/shells/ravenv1/RoomKnockToasts";
 import { ChoosePassword, ShellLogin } from "@/shells/ravenv1/SignIn";
 import { createMobileNativeCallHost } from "./callHost";
@@ -70,7 +71,7 @@ type SignedInAppProps = Pick<ReturnType<typeof useMobileNativeApp>, "data" | "me
 /** The signed-in layout and its Back stack. */
 function SignedInApp({ data, media, entry, chat, updater, activeEntryNotices }: SignedInAppProps) {
   const { view, navigation } = useMobileNativeNavigation();
-  useMessageNotifications(chat, data, view);
+  useMessageNotifications(chat, data, view.kind === "messages" ? { kind: "home" } : view);
 
   // System Back walks the in-app history while there is somewhere to go back to.
   useEffect(() => {
@@ -96,7 +97,13 @@ function SignedInApp({ data, media, entry, chat, updater, activeEntryNotices }: 
       <MediaErrorBanner media={media} />
       <main className="min-h-0 flex-1 px-2 pb-1">
         <div className="flex h-full min-w-0 flex-col overflow-hidden rounded-card bg-surface">
-          <MainView view={view} data={data} media={media} entry={entry} updater={updater} chat={chat} onNavigate={navigation.navigate} onBack={navigation.goBack} />
+          {view.kind === "messages" ? (
+            <div className="min-h-0 flex-1 overflow-y-auto p-2">
+              <SidebarFriendsAndGroups chat={chat} data={data} view={{ kind: "home" }} onNavigate={navigation.navigate} />
+            </div>
+          ) : (
+            <MainView view={view} data={data} media={media} entry={entry} updater={updater} chat={chat} onNavigate={navigation.navigate} onBack={navigation.goBack} />
+          )}
         </div>
       </main>
       <nav className="grid shrink-0 grid-cols-3 gap-1 px-2 pb-1" aria-label="Main navigation">

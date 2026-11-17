@@ -736,6 +736,9 @@ func TestLibraryConvertsStaticSticker(t *testing.T) {
 
 // ffmpeg runs with no inherited environment and, where there is a shell, a CPU limit.
 func TestLibraryConverterChildIsConfined(t *testing.T) {
+	if _, err := os.Stat("/usr/bin/env"); err != nil {
+		t.Skip("no /usr/bin/env")
+	}
 	t.Setenv("RAVEN_TEST_SECRET", "do-not-leak")
 	converter := &libraryConverter{}
 	out, err := converter.run(context.Background(), t.TempDir(), "/usr/bin/env")

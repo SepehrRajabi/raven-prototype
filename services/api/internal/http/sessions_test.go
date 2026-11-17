@@ -8,21 +8,28 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 
 	profilemedia "raven/services/api/internal/media"
 )
 
+// memoryProfileMedia is safe for concurrent use: link previews store images from their own goroutine.
 type memoryProfileMedia struct {
+	mu      sync.Mutex
 	objects map[string]profilemedia.Object
 }
 
 func (m *memoryProfileMedia) Put(_ context.Context, key string, body []byte, contentType string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	m.objects[key] = profilemedia.Object{Bytes: append([]byte(nil), body...), ContentType: contentType}
 	return nil
 }
 
 func (m *memoryProfileMedia) Get(_ context.Context, key string) (profilemedia.Object, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	object, ok := m.objects[key]
 	if !ok {
 		return profilemedia.Object{}, sql.ErrNoRows
@@ -31,6 +38,8 @@ func (m *memoryProfileMedia) Get(_ context.Context, key string) (profilemedia.Ob
 }
 
 func (m *memoryProfileMedia) Delete(_ context.Context, key string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	delete(m.objects, key)
 	return nil
 }
