@@ -69,9 +69,14 @@ func TestAuthSessionsCanBeListedAndRevoked(t *testing.T) {
 	if len(payload.Sessions) != 2 {
 		t.Fatalf("expected two active sessions, got %+v", payload.Sessions)
 	}
+	// Sessions are listed by public id, never by the token, so the second one is the
+	// one that is not this request's.
 	var second AuthSession
 	for _, item := range payload.Sessions {
-		if item.ID == secondSessionID {
+		if item.ID == secondSessionID || item.ID == firstSessionID {
+			t.Fatalf("a session is listed by its token: %+v", item)
+		}
+		if !item.Current {
 			second = item
 		}
 	}
@@ -79,7 +84,9 @@ func TestAuthSessionsCanBeListedAndRevoked(t *testing.T) {
 		t.Fatalf("session client metadata was not retained: %+v", second)
 	}
 
-	deleteJSON(t, server, firstSessionID, "/v1/auth/sessions/"+secondSessionID, http.StatusOK)
+	// The token does not name a session to revoke; the public id does.
+	deleteJSON(t, server, firstSessionID, "/v1/auth/sessions/"+secondSessionID, http.StatusNotFound)
+	deleteJSON(t, server, firstSessionID, "/v1/auth/sessions/"+second.ID, http.StatusOK)
 	getJSON(t, server, secondSessionID, "/v1/auth/me", http.StatusUnauthorized)
 	postJSON(t, server, firstSessionID, "/v1/auth/logout", nil, http.StatusNoContent)
 	getJSON(t, server, firstSessionID, "/v1/auth/me", http.StatusUnauthorized)
@@ -825,7 +832,7 @@ func TestProfileImagesUseStoredMediaAndEnforceOwnership(t *testing.T) {
 	media := &memoryProfileMedia{objects: map[string]profilemedia.Object{}}
 	server.profileMedia = media
 	alice := currentTestUser(t, server, "alice")
-	png := []byte{0x89, 'P', 'N', 'G', '\r', '\n', 0x1a, '\n', 0, 0, 0, 0}
+	png := testAvatarPNG
 
 	postImage(t, server, aliceToken, "/v1/profile/avatar", "image/png", png, http.StatusOK)
 	storedUserImage := getJSON(t, server, "", "/v1/media/users/"+alice.ID+"/avatar", http.StatusOK)

@@ -23,8 +23,10 @@ import (
 	"time"
 
 	"github.com/gofiber/fiber/v2"
+	xwebp "golang.org/x/image/webp"
 	"raven/services/api/internal/auth"
 	"raven/services/api/internal/database"
+	profilemedia "raven/services/api/internal/media"
 )
 
 // Adding a GIF or sticker: the client declares the file, uploads the original once, and
@@ -216,29 +218,29 @@ func (s *Server) createLibraryAsset(c *fiber.Ctx) error {
 			return err
 		}
 	}
+	if uploader == viewer && status == libraryStatusUploading {
+		if err := libraryBytesQuotaTx(tx, viewer); err != nil {
+			return err
+		}
+	}
 	itemID, created, err := libraryInsertItemTx(tx, owner, viewer, assetID, title, keywords, collection, "")
 	if err != nil {
 		return err
+	}
+	if created {
+		if err := libraryItemsQuotaTx(tx, owner, viewer); err != nil {
+			return err
+		}
 	}
 	item, err := s.libraryItem(tx, itemID)
 	if err != nil {
 		return err
 	}
 	item.CanEdit = true
-	// Whoever declared the file first uploads it; anyone else waits for it to be ready.
+	// While nobody has uploaded the file, anyone who adds it may: the upload is checked
+	// against the hash, not against whoever declared it first, so a wrong declaration
+	// can't keep the file out.
 	upload := status == libraryStatusUploading
-	if upload {
-		var contentType string
-		var size int64
-		if err := tx.QueryRow(`SELECT content_type, size_bytes FROM library_asset_variants WHERE asset_id = ? AND variant = 'original'`, assetID).Scan(&contentType, &size); err != nil {
-			return err
-		}
-		if contentType != in.ContentType || size != in.Size {
-			// Same hash, different declaration: the upload will be checked against the
-			// first one, so this one can't upload.
-			upload = false
-		}
-	}
 	if err := tx.Commit(); err != nil {
 		return err
 	}
@@ -272,9 +274,26 @@ var librarySniffed = map[string]string{
 	"application/x-tgsticker": "application/x-gzip",
 }
 
+// libraryUploadedType is the type of an uploaded original, by what the bytes look like,
+// when this server takes that type for the kind and the file is within its size limit.
+func libraryUploadedType(kind string, body []byte, conversion bool) (string, bool) {
+	sniffed := stdhttp.DetectContentType(body)
+	for _, contentType := range libraryContentTypes(kind, conversion) {
+		if librarySniffed[contentType] != sniffed {
+			continue
+		}
+		limit := int64(libraryOriginalBytes)
+		if contentType == "application/x-tgsticker" {
+			limit = libraryTGSBytes
+		}
+		return contentType, len(body) > 0 && int64(len(body)) <= limit
+	}
+	return "", false
+}
+
 func (s *Server) uploadLibraryOriginal(c *fiber.Ctx) error {
 	viewer, assetID := currentUser(c).ID, c.Params("id")
-	_, sum, contentType, status, size, err := libraryPendingOriginal(s.db, assetID, viewer)
+	kind, sum, _, status, _, err := libraryPendingOriginal(s.db, assetID, viewer)
 	if err != nil {
 		return err
 	}
@@ -284,7 +303,13 @@ func (s *Server) uploadLibraryOriginal(c *fiber.Ctx) error {
 	}
 	body := c.Body()
 	digest := sha256.Sum256(body)
-	if int64(len(body)) != size || hex.EncodeToString(digest[:]) != sum || stdhttp.DetectContentType(body) != librarySniffed[contentType] {
+	if hex.EncodeToString(digest[:]) != sum {
+		return errLibraryInvalid
+	}
+	// The hash proves the bytes; their type and size are read from them rather than taken
+	// from the first declaration, which anyone who knew the hash could have made.
+	contentType, ok := libraryUploadedType(kind, body, s.libraryConversion.available)
+	if !ok {
 		return errLibraryInvalid
 	}
 
@@ -348,7 +373,8 @@ func (s *Server) uploadLibraryOriginal(c *fiber.Ctx) error {
 			return err
 		}
 	} else {
-		if _, err := tx.Exec(`UPDATE library_asset_variants SET object_key = ? WHERE asset_id = ? AND variant = 'original'`, key, assetID); err != nil {
+		if _, err := tx.Exec(`UPDATE library_asset_variants SET object_key = ?, content_type = ?, size_bytes = ? WHERE asset_id = ? AND variant = 'original'`,
+			key, contentType, len(body), assetID); err != nil {
 			return err
 		}
 		if _, err := tx.Exec(`UPDATE library_assets SET status = 'processing', updated_at = ? WHERE id = ?`, now, assetID); err != nil {
@@ -537,6 +563,99 @@ func parseWebP(data []byte) (webpInfo, bool) {
 	return info, sized && info.width > 0 && info.height > 0
 }
 
+// libraryWebPMaxFrames bounds the frames of an animated WebP sticker that are decoded to
+// check it: 30 a second for 10 seconds.
+const libraryWebPMaxFrames = libraryMaxFPS * libraryMaxDurationMs / 1000
+
+// webpDecodes decodes every picture in a WebP sticker, so a malformed file is refused
+// rather than stored and handed to every reader's decoder. Go's decoder reads a still
+// WebP; for an animated one each frame is put in a still WebP of its own and decoded.
+// Stickers are at most 512 pixels a side and 1 MB, so this is cheap.
+func webpDecodes(data []byte, info webpInfo) bool {
+	if !info.animated {
+		_, err := xwebp.Decode(bytes.NewReader(data))
+		return err == nil
+	}
+	end := int(binary.LittleEndian.Uint32(data[4:8])) + 8
+	frames := 0
+	for offset := 12; offset+8 <= end; {
+		fourcc := string(data[offset : offset+4])
+		length := int(binary.LittleEndian.Uint32(data[offset+4 : offset+8]))
+		start := offset + 8
+		if length < 0 || start+length > end {
+			return false
+		}
+		if fourcc == "ANMF" {
+			frames++
+			if frames > libraryWebPMaxFrames || !webpFrameDecodes(data[start:start+length], info) {
+				return false
+			}
+		}
+		offset = start + length + length%2
+	}
+	return frames > 0
+}
+
+func webpFrameDecodes(frame []byte, info webpInfo) bool {
+	if len(frame) < 16 {
+		return false
+	}
+	x := 2 * int(uint32(frame[0])|uint32(frame[1])<<8|uint32(frame[2])<<16)
+	y := 2 * int(uint32(frame[3])|uint32(frame[4])<<8|uint32(frame[5])<<16)
+	width := int(uint32(frame[6])|uint32(frame[7])<<8|uint32(frame[8])<<16) + 1
+	height := int(uint32(frame[9])|uint32(frame[10])<<8|uint32(frame[11])<<16) + 1
+	if x+width > info.width || y+height > info.height {
+		return false
+	}
+	var alpha, bitstream []byte
+	for offset := 16; offset+8 <= len(frame); {
+		fourcc := string(frame[offset : offset+4])
+		length := int(binary.LittleEndian.Uint32(frame[offset+4 : offset+8]))
+		start := offset + 8
+		if length < 0 || start+length > len(frame) {
+			return false
+		}
+		chunk := frame[offset : start+length]
+		switch fourcc {
+		case "ALPH":
+			alpha = chunk
+		case "VP8 ", "VP8L":
+			bitstream = chunk
+		}
+		offset = start + length + length%2
+	}
+	if bitstream == nil {
+		return false
+	}
+	body := []byte{}
+	if alpha != nil && string(bitstream[:4]) == "VP8 " {
+		vp8x := make([]byte, 18)
+		copy(vp8x, "VP8X")
+		vp8x[4] = 10
+		vp8x[8] = 0x10 // alpha
+		w, h := width-1, height-1
+		vp8x[12], vp8x[13], vp8x[14] = byte(w), byte(w>>8), byte(w>>16)
+		vp8x[15], vp8x[16], vp8x[17] = byte(h), byte(h>>8), byte(h>>16)
+		body = append(append(append(body, vp8x...), webpPadded(alpha)...), webpPadded(bitstream)...)
+	} else {
+		body = append(body, webpPadded(bitstream)...)
+	}
+	still := make([]byte, 12, 12+len(body))
+	copy(still, "RIFF")
+	binary.LittleEndian.PutUint32(still[4:8], uint32(4+len(body)))
+	copy(still[8:12], "WEBP")
+	picture, err := xwebp.Decode(bytes.NewReader(append(still, body...)))
+	return err == nil && picture.Bounds().Dx() == width && picture.Bounds().Dy() == height
+}
+
+// webpPadded is a RIFF chunk with the pad byte an odd length needs.
+func webpPadded(chunk []byte) []byte {
+	if len(chunk)%2 == 1 {
+		return append(append([]byte{}, chunk...), 0)
+	}
+	return chunk
+}
+
 // libraryDirectWebP keeps a WebP sticker as it is when it already fits. A larger static
 // one is converted when ffmpeg is there; an animated one has to fit as it is, because
 // ffmpeg's WebP decoder does not read animation.
@@ -554,6 +673,9 @@ func libraryDirectWebP(body []byte, conversion bool) (*libraryDirect, error) {
 			return nil, nil
 		}
 		return nil, libraryFailure{libraryFailTGSLarge}
+	}
+	if !webpDecodes(body, info) {
+		return nil, libraryFailure{libraryFailConvert}
 	}
 	direct := &libraryDirect{body: body, contentType: "image/webp", format: "webp", width: info.width, height: info.height}
 	if info.animated {
@@ -632,7 +754,8 @@ func (s *Server) convertLibraryAsset(assetID string) error {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), libraryConvertTimeout)
 	defer cancel()
-	object, err := s.profileMedia.Get(ctx, key.String)
+	// Originals may be larger than the store's default read cap.
+	object, err := profilemedia.GetLimited(ctx, s.profileMedia, key.String, libraryOriginalBytes)
 	if err != nil {
 		return s.retryLibraryAsset(assetID, err)
 	}
@@ -788,9 +911,24 @@ func libraryRate(value string) float64 {
 	return n / d
 }
 
+// libraryChildLimits is the shell line that limits ffmpeg and then runs it: 120 s of CPU
+// (two threads for at most 60 s), 4 GB of address space and 128 MB per written file. The
+// binary and its arguments arrive as "$0" and "$@", never inside the line itself.
+const libraryChildLimits = `ulimit -t 120 2>/dev/null; ulimit -v 4194304 2>/dev/null; ulimit -f 262144 2>/dev/null; exec "$0" "$@"`
+
 // run runs ffmpeg or ffprobe on files in dir. Arguments are a list, never a shell line.
+//
+// The child gets an empty environment, so a decoder exploit finds no database or storage
+// credentials in it, and, where /bin/sh is there, limits on CPU time, address space and
+// file size set by ulimit before ffmpeg replaces the shell. A limit the system refuses
+// (macOS does not enforce an address-space limit) is skipped; the 60-second timeout and
+// two threads still apply.
 func (c *libraryConverter) run(ctx context.Context, dir, binary string, args ...string) ([]byte, error) {
 	cmd := exec.CommandContext(ctx, binary, args...)
+	if _, err := os.Stat("/bin/sh"); err == nil {
+		cmd = exec.CommandContext(ctx, "/bin/sh", append([]string{"-c", libraryChildLimits, binary}, args...)...)
+	}
+	cmd.Env = []string{"PATH=/usr/local/bin:/usr/bin:/bin", "LC_ALL=C"}
 	cmd.Dir = dir
 	cmd.Stdin = nil
 	var stdout, stderr bytes.Buffer
@@ -1017,7 +1155,7 @@ func libraryPurgeAssetIfUnusedTx(tx *database.Tx, assetID string) (bool, error) 
 // sweepLibraryAssets removes failed and abandoned assets after a day, and any asset
 // nothing uses any more: a message deleted for everyone, a conversation or space gone.
 func (s *Server) sweepLibraryAssets(now time.Time) error {
-	cutoff := now.Add(-libraryStaleAfter).Format(time.RFC3339Nano)
+	cutoff := database.Timestamp(now.Add(-libraryStaleAfter))
 	stale, err := libraryIDs(s.db, `SELECT id FROM library_assets WHERE status <> 'ready' AND updated_at < ? ORDER BY updated_at LIMIT ?`, cutoff, librarySweepBatch)
 	if err != nil {
 		return err

@@ -528,6 +528,63 @@ func TestChatAttachmentsUploadIDIsScopedToItsConversation(t *testing.T) {
 	}
 }
 
+// Unsent attachments count against a per-person limit, which the operator can change
+// or turn off; sending them frees the room.
+func TestChatAttachmentsPendingQuota(t *testing.T) {
+	s, a, _, dm := chatPair(t)
+	s.profileMedia = &memoryProfileMedia{objects: map[string]profilemedia.Object{}}
+	t.Setenv("RAVEN_CHAT_PENDING_MB", "1")
+	big := func() chatAttachmentInput {
+		in, _ := attachmentInput(t)
+		w, h := 3000, 2000
+		in.Width, in.Height, in.ContentType, in.Size = &w, &h, "image/jpeg", 600*1024
+		in.Variants = []chatVariantInput{{"full", "image/jpeg", 600 * 1024}, {"preview", "image/jpeg", 100 * 1024}}
+		return in
+	}
+	chatDo(t, s, "POST", a.token, attachmentBase(dm.ID)+"/attachments", big(), 201)
+	raw := chatDo(t, s, "POST", a.token, attachmentBase(dm.ID)+"/attachments", big(), http.StatusRequestEntityTooLarge)
+	if !strings.Contains(string(raw), "waiting to be sent") {
+		t.Fatalf("quota answer: %s", raw)
+	}
+	// A small one still fits, and sending what is pending frees the room.
+	small := attachmentCreate(t, s, a.token, dm.ID, true)
+	attachmentSend(t, s, a.token, dm.ID, []string{small.ID}, 201)
+	t.Setenv("RAVEN_CHAT_PENDING_MB", "0")
+	chatDo(t, s, "POST", a.token, attachmentBase(dm.ID)+"/attachments", big(), 201)
+}
+
+// A preview is what every reader decodes in the list, so it may be at most 1024 pixels
+// a side even when the full image is larger.
+func TestChatAttachmentsPreviewSideIsBounded(t *testing.T) {
+	s, a, _, dm := chatPair(t)
+	s.profileMedia = &memoryProfileMedia{objects: map[string]profilemedia.Object{}}
+	full := attachmentPNG(t, 1500, 10)
+	for _, tc := range []struct {
+		preview []byte
+		want    int
+	}{{attachmentPNG(t, 1025, 7), 422}, {attachmentPNG(t, 1024, 7), 200}} {
+		w, h := 1500, 10
+		in := chatAttachmentInput{ClientUploadID: auth.NewID(), Kind: "image", Source: "stored", ContentType: "image/png", Size: int64(len(full)), Width: &w, Height: &h,
+			Variants: []chatVariantInput{{"full", "image/png", int64(len(full))}, {"preview", "image/png", int64(len(tc.preview))}}}
+		created := chatDecode[attachmentPayload](t, chatDo(t, s, "POST", a.token, attachmentBase(dm.ID)+"/attachments", in, 201)).Attachment
+		attachmentRaw(t, s, "PUT", a.token, attachmentBase(dm.ID)+"/attachments/"+created.ID+"/variants/preview", tc.preview, tc.want)
+	}
+}
+
+// Control characters in an attachment's name or placeholder are refused, as in text.
+func TestChatAttachmentsRefuseControlCharacters(t *testing.T) {
+	s, a, _, dm := chatPair(t)
+	s.profileMedia = &memoryProfileMedia{objects: map[string]profilemedia.Object{}}
+	for _, name := range []string{"a\x00b.png", "a\x1bb.png", "line\nbreak.png"} {
+		in, _ := attachmentInput(t)
+		in.Name = name
+		chatDo(t, s, "POST", a.token, attachmentBase(dm.ID)+"/attachments", in, 422)
+	}
+	in, _ := attachmentInput(t)
+	in.Name = "عکس‌.png"
+	chatDo(t, s, "POST", a.token, attachmentBase(dm.ID)+"/attachments", in, 201)
+}
+
 // The desktop app's WebView is another origin, so uploading a variant (a PUT) needs the
 // browser's preflight to allow it.
 func TestChatAttachmentsUploadPassesCORSPreflight(t *testing.T) {

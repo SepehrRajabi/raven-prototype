@@ -34,6 +34,8 @@ var (
 // What differs from person to person is worked out by viewFor: their own choices, and, in
 // a quiz, which answers are correct. Those are shown to whoever answered, to whoever
 // asked, and to everyone once the poll has ended; before that a quiz gives nothing away.
+// In a copy (Saved messages, a forward) whoever asked is the original's sender, not the
+// person who copied it, so saving or forwarding a quiz does not show its answers.
 // In an anonymous poll nobody, the asker included, is told who chose what.
 type ChatPoll struct {
 	Multiple  bool `json:"multiple"`
@@ -48,6 +50,7 @@ type ChatPoll struct {
 	// MyVotes are the viewer's own choices, by position.
 	MyVotes []int `json:"myVotes"`
 
+	// senderID is whoever asked: the sender, or for a copy the original's sender.
 	senderID string
 	correct  []bool
 	feedback []string
@@ -160,7 +163,10 @@ type chatPollInput struct {
 // normalize tidies the question and answers, and checks them. Answers are one line each,
 // and no two may read the same.
 func (p *chatPollInput) normalize() error {
-	p.Question = strings.TrimSpace(p.Question)
+	p.Question = strings.TrimSpace(strings.ReplaceAll(p.Question, "\r\n", "\n"))
+	if chatHasControl(p.Question, true) {
+		return fiber.NewError(fiber.StatusBadRequest, "That question contains text Raven cannot store.")
+	}
 	if p.Question == "" {
 		return fiber.NewError(fiber.StatusBadRequest, "Ask a question first.")
 	}
@@ -172,6 +178,9 @@ func (p *chatPollInput) normalize() error {
 	}
 	seen := map[string]bool{}
 	for i := range p.Options {
+		if chatHasControl(p.Options[i].Text, true) || chatHasControl(p.Options[i].Feedback, true) {
+			return fiber.NewError(fiber.StatusBadRequest, "That answer contains text Raven cannot store.")
+		}
 		text := strings.Join(strings.Fields(p.Options[i].Text), " ")
 		if text == "" {
 			return fiber.NewError(fiber.StatusBadRequest, "An answer can’t be empty.")
@@ -375,7 +384,7 @@ func withChatPolls(q chatQuerier, viewerID string, messages []ChatMessage) error
 	for i := range messages {
 		m := &messages[i]
 		if poll := polls[m.ID]; poll != nil && m.DeletedAt == nil {
-			poll.senderID = m.SenderID
+			poll.senderID = chatPollAsker(m)
 			m.Poll = poll.viewFor(viewerID)
 		}
 		if r := m.ReplyTo; r != nil && !r.Deleted && !r.Unavailable && polls[r.ID] != nil {
@@ -384,6 +393,18 @@ func withChatPolls(q chatQuerier, viewerID string, messages []ChatMessage) error
 	}
 	return nil
 }
+
+// chatPollAsker is who asked a message's poll. A copy keeps the original's asker; when
+// that account is gone nobody is the asker.
+func chatPollAsker(m *ChatMessage) string {
+	if m.origin != nil {
+		return m.origin.SenderID
+	}
+	return m.SenderID
+}
+
+// chatPollAskerSQL is chatPollAsker over a chat_messages row.
+const chatPollAskerSQL = `CASE WHEN origin_message_id IS NULL THEN sender_id ELSE COALESCE(origin_sender_id, '') END`
 
 // chatPollRow is what a change to a poll checks first.
 type chatPollRow struct {
@@ -423,7 +444,7 @@ func (s *Server) changeChatPoll(c *fiber.Ctx, change func(tx *database.Tx, user 
 	var deletedAt, replyToID sql.NullString
 	var messageSeq int64
 	var poll chatPollRow
-	err = tx.QueryRow(`SELECT kind, deleted_at, reply_to_message_id, seq, sender_id FROM chat_messages WHERE id = ? AND conversation_id = ?`, messageID, conversationID).
+	err = tx.QueryRow(`SELECT kind, deleted_at, reply_to_message_id, seq, `+chatPollAskerSQL+` FROM chat_messages WHERE id = ? AND conversation_id = ?`, messageID, conversationID).
 		Scan(&kind, &deletedAt, &replyToID, &messageSeq, &poll.senderID)
 	if errors.Is(err, sql.ErrNoRows) || (err == nil && messageSeq < access.VisibleFromSeq) {
 		return errChatMessageGone
@@ -560,8 +581,8 @@ func (s *Server) voteInChatPoll(c *fiber.Ctx) error {
 	})
 }
 
-// closeChatPoll ends a poll for good. Only whoever asked can. A quiz then shows everyone
-// its answers.
+// closeChatPoll ends a poll for good. Only whoever asked can, so a copied poll can be
+// ended only where its asker can reach it. A quiz then shows everyone its answers.
 func (s *Server) closeChatPoll(c *fiber.Ctx) error {
 	return s.changeChatPoll(c, func(tx *database.Tx, user User, poll chatPollRow, now string) (bool, error) {
 		if poll.senderID != user.ID {

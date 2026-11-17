@@ -9,8 +9,13 @@ import (
 	"golang.org/x/crypto/bcrypt"
 )
 
+// PasswordCost is the bcrypt cost of new password hashes. A hash records its own cost,
+// so passwords hashed at an earlier cost keep working; they move to this one the next
+// time they are set. Tests lower it to keep many sign-ups fast.
+var PasswordCost = 12
+
 func HashPassword(password string) (string, error) {
-	hash, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
+	hash, err := bcrypt.GenerateFromPassword([]byte(password), PasswordCost)
 	return string(hash), err
 }
 

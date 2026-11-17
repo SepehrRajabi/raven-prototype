@@ -233,6 +233,73 @@ func TestChatPollForwardedIsANewPoll(t *testing.T) {
 	}
 }
 
+// Saving or forwarding a quiz nobody has answered does not make the copier its asker:
+// the copy keeps its answers and feedback hidden from them until they answer the copy,
+// and only the original asker can end it. The asker's own copy still shows them.
+func TestChatQuizCopyKeepsAnswersHidden(t *testing.T) {
+	s, alice, bob, carol, _ := chatCrowd(t)
+	group := chatNewGroup(t, s, alice, "Quiz night", bob, carol)
+	options := []map[string]any{{"text": "3"}, {"text": "4", "correct": true, "feedback": "Right."}, {"text": "5", "feedback": "No."}}
+	sent := chatSendPoll(t, s, alice, group.ID, map[string]any{"question": "2 + 2?", "options": options}, http.StatusCreated)
+	hidden := func(label string, poll *ChatPoll) {
+		t.Helper()
+		if poll == nil || !poll.Quiz || poll.Revealed {
+			t.Fatalf("%s: %+v", label, poll)
+		}
+		for _, option := range poll.Options {
+			if option.Correct != nil || option.Feedback != "" {
+				t.Fatalf("%s gives the answer away: %+v", label, poll.Options)
+			}
+		}
+	}
+
+	saved := chatSave(t, s, bob, http.StatusCreated, sent.ID).Saved
+	hidden("bob's saved copy", saved[0].Poll)
+	savedID := saved[0].ConversationID
+	chatClosePoll(t, s, bob, savedID, saved[0].ID, http.StatusForbidden)
+	for _, m := range chatHistory(t, s, bob.token, savedID, "").Messages {
+		if m.Poll != nil {
+			hidden("bob's saved history", m.Poll)
+		}
+	}
+	// He can still answer it later in Saved messages, and then he sees how he did.
+	if answered := chatVote(t, s, bob, savedID, saved[0].ID, []int{2}, http.StatusOK); !answered.Poll.Revealed || feedbackOf(answered.Poll)[2] != "No." {
+		t.Fatalf("bob after answering his copy: %+v", answered.Poll)
+	}
+
+	dm := chatOpenDM(t, s, bob, carol)
+	forwarded := chatForward(t, s, bob, dm.ID, http.StatusCreated, []string{sent.ID}, nil)
+	hidden("bob's forward", forwarded[0].Poll)
+	chatClosePoll(t, s, bob, dm.ID, forwarded[0].ID, http.StatusForbidden)
+	for _, m := range chatHistory(t, s, carol.token, dm.ID, "").Messages {
+		if m.Poll != nil {
+			hidden("carol's view of the forward", m.Poll)
+		}
+	}
+
+	own := chatSave(t, s, alice, http.StatusCreated, sent.ID).Saved
+	if !own[0].Poll.Revealed || own[0].Poll.Options[1].Correct == nil || feedbackOf(own[0].Poll)[1] != "Right." {
+		t.Fatalf("the asker's own copy: %+v", own[0].Poll)
+	}
+}
+
+// A poll's question, answers and feedback refuse control characters, as message text
+// does, and keep the marks Persian and Arabic need.
+func TestChatPollRefusesControlCharacters(t *testing.T) {
+	s, alice, _, dm := chatPair(t)
+	for _, poll := range []map[string]any{
+		pollInput("Tea\x00?", plainOptions("Tea", "Coffee"), false, false),
+		pollInput("Tea?", plainOptions("Te\x07a", "Coffee"), false, false),
+		{"question": "Tea?", "options": []map[string]any{{"text": "Tea", "feedback": "x\x1b[31m"}, {"text": "Coffee"}}},
+	} {
+		chatSendPoll(t, s, alice, dm.ID, poll, http.StatusBadRequest)
+	}
+	sent := chatSendPoll(t, s, alice, dm.ID, pollInput("چای می‌خوری؟\nیا قهوه؟", plainOptions("چای", "قهوه"), false, false), http.StatusCreated)
+	if sent.Body != "چای می‌خوری؟\nیا قهوه؟" {
+		t.Fatalf("question stored as %q", sent.Body)
+	}
+}
+
 func feedbackOf(poll *ChatPoll) []string {
 	out := make([]string, len(poll.Options))
 	for i, option := range poll.Options {

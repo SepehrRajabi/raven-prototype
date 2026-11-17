@@ -73,11 +73,12 @@ type TreeNote struct {
 
 func (s *Server) registerNoteRoutes(service fiber.Router) {
 	service.Get("/trees/:id/notes", s.chatRoute("list notes", s.getTreeNotes))
-	service.Post("/trees/:id/notes", s.chatRoute("create note", s.createTreeNote))
+	limit := s.userLimiter("board notes", boardChangesPerMinute, time.Minute, boardTooQuickly)
+	service.Post("/trees/:id/notes", limit, s.chatRoute("create note", s.createTreeNote))
 	// Registered before ":noteId" so "order" is not read as a note id.
-	service.Post("/trees/:id/notes/order", s.chatRoute("order notes", s.orderTreeNotes))
-	service.Post("/trees/:id/notes/:noteId", s.chatRoute("edit note", s.editTreeNote))
-	service.Delete("/trees/:id/notes/:noteId", s.chatRoute("delete note", s.deleteTreeNote))
+	service.Post("/trees/:id/notes/order", limit, s.chatRoute("order notes", s.orderTreeNotes))
+	service.Post("/trees/:id/notes/:noteId", limit, s.chatRoute("edit note", s.editTreeNote))
+	service.Delete("/trees/:id/notes/:noteId", limit, s.chatRoute("delete note", s.deleteTreeNote))
 }
 
 // treeNotes lists the notes still showing at now, in order.

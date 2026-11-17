@@ -4,7 +4,7 @@ use std::{
     panic::AssertUnwindSafe,
     sync::{
         atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicU8, Ordering},
-        mpsc::{sync_channel, Receiver, RecvTimeoutError, SyncSender},
+        mpsc::{sync_channel, Receiver, RecvTimeoutError, SyncSender, TrySendError},
         Arc, Mutex, OnceLock,
     },
     thread,
@@ -52,6 +52,9 @@ const CAPTURE_RETRY_DELAYS: [Duration; 3] = [
     Duration::from_secs(3),
 ];
 const CAPTURE_SUPERVISE_TICK: Duration = Duration::from_millis(100);
+/// Longest stopping a microphone waits for its thread to close the device. The thread
+/// wakes on the stop at once, so this is only reached while a device open is still running.
+const CAPTURE_STOP_WAIT: Duration = Duration::from_millis(500);
 /// A running input stream that delivers no block for this long is reopened. WASAPI can
 /// stop signalling an endpoint without ever reporting an error (cpal waits on it with no
 /// timeout), which otherwise leaves the microphone silent until the device is switched.
@@ -74,7 +77,8 @@ const FADER_SLEW_PER_MS: f32 = 0.25;
 const MAX_RENDER_FRAMES_PER_CAPTURE: usize = 8;
 /// How often a running capture checks whether the default device moved or a missing
 /// preferred device came back.
-const CAPTURE_DEVICE_PROBE_INTERVAL: Duration = Duration::from_secs(2);
+/// Same pace as the device watcher: ALSA enumeration probes each PCM, so Linux is slower.
+const CAPTURE_DEVICE_PROBE_INTERVAL: Duration = crate::audio::devices::POLL_INTERVAL;
 const TEST_TONE_SAMPLE_RATE: u32 = 48_000;
 const TEST_TONE_CHANNELS: u16 = 1;
 const TEST_TONE_BLOCK_FRAMES: usize = 960;
@@ -232,7 +236,10 @@ impl LiveControls {
     }
 
     fn set_sink(&self, sink: Option<Arc<dyn ProcessedSampleSink>>) {
-        *lock_recovering(&self.sink) = sink;
+        // Swap under the lock, drop the old sink after it: the capture thread takes this
+        // lock every block, so it is held only for the swap.
+        let previous = std::mem::replace(&mut *lock_recovering(&self.sink), sink);
+        drop(previous);
     }
 
     fn push_to_sink(&self, samples: &[f32], channels: usize, sample_rate: u32) {
@@ -508,6 +515,8 @@ struct CpalInputRuntime {
     signature: CaptureConfigSignature,
     state: AudioSourceRuntimeState,
     stop_sender: SyncSender<()>,
+    /// The capture thread, which closes the device before it ends.
+    thread: Option<thread::JoinHandle<()>>,
 }
 
 impl AudioSourceRuntime for CpalInputRuntime {
@@ -515,8 +524,21 @@ impl AudioSourceRuntime for CpalInputRuntime {
         self.source_id
     }
 
+    /// Ask the capture thread to stop and wait, briefly, for it to close the device, so a
+    /// restart does not find it still held (an exclusive ALSA device then reports busy).
+    /// A thread stuck in a slow device open is left to finish on its own.
     fn stop(&mut self) {
         let _ = self.stop_sender.try_send(());
+        let Some(thread) = self.thread.take() else {
+            return;
+        };
+        let deadline = Instant::now() + CAPTURE_STOP_WAIT;
+        while !thread.is_finished() && Instant::now() < deadline {
+            thread::sleep(Duration::from_millis(5));
+        }
+        if thread.is_finished() {
+            let _ = thread.join();
+        }
     }
 
     fn runtime_state(&self) -> AudioSourceRuntimeState {
@@ -733,7 +755,7 @@ fn start_microphone_capture(
     let source = request.source.clone();
     let controls = Arc::clone(&request.controls);
     let render_reference = Arc::clone(&request.render_reference);
-    thread::Builder::new()
+    let thread = thread::Builder::new()
         .name("raven-mic-capture".into())
         .spawn(move || {
             run_microphone_capture(
@@ -760,6 +782,7 @@ fn start_microphone_capture(
         signature,
         state,
         stop_sender,
+        thread: Some(thread),
     }))
 }
 
@@ -1255,6 +1278,14 @@ fn handle_input_block(
             processing.suppression_report = None;
         }
     }
+    // Logged by the event pump, never here on the device thread.
+    if let Some(notice) = processing.suppression_notice.take() {
+        if let Err(TrySendError::Full(CaptureEvent::Notice(notice))) =
+            sender.try_send(CaptureEvent::Notice(notice))
+        {
+            processing.suppression_notice = Some(notice);
+        }
+    }
     if last_meter.elapsed() >= METER_INTERVAL {
         analysis.voice_probability = processing
             .voice
@@ -1325,6 +1356,8 @@ struct SourceProcessingConfig {
     studio_too_slow: bool,
     /// A change in what runs, until the capture event for it is sent.
     suppression_report: Option<NoiseSuppressionRuntime>,
+    /// Why the suppressor last changed on its own, until the event pump has it to log.
+    suppression_notice: Option<CaptureNotice>,
     safety: ChannelSafetyRuntime,
     /// The chain's and the safety limiter's delay. The suppressor's is added when reported.
     latency_samples: u32,
@@ -1417,6 +1450,7 @@ impl SourceProcessingConfig {
             suppression_fallback,
             studio_too_slow: false,
             suppression_report: None,
+            suppression_notice: None,
             safety,
             latency_samples: 0,
             processor_cpu_estimate: None,
@@ -1604,11 +1638,10 @@ impl SourceProcessingConfig {
             return;
         };
         if let Some((mean, worst)) = stage.hop_cost() {
-            eprintln!(
-                "[audio-engine] Studio is too slow here ({:.1} ms per 10 ms on average, {:.1} ms at worst); Strong takes over",
-                mean.as_secs_f32() * 1000.0,
-                worst.as_secs_f32() * 1000.0
-            );
+            self.suppression_notice = Some(CaptureNotice::StudioTooSlow {
+                mean_ms: mean.as_secs_f32() * 1000.0,
+                worst_ms: worst.as_secs_f32() * 1000.0,
+            });
         }
         stage.fall_back_to_standby(depth);
         self.running_suppression = NoiseSuppressionMode::Strong;
@@ -1620,8 +1653,8 @@ impl SourceProcessingConfig {
 
     /// A suppressor that errors is dropped for the rest of this capture so the microphone
     /// keeps working: Strong stands in for Studio, and sonora's own suppressor for Strong.
-    fn fall_back_after_error(&mut self, error: &SuppressorError) {
-        eprintln!("[audio-engine] noise suppression stopped: {error}");
+    fn fall_back_after_error(&mut self, error: SuppressorError) {
+        self.suppression_notice = Some(CaptureNotice::SuppressorStopped(error.0));
         let depth = self.settings.noise_suppression_depth;
         let Some(stage) = self.suppressor.as_mut() else {
             return;
@@ -1693,6 +1726,12 @@ struct WebRtcApmRuntime {
     channel_count: usize,
     frame_samples_per_channel: usize,
     pending: Vec<f32>,
+    // Scratch reused every 10 ms frame, so the capture path does not allocate.
+    render_out_left: Vec<f32>,
+    render_out_right: Vec<f32>,
+    capture_in: Vec<Vec<f32>>,
+    capture_out: Vec<Vec<f32>>,
+    processed: Vec<f32>,
 }
 
 impl std::fmt::Debug for WebRtcApmRuntime {
@@ -1781,6 +1820,11 @@ impl WebRtcApmRuntime {
             channel_count,
             frame_samples_per_channel,
             pending: Vec::new(),
+            render_out_left: Vec::new(),
+            render_out_right: Vec::new(),
+            capture_in: vec![vec![0.0; frame_samples_per_channel]; channel_count.max(1)],
+            capture_out: vec![vec![0.0; frame_samples_per_channel]; channel_count.max(1)],
+            processed: Vec::new(),
         })
     }
 
@@ -1800,14 +1844,17 @@ impl WebRtcApmRuntime {
                 break;
             };
             let config = StreamConfig::new(rate as _, 2);
-            let mut out_left = vec![0.0_f32; self.render_left.len()];
-            let mut out_right = vec![0.0_f32; self.render_right.len()];
+            self.render_out_left.resize(self.render_left.len(), 0.0);
+            self.render_out_right.resize(self.render_right.len(), 0.0);
             self.processor
                 .process_render_f32_with_config(
                     &[self.render_left.as_slice(), self.render_right.as_slice()],
                     &config,
                     &config,
-                    &mut [out_left.as_mut_slice(), out_right.as_mut_slice()],
+                    &mut [
+                        self.render_out_left.as_mut_slice(),
+                        self.render_out_right.as_mut_slice(),
+                    ],
                 )
                 .map_err(|error| CaptureError::ProcessorFailed {
                     message: format!("WebRTC APM render processing failed: {error}"),
@@ -1828,34 +1875,44 @@ impl WebRtcApmRuntime {
             return Ok(());
         }
 
-        let mut processed =
-            Vec::with_capacity((self.pending.len() / frame_samples) * frame_samples);
-        while self.pending.len() >= frame_samples {
-            let frame: Vec<f32> = self.pending.drain(0..frame_samples).collect();
-            let capture_in =
-                deinterleave_frame(&frame, self.channel_count, self.frame_samples_per_channel);
+        self.processed.clear();
+        let mut offset = 0;
+        while self.pending.len() - offset >= frame_samples {
+            deinterleave_into(
+                &self.pending[offset..offset + frame_samples],
+                &mut self.capture_in,
+            );
+            offset += frame_samples;
 
             // Feed the render (far-end) reference so AEC can subtract it.
             self.feed_render()?;
 
-            // Process the capture (near-end) frame in place.
-            let mut capture_out =
-                vec![vec![0.0_f32; self.frame_samples_per_channel]; self.channel_count];
-            {
-                let capture_src: Vec<&[f32]> = capture_in.iter().map(Vec::as_slice).collect();
-                let mut capture_dst: Vec<&mut [f32]> =
-                    capture_out.iter_mut().map(Vec::as_mut_slice).collect();
-                self.processor
-                    .process_capture_f32(&capture_src, &mut capture_dst)
-                    .map_err(|error| CaptureError::ProcessorFailed {
-                        message: format!("WebRTC APM capture processing failed: {error}"),
-                    })?;
-            }
+            // Process the capture (near-end) frame.
+            let result = match (self.capture_in.as_slice(), self.capture_out.as_mut_slice()) {
+                ([input], [output]) => self
+                    .processor
+                    .process_capture_f32(&[input.as_slice()], &mut [output.as_mut_slice()]),
+                ([left, right], [out_left, out_right]) => self.processor.process_capture_f32(
+                    &[left.as_slice(), right.as_slice()],
+                    &mut [out_left.as_mut_slice(), out_right.as_mut_slice()],
+                ),
+                (inputs, outputs) => {
+                    let sources: Vec<&[f32]> = inputs.iter().map(Vec::as_slice).collect();
+                    let mut targets: Vec<&mut [f32]> =
+                        outputs.iter_mut().map(Vec::as_mut_slice).collect();
+                    self.processor.process_capture_f32(&sources, &mut targets)
+                }
+            };
+            result.map_err(|error| CaptureError::ProcessorFailed {
+                message: format!("WebRTC APM capture processing failed: {error}"),
+            })?;
 
-            interleave_frame(&capture_out, &mut processed);
+            interleave_frame(&self.capture_out, &mut self.processed);
         }
+        self.pending.drain(..offset);
 
-        *samples = processed;
+        // `samples` was emptied into `pending`; it becomes the next call's scratch.
+        std::mem::swap(samples, &mut self.processed);
         Ok(())
     }
 }
@@ -1910,18 +1967,17 @@ fn back_config() -> ApmConfig {
     }
 }
 
-fn deinterleave_frame(interleaved: &[f32], channels: usize, frames: usize) -> Vec<Vec<f32>> {
-    let channels = channels.max(1);
-    let mut out = vec![vec![0.0; frames]; channels];
-    for frame in 0..frames {
-        for (channel, channel_out) in out.iter_mut().enumerate() {
-            let index = frame * channels + channel;
-            if let Some(sample) = interleaved.get(index) {
-                channel_out[frame] = *sample;
-            }
+/// Split one interleaved frame into `out`, one buffer per channel, each already sized.
+fn deinterleave_into(interleaved: &[f32], out: &mut [Vec<f32>]) {
+    let channels = out.len().max(1);
+    for (channel, channel_out) in out.iter_mut().enumerate() {
+        for (sample_out, sample) in channel_out
+            .iter_mut()
+            .zip(interleaved.iter().skip(channel).step_by(channels))
+        {
+            *sample_out = *sample;
         }
     }
-    out
 }
 
 fn interleave_frame(channels: &[Vec<f32>], out: &mut Vec<f32>) {
@@ -1958,7 +2014,7 @@ fn process_source_samples(
     }
     if let Some(stage) = processing.suppressor.as_mut() {
         match stage.process(samples) {
-            Err(error) => processing.fall_back_after_error(&error),
+            Err(error) => processing.fall_back_after_error(error),
             Ok(())
                 if stage.overran()
                     && processing.running_suppression == NoiseSuppressionMode::Studio =>
@@ -2052,6 +2108,13 @@ fn spawn_capture_event_pump(
 ) {
     thread::spawn(move || {
         while let Ok(event) = receiver.recv() {
+            let event = match event {
+                CaptureEvent::Notice(notice) => {
+                    notice.log();
+                    continue;
+                }
+                event => event,
+            };
             let emission = {
                 let Ok(mut engine) = shared_state.write() else {
                     break;
@@ -2102,6 +2165,7 @@ fn spawn_capture_event_pump(
                         source.runtime.noise_suppression = Some(runtime);
                         CaptureEmission::State(engine.snapshot())
                     }
+                    CaptureEvent::Notice(_) => continue,
                 }
             };
             match emission {
@@ -2130,6 +2194,27 @@ enum CaptureEvent {
     Runtime(AudioSourceRuntimeState),
     /// The microphone switched noise suppression mode, or its suppressor stopped.
     Suppression(NoiseSuppressionRuntime),
+    /// Something worth a line in the log, raised on the device thread, which never logs.
+    Notice(CaptureNotice),
+}
+
+#[derive(Debug)]
+enum CaptureNotice {
+    StudioTooSlow { mean_ms: f32, worst_ms: f32 },
+    SuppressorStopped(String),
+}
+
+impl CaptureNotice {
+    fn log(&self) {
+        match self {
+            Self::StudioTooSlow { mean_ms, worst_ms } => eprintln!(
+                "[audio-engine] Studio is too slow here ({mean_ms:.1} ms per 10 ms on average, {worst_ms:.1} ms at worst); Strong takes over"
+            ),
+            Self::SuppressorStopped(error) => {
+                eprintln!("[audio-engine] noise suppression stopped: {error}")
+            }
+        }
+    }
 }
 
 fn should_capture_source(source: &AudioSourceState, demand: CaptureDemand) -> bool {
@@ -3582,9 +3667,35 @@ pub mod platform {
         }
 
         fn command_available(command: &str) -> bool {
-            std::env::var_os("PATH")
-                .map(|paths| std::env::split_paths(&paths).any(|path| path.join(command).is_file()))
-                .unwrap_or(false)
+            system_tool(command).is_absolute()
+        }
+
+        /// Directories searched for the PipeWire and GStreamer tools before `PATH`, so a
+        /// writable directory early in `PATH` cannot stand in for them.
+        const SYSTEM_TOOL_DIRS: [&str; 4] = [
+            "/usr/bin",
+            "/bin",
+            "/usr/local/bin",
+            "/run/current-system/sw/bin",
+        ];
+
+        /// The absolute path of a system tool: from the system directories first, then
+        /// from an absolute entry in `PATH`. A tool found nowhere comes back as its bare
+        /// name, which fails to launch with the usual "not found".
+        pub(crate) fn system_tool(name: &str) -> std::path::PathBuf {
+            let system = SYSTEM_TOOL_DIRS
+                .iter()
+                .map(|dir| std::path::Path::new(dir).join(name));
+            let from_path = std::env::var_os("PATH")
+                .map(|paths| std::env::split_paths(&paths).collect::<Vec<_>>())
+                .unwrap_or_default()
+                .into_iter()
+                .filter(|dir| dir.is_absolute())
+                .map(|dir| dir.join(name));
+            system
+                .chain(from_path)
+                .find(|candidate| candidate.is_file())
+                .unwrap_or_else(|| std::path::PathBuf::from(name))
         }
 
         #[derive(Debug)]
@@ -3689,7 +3800,7 @@ pub mod platform {
         }
 
         fn spawn_pw_record(target: Option<&str>) -> Result<(Child, ChildStdout), CaptureError> {
-            let mut command = Command::new("pw-record");
+            let mut command = Command::new(system_tool("pw-record"));
             command
                 .arg("--record")
                 .arg("--raw")
@@ -3778,7 +3889,7 @@ pub mod platform {
         }
 
         pub fn list_output_devices() -> Option<Vec<AudioOutputDevice>> {
-            let output = Command::new("pw-dump").output().ok()?;
+            let output = Command::new(system_tool("pw-dump")).output().ok()?;
             if !output.status.success() {
                 return None;
             }
@@ -3865,7 +3976,7 @@ pub mod platform {
         }
 
         fn default_sink_name() -> Option<String> {
-            let output = Command::new("pactl")
+            let output = Command::new(system_tool("pactl"))
                 .args(["get-default-sink"])
                 .output()
                 .ok()?;

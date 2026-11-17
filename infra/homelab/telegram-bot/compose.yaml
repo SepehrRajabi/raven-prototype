@@ -8,8 +8,19 @@ services:
       TELEGRAM_BOT_TOKEN: ${TORAVEN_TELEGRAM_BOT_TOKEN:?TORAVEN_TELEGRAM_BOT_TOKEN is required}
       TELEGRAM_API_URL: ${TELEGRAM_API_URL:-https://api.telegram.org}
       RAVEN_BOT_DATA_DIR: /var/lib/raven-bot
+      # Disk limits (services/telegram-bot/README.md); empty keeps the bot's default.
+      RAVEN_BOT_DRAFT_MAX_MB: ${RAVEN_BOT_DRAFT_MAX_MB:-}
+      RAVEN_BOT_DISK_MAX_MB: ${RAVEN_BOT_DISK_MAX_MB:-}
+      RAVEN_BOT_MAX_DRAFTS: ${RAVEN_BOT_MAX_DRAFTS:-}
     volumes:
       - raven_telegram_bot_data:/var/lib/raven-bot
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "3"
+    security_opt:
+      - no-new-privileges:true
 
 volumes:
   raven_telegram_bot_data:

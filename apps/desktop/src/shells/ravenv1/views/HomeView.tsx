@@ -55,7 +55,7 @@ export function HomeView({
   const chatState = useChatState(chat);
   const unread = useMemo(() => unreadConversations(chatState ? Object.values(chatState.conversations).map(({ summary }) => summary) : []), [chatState]);
   const treeChat = useTreeChatSummaries(chat);
-  const lastVisited = useMemo(() => (data.user ? readLastVisited(data.user.id) : {}), [data.user]);
+  const lastVisited = useMemo(() => (data.user ? readLastVisited(data.apiServerUrl, data.user.id) : {}), [data.apiServerUrl, data.user]);
   const liveByTree = useMemo(() => {
     const people = new Map<string, number>();
     for (const nest of liveNests) {
@@ -162,7 +162,7 @@ export function HomeView({
                   icon={<Search />}
                   label={`Find a public ${treeSingular}`}
                   value={`Search by name to see what ${data.labels.treePlural.toLowerCase()} are open.`}
-                  control={<Button size="xs" variant="secondary" onClick={focusGlobalSearch}>Search</Button>}
+                  control={<Button size="xs" variant="secondary" onClick={() => focusGlobalSearch()}>Search</Button>}
                 />
                 {username ? (
                   <DoorwayRow

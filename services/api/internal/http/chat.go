@@ -42,12 +42,15 @@ const (
 	chatImagePreviewBytes = 512 * 1024
 	chatImageMaxPixels    = 100000000
 	chatImageMaxSide      = 16384
-	chatMaxBodyRunes      = 4096
-	chatMaxBodyBytes      = 16 * 1024
-	chatMaxNameRunes      = 80
-	chatMaxTopicRunes     = 240
-	chatExcerptRunes      = 140
-	chatMaxGroupMembers   = 50
+	// chatImagePreviewSide bounds the preview every reader decodes in the list; the
+	// desktop makes them at most 960 pixels.
+	chatImagePreviewSide = 1024
+	chatMaxBodyRunes     = 4096
+	chatMaxBodyBytes     = 16 * 1024
+	chatMaxNameRunes     = 80
+	chatMaxTopicRunes    = 240
+	chatExcerptRunes     = 140
+	chatMaxGroupMembers  = 50
 
 	chatEditWindow            = 48 * time.Hour
 	chatMaxReactionsPerPerson = 3
@@ -58,6 +61,10 @@ const (
 	chatChangesLimit       = 200
 	// chatUnreadCap bounds how far an unread count is counted; past it clients show "99+".
 	chatUnreadCap = 100
+	// chatMentionScan is how many of the latest messages are searched for mentions of the
+	// reader, so a busy conversation nobody opens doesn't make every list scan its whole
+	// backlog. A mention further back than that is not counted.
+	chatMentionScan = 1000
 
 	chatKindDM    = "dm"
 	chatKindGroup = "group"
@@ -182,7 +189,7 @@ type ChatConversation struct {
 	UnreadCount    int64               `json:"unreadCount"`
 	// MentionCount is how many of the unread messages mention the viewer, capped like UnreadCount.
 	MentionCount int64 `json:"mentionCount"`
-	ReadSeq        int64               `json:"readSeq"`
+	ReadSeq      int64 `json:"readSeq"`
 	// PeerReadSeq is how far the other person in a direct message has read. It is present
 	// only when both people share read status.
 	PeerReadSeq *int64 `json:"peerReadSeq,omitempty"`

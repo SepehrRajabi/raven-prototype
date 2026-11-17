@@ -107,3 +107,24 @@ describe("derivePeople", () => {
     ]);
   });
 });
+
+describe("server properties after a failed fetch", () => {
+  const answer = { name: "Home", description: "", avatar: "", rtcServerUrl: "wss://rtc.example", properties: { chat: { enabled: true } } };
+
+  test("a failure after an answer keeps the answer", async () => {
+    const { resolveServerProperties } = await import("./useRavenShellData");
+    const first = resolveServerProperties("https://a.example", answer, null);
+    const blip = resolveServerProperties("https://a.example", null, first.lastGood);
+    expect(blip.properties).toBe(first.properties);
+    expect(blip.properties.properties.chat).toEqual({ enabled: true });
+  });
+
+  test("before any answer, or for another server, the defaults stand in, with no call address", async () => {
+    const { resolveServerProperties } = await import("./useRavenShellData");
+    expect(resolveServerProperties("https://a.example", null, null).properties.rtcServerUrl).toBe("");
+    const first = resolveServerProperties("https://a.example", answer, null);
+    const other = resolveServerProperties("https://b.example", null, first.lastGood);
+    expect(other.properties.properties).toEqual({});
+    expect(other.properties.rtcServerUrl).toBe("");
+  });
+});

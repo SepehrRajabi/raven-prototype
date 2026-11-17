@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/tls"
 	"fmt"
+	"net"
 	"time"
 
 	"github.com/quic-go/quic-go"
@@ -71,8 +72,20 @@ func (s *Server) acceptLoop() {
 		if err != nil {
 			return
 		}
-		go s.Serve(&quicConn{conn})
+		go s.ServeFrom(&quicConn{conn}, remoteHost(conn.RemoteAddr()))
 	}
+}
+
+// remoteHost is the address part of a peer address, so all of one machine's ports count
+// together.
+func remoteHost(addr net.Addr) string {
+	if addr == nil {
+		return ""
+	}
+	if host, _, err := net.SplitHostPort(addr.String()); err == nil {
+		return host
+	}
+	return addr.String()
 }
 
 // quicStream adapts a QUIC stream to Stream.

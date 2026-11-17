@@ -1,0 +1,7 @@
+[Unit]
+Description=Report that %i failed
+
+[Service]
+Type=oneshot
+EnvironmentFile=-/etc/raven-alert.env
+ExecStart=/srv/raven/raven-alert.sh %i

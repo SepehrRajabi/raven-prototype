@@ -1,11 +1,15 @@
 import {
   readAccounts,
+  readStoredAccounts,
   removeBySession,
   sortForMenu,
   upsertAccount,
   writeAccounts,
+  writeAccountsWithoutSessions,
   type SavedAccount,
 } from "@/lib/accounts";
+import { logUiError } from "@/lib/diagnostics";
+import { accountKey, parseVault, serializeVault, SESSION_VAULT_KEY, type SecretBackend, type SessionVault } from "@/lib/sessionVault";
 import { avatarVersion, noteAvatarRoute } from "@/lib/avatarVersions";
 import { parseCallVote, type CallVote } from "@/lib/callVote";
 import { normalizeApiServerUrl, uniqueServerUrls } from "@/lib/apiServerUrl";
@@ -15,6 +19,8 @@ const DEFAULT_API_BASE_URL = normalizeApiServerUrl(import.meta.env.VITE_RAVEN_AP
 const API_SERVER_URL_KEY = "raven.apiServerUrl";
 const API_SERVER_HISTORY_KEY = "raven.apiServerHistory";
 const SESSION_ID_KEY = "raven.sessionId";
+/** The longest unfinished server-sent event kept before the stream is reconnected. */
+export const MAX_EVENT_FRAME_CHARS = 262_144;
 export const RAVEN_CLIENT_VERSION = typeof __RAVEN_CLIENT_VERSION__ === "string" ? __RAVEN_CLIENT_VERSION__ : "0.1.0";
 export const RAVEN_CLIENT_CAPABILITIES = [
   // Tells the server this client understands chat events on the event stream.
@@ -662,7 +668,16 @@ function parseEventNotice(value: unknown): EventNotice | undefined {
 }
 
 export class ApiClient {
-  private sessionId = localStorage.getItem(SESSION_ID_KEY) ?? "";
+  private sessionId = readLocal(SESSION_ID_KEY);
+  /** Saved sign-ins with their sessions; the source of truth while the page is open. */
+  private accounts: SavedAccount[] = readAccounts(localStorage);
+  /**
+   * Where sessions are kept. "local" is `localStorage`, as before the credential store:
+   * the state until `restoreSessions` has run, and the fallback when no store answers.
+   */
+  private sessionStore: "local" | "keychain" = "local";
+  private secretBackend: SecretBackend | null = null;
+  private secretWrites: Promise<void> = Promise.resolve();
   private baseUrl = readStoredApiServerUrl();
   /**
    * Set while the server refuses this version of Raven as too old (HTTP 426). The shell
@@ -704,37 +719,102 @@ export class ApiClient {
     return next;
   }
 
+  /**
+   * Reads sessions from the OS credential store, moving any that an older version left in
+   * `localStorage` into it (and then out of `localStorage`). The main window runs this
+   * once, before anything is fetched. When the store does not answer, sessions stay in
+   * `localStorage` for this run, as before.
+   */
+  async restoreSessions(backend: SecretBackend) {
+    let stored: string | null;
+    try {
+      stored = await backend.get(SESSION_VAULT_KEY);
+    } catch (err) {
+      this.sessionStore = "local";
+      logUiError("credential store unavailable; sessions stay in local storage", err);
+      return this.sessionStore;
+    }
+    const vault = parseVault(stored);
+    // A session still in localStorage is newer than the store's copy: an older version, or
+    // a run without the store, wrote it.
+    this.sessionId = readLocal(SESSION_ID_KEY) || vault.active;
+    this.accounts = readStoredAccounts(localStorage)
+      .map((item) => ({ ...item, sessionId: item.sessionId || vault.accounts[accountKey(item)] || "" }))
+      .filter((item) => item.sessionId !== "");
+    this.secretBackend = backend;
+    this.sessionStore = "keychain";
+    this.persistSessions();
+    await this.secretWrites;
+    return this.sessionStore;
+  }
+
+  /** "keychain" once sessions are kept in the OS credential store. */
+  getSessionStore() {
+    return this.sessionStore;
+  }
+
+  /** Resolves once every session change so far has been saved. Await it before a reload. */
+  flushSessions() {
+    return this.secretWrites;
+  }
+
+  /** Saves the active session and the saved list wherever sessions are kept. */
+  private persistSessions() {
+    if (this.sessionStore === "local" || !this.secretBackend) {
+      writeLocalSessions(this.sessionId, this.accounts);
+      return;
+    }
+    const backend = this.secretBackend;
+    const accounts = this.accounts;
+    const vault: SessionVault = {
+      active: this.sessionId,
+      accounts: Object.fromEntries(accounts.map((item) => [accountKey(item), item.sessionId])),
+    };
+    // Writes go out in order, each with the whole vault, so the last one wins.
+    this.secretWrites = this.secretWrites.then(async () => {
+      if (this.sessionStore !== "keychain") return;
+      try {
+        await backend.set(SESSION_VAULT_KEY, serializeVault(vault));
+        writeAccountsWithoutSessions(localStorage, accounts);
+        removeLocal(SESSION_ID_KEY);
+        removeLocal("raven.token");
+      } catch (err) {
+        // The store stopped answering: keep sessions where Raven kept them before.
+        this.sessionStore = "local";
+        logUiError("credential store write failed; sessions stay in local storage", err);
+        writeLocalSessions(this.sessionId, this.accounts);
+      }
+    });
+  }
+
   setSessionId(sessionId: string) {
     const previous = this.sessionId;
+    if (previous === sessionId) return;
     this.sessionId = sessionId;
-    localStorage.setItem(SESSION_ID_KEY, sessionId);
     // The server rotates ids; keep the saved entry for this session valid.
-    if (previous && previous !== sessionId) {
-      const list = readAccounts(localStorage);
-      if (list.some((item) => item.serverUrl === this.baseUrl && item.sessionId === previous)) {
-        writeAccounts(localStorage, list.map((item) =>
-          item.serverUrl === this.baseUrl && item.sessionId === previous ? { ...item, sessionId } : item));
-      }
+    if (previous) {
+      this.accounts = this.accounts.map((item) =>
+        item.serverUrl === this.baseUrl && item.sessionId === previous ? { ...item, sessionId } : item);
     }
+    this.persistSessions();
   }
 
   clearSession() {
     // Sign out and expiry both end here, so the account leaves the saved list too.
-    if (this.sessionId) writeAccounts(localStorage, removeBySession(readAccounts(localStorage), this.baseUrl, this.sessionId));
+    if (this.sessionId) this.accounts = removeBySession(this.accounts, this.baseUrl, this.sessionId);
     this.sessionId = "";
-    localStorage.removeItem(SESSION_ID_KEY);
-    localStorage.removeItem("raven.token");
+    this.persistSessions();
   }
 
   /** Saved sign-ins for the account menu and the sign-in screen, active first. */
   savedAccounts() {
-    return sortForMenu(readAccounts(localStorage), this.baseUrl, this.sessionId);
+    return sortForMenu(this.accounts, this.baseUrl, this.sessionId);
   }
 
   /** Saves the active sign-in. Signing the same user in again retires the older session. */
   rememberAccount(user: { id: string; username: string; displayName: string }, serverName: string) {
     if (!this.sessionId) return;
-    const { list, replacedSessionId } = upsertAccount(readAccounts(localStorage), {
+    const { list, replacedSessionId } = upsertAccount(this.accounts, {
       serverUrl: this.baseUrl,
       sessionId: this.sessionId,
       userId: user.id,
@@ -743,25 +823,31 @@ export class ApiClient {
       serverName,
       lastUsedAt: Date.now(),
     });
-    writeAccounts(localStorage, list);
+    this.accounts = list;
+    this.persistSessions();
     if (replacedSessionId) {
       void this.signOutSaved({ serverUrl: this.baseUrl, sessionId: replacedSessionId }).catch(() => undefined);
     }
   }
 
-  /** Makes a saved account the active one. The caller reloads the page. */
+  /** Makes a saved account the active one. The caller reloads the page once this resolves. */
   activateAccount(account: SavedAccount) {
     localStorage.setItem(API_SERVER_URL_KEY, account.serverUrl);
-    localStorage.setItem(SESSION_ID_KEY, account.sessionId);
-    writeAccounts(localStorage, readAccounts(localStorage).map((item) =>
+    this.baseUrl = readStoredApiServerUrl();
+    this.sessionId = account.sessionId;
+    this.accounts = this.accounts.map((item) =>
       item.serverUrl === account.serverUrl && item.sessionId === account.sessionId
         ? { ...item, lastUsedAt: Date.now() }
-        : item));
+        : item);
+    this.persistSessions();
+    return this.flushSessions();
   }
 
-  /** Leaves the sign-in screen next; the current account stays saved. The caller reloads. */
+  /** Leaves the sign-in screen next; the current account stays saved. The caller reloads once this resolves. */
   beginAddAccount() {
-    localStorage.removeItem(SESSION_ID_KEY);
+    this.sessionId = "";
+    this.persistSessions();
+    return this.flushSessions();
   }
 
   /** Ends a saved session on its own server (best effort) and forgets it. */
@@ -775,7 +861,8 @@ export class ApiClient {
     } catch {
       // The server may be unreachable; the saved entry goes either way.
     }
-    writeAccounts(localStorage, removeBySession(readAccounts(localStorage), account.serverUrl, account.sessionId));
+    this.accounts = removeBySession(this.accounts, account.serverUrl, account.sessionId);
+    this.persistSessions();
   }
 
   getSessionId() {
@@ -858,7 +945,7 @@ export class ApiClient {
   }
 
   revokeAuthSession(id: string) {
-    return this.request<{ revoked: boolean; current: boolean }>(`/v1/auth/sessions/${id}`, { method: "DELETE" });
+    return this.request<{ revoked: boolean; current: boolean }>(`/v1/auth/sessions/${encodeURIComponent(id)}`, { method: "DELETE" });
   }
 
   subscribeNestEvents(onUpdate: (update: NestLiveUpdate) => void, options: EventStreamOptions = {}) {
@@ -944,12 +1031,17 @@ export class ApiClient {
           if (done) break;
           lastActivityAt = Date.now();
           buffer += decoder.decode(value, { stream: true });
-          if (buffer.length > 262_144) buffer = "";
           const events = buffer.split(/\r?\n\r?\n/);
           buffer = events.pop() ?? "";
           for (const event of events) {
             const frame = parseEventStreamFrame(event);
             if (frame) handlers.onFrame(frame);
+          }
+          // An unfinished frame this large is not one the server sends. Dropping it would
+          // lose an update without a trace, so end this connection and catch up on the next.
+          if (buffer.length > MAX_EVENT_FRAME_CHARS) {
+            void reader.cancel().catch(() => undefined);
+            break;
           }
         }
       } finally {
@@ -996,12 +1088,16 @@ export class ApiClient {
     return this.request<ServerProperties>("/v1/server/properties", { auth: false });
   }
 
+  /**
+   * What stands in before the server has answered once. No call address: the address in
+   * each call token is used, never a guessed one.
+   */
   fallbackServerProperties(): ServerProperties {
     return {
       name: "Raven",
       description: "Desktop RTC for private Nests",
       avatar: "",
-      rtcServerUrl: "ws://127.0.0.1:7880",
+      rtcServerUrl: "",
       properties: {},
     };
   }
@@ -1574,6 +1670,34 @@ function desktopOS() {
 export const api = new ApiClient();
 
 export { normalizeApiServerUrl };
+
+function readLocal(key: string) {
+  try {
+    return localStorage.getItem(key) ?? "";
+  } catch {
+    return "";
+  }
+}
+
+function removeLocal(key: string) {
+  try {
+    localStorage.removeItem(key);
+  } catch {
+    // Nothing to remove from.
+  }
+}
+
+/** Sessions kept the way Raven kept them before the credential store. */
+function writeLocalSessions(sessionId: string, accounts: SavedAccount[]) {
+  try {
+    if (sessionId) localStorage.setItem(SESSION_ID_KEY, sessionId);
+    else localStorage.removeItem(SESSION_ID_KEY);
+    localStorage.removeItem("raven.token");
+  } catch {
+    // Storage unavailable: the session lasts until the window closes.
+  }
+  writeAccounts(localStorage, accounts);
+}
 
 function readStoredApiServerUrl() {
   const stored = localStorage.getItem(API_SERVER_URL_KEY);

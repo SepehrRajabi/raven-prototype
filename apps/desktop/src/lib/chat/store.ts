@@ -18,6 +18,7 @@ import {
   clearOutbox,
   loadOutbox,
   LocalSendFailure,
+  migrateOutboxKey,
   newClientMessageId,
   nextToSend,
   outboxHandles,
@@ -109,6 +110,11 @@ export interface ChatStoreOptions {
   me: ChatUser;
   /** Where unsent messages are kept across a restart. Leave out in windows that should not keep them. */
   storage?: OutboxStorage | null;
+  /**
+   * Which account the saved outbox belongs to: `accountScope(serverUrl, userId)`. Defaults
+   * to the user id, which is enough where only one server is involved (tests).
+   */
+  outboxScope?: string;
   /** Called when the server says the session has ended. */
   onSignedOut?: () => void;
   /** Leave out where attachments cannot be sent; messages with them then fail. */
@@ -131,6 +137,12 @@ export class ChatStore {
   private readonly api: ChatApi;
   private readonly me: ChatUser;
   private readonly storage: OutboxStorage | null;
+  private readonly outboxScope: string;
+  /**
+   * What was unsent when the app last closed, read once at the start. Until the first list
+   * load puts it back on screen, saving keeps it beside whatever is sent meanwhile.
+   */
+  private savedOutbox: PendingMessage[] | null;
   private readonly onSignedOut?: () => void;
   private readonly attachments: AttachmentBackend | null;
   /** Settles once prepared files no unsent message needs have been cleared away. */
@@ -172,6 +184,9 @@ export class ChatStore {
     this.api = options.api;
     this.me = options.me;
     this.storage = options.storage ?? null;
+    this.outboxScope = options.outboxScope ?? options.me.id;
+    if (this.storage) migrateOutboxKey(this.storage, options.me.id, this.outboxScope);
+    this.savedOutbox = this.storage ? loadOutbox(this.storage, this.outboxScope) : null;
     this.onSignedOut = options.onSignedOut;
     this.now = options.now ?? Date.now;
     this.delayScale = options.delayScale ?? 1;
@@ -207,6 +222,11 @@ export class ChatStore {
   private set(next: ChatState) {
     if (next === this.state || this.disposed) return;
     const pendingChanged = this.storage && this.pendingOf(next) !== this.pendingOf(this.state);
+    // A conversation that appears while the list is being fetched (opening a DM, an
+    // event) may be missing from that list; applyList keeps it and checks it again.
+    if (this.listFetching) {
+      for (const id of Object.keys(next.conversations)) if (!this.state.conversations[id]) this.listDirty.add(id);
+    }
     this.state = next;
     if (pendingChanged) this.persistOutbox();
     this.scheduleTypingExpiry();
@@ -229,7 +249,12 @@ export class ChatStore {
   private persistOutbox() {
     if (!this.storage) return;
     const all = Object.values(this.state.conversations).flatMap((conversation) => conversation.pending);
-    saveOutbox(this.storage, this.me.id, all);
+    if (this.savedOutbox) {
+      // Not restored yet: keep the saved messages, or this save would erase them.
+      const shown = new Set(all.map((item) => item.clientMessageId));
+      all.unshift(...this.savedOutbox.filter((item) => !shown.has(item.clientMessageId)));
+    }
+    saveOutbox(this.storage, this.outboxScope, all);
   }
 
   private apply(reduced: Reduced) {
@@ -338,9 +363,11 @@ export class ChatStore {
 
   /** Puts back the messages that were unsent when the app last closed. */
   private restoreOutbox(reduced: Reduced): Reduced {
-    if (!this.storage) return reduced;
+    const saved = this.savedOutbox;
+    this.savedOutbox = null;
+    if (!saved) return reduced;
     let state = reduced.state;
-    for (const item of loadOutbox(this.storage, this.me.id)) state = addPending(state, item);
+    for (const item of saved) state = addPending(state, item);
     return { state, effects: reduced.effects };
   }
 
@@ -1027,6 +1054,6 @@ export class ChatStore {
     this.listeners.clear();
     this.incoming.clear();
     this.incomingIds.clear();
-    if (signingOut && this.storage) clearOutbox(this.storage, this.me.id);
+    if (signingOut && this.storage) clearOutbox(this.storage, this.outboxScope);
   }
 }

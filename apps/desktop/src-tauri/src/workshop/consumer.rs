@@ -104,15 +104,20 @@ pub async fn run<L: Link>(
     let tcp = listeners.tcp;
     let udp = listeners.udp;
     let mut udp_buf = vec![0u8; 64 * 1024];
+    // After a failed accept (out of file descriptors, say) the next one waits, so the
+    // loop does not spin a core retrying.
+    let mut accept_pause = Duration::ZERO;
     loop {
         tokio::select! {
             reason = &mut closed => return reason,
-            accepted = accept(&tcp) => {
-                if let Ok((socket, _)) = accepted {
+            accepted = accept(&tcp, accept_pause) => match accepted {
+                Ok((socket, _)) => {
+                    accept_pause = Duration::ZERO;
                     let (link, share_id, counters, report) = (link.clone(), share_id.clone(), counters.clone(), report.clone());
                     tasks.spawn(async move { tcp_flow(link, share_id, socket, counters, report).await });
                 }
-            }
+                Err(_) => accept_pause = next_accept_pause(accept_pause),
+            },
             received = recv_from(&udp, &mut udp_buf) => {
                 let Ok((n, from)) = received else { continue };
                 let payload = udp_buf[..n].to_vec();
@@ -143,7 +148,17 @@ pub async fn run<L: Link>(
     }
 }
 
-async fn accept(listener: &Option<TcpListener>) -> std::io::Result<(TcpStream, SocketAddr)> {
+const ACCEPT_PAUSE_MIN: Duration = Duration::from_millis(50);
+const ACCEPT_PAUSE_MAX: Duration = Duration::from_secs(1);
+
+fn next_accept_pause(pause: Duration) -> Duration {
+    (pause * 2).clamp(ACCEPT_PAUSE_MIN, ACCEPT_PAUSE_MAX)
+}
+
+async fn accept(listener: &Option<TcpListener>, pause: Duration) -> std::io::Result<(TcpStream, SocketAddr)> {
+    if !pause.is_zero() {
+        tokio::time::sleep(pause).await;
+    }
     match listener {
         Some(listener) => listener.accept().await,
         None => std::future::pending().await,
@@ -273,5 +288,21 @@ async fn to_local(data: &[u8], shared: &Shared, udp: &Option<Arc<UdpSocket>>) {
     let addr = shared.lock().unwrap().table.touch(id, Instant::now()).map(|f| f.addr);
     if let Some(addr) = addr {
         let _ = socket.send_to(payload, addr).await;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn failed_accepts_back_off_up_to_a_second() {
+        let mut pause = Duration::ZERO;
+        let mut seen = Vec::new();
+        for _ in 0..8 {
+            pause = next_accept_pause(pause);
+            seen.push(pause.as_millis());
+        }
+        assert_eq!(seen, [50, 100, 200, 400, 800, 1000, 1000, 1000]);
     }
 }

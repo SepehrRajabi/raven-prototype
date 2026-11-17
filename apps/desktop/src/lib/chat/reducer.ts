@@ -203,6 +203,14 @@ export function applyList(state: ChatState, list: ChatConversation[], settings: 
     }
     conversations[fresh.id] = next;
   }
+  // One that appeared while the list was on its way (a DM just opened, an event) may be
+  // newer than the list. Keep it and ask for it on its own: a 404 then removes it.
+  for (const id of stale) {
+    const existing = state.conversations[id];
+    if (!existing || conversations[id]) continue;
+    conversations[id] = existing;
+    effects.push({ type: "fetchSummary", conversationId: id });
+  }
   return { state: { ...state, conversations, settings, listLoaded: true }, effects };
 }
 

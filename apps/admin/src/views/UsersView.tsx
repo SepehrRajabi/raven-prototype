@@ -58,9 +58,15 @@ export function UsersView({ api }: { api: AdminApi }) {
                 <div className="min-w-0 flex-1">
                   <p className="flex items-center gap-2 truncate font-medium">
                     {user.displayName}
-                    {user.role === "admin" ? <Badge>Admin</Badge> : null}
-                    {user.status === "suspended" ? <Badge tone="destructive">Suspended</Badge> : null}
-                    {user.mustChangePassword ? <Badge tone="warning">Temporary password</Badge> : null}
+                    {user.deleted ? (
+                      <Badge>Deleted</Badge>
+                    ) : (
+                      <>
+                        {user.role === "admin" ? <Badge>Admin</Badge> : null}
+                        {user.status === "suspended" ? <Badge tone="destructive">Suspended</Badge> : null}
+                        {user.mustChangePassword ? <Badge tone="warning">Temporary password</Badge> : null}
+                      </>
+                    )}
                   </p>
                   <p className="truncate text-small text-muted-foreground">@{user.username}</p>
                 </div>

@@ -478,6 +478,137 @@ func TestLibraryWebPWithoutConversion(t *testing.T) {
 	}
 }
 
+// libraryVP8L is the bitstream of a 1x1 lossless WebP.
+var libraryVP8L = []byte{0x2f, 0, 0, 0, 0x10, 0x07, 0x10, 0x11, 0x11, 0x88, 0x88, 0xfe, 0x07}
+
+func libraryRIFFChunk(fourcc string, data []byte) []byte {
+	out := append([]byte(fourcc), byte(len(data)), byte(len(data)>>8), byte(len(data)>>16), byte(len(data)>>24))
+	out = append(out, data...)
+	if len(data)%2 == 1 {
+		out = append(out, 0)
+	}
+	return out
+}
+
+func libraryRIFF(chunks ...[]byte) []byte {
+	body := []byte("WEBP")
+	for _, chunk := range chunks {
+		body = append(body, chunk...)
+	}
+	return append(append([]byte("RIFF"), byte(len(body)), byte(len(body)>>8), byte(len(body)>>16), byte(len(body)>>24)), body...)
+}
+
+// libraryAnimatedWebP is a 1x1 animated WebP with the given frame bitstreams, 100 ms each.
+func libraryAnimatedWebP(frames ...[]byte) []byte {
+	chunks := [][]byte{
+		libraryRIFFChunk("VP8X", []byte{0x02, 0, 0, 0, 0, 0, 0, 0, 0, 0}),
+		libraryRIFFChunk("ANIM", []byte{0, 0, 0, 0, 0, 0}),
+	}
+	for _, frame := range frames {
+		header := []byte{0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 100, 0, 0, 0}
+		chunks = append(chunks, libraryRIFFChunk("ANMF", append(header, libraryRIFFChunk("VP8L", frame)...)))
+	}
+	return libraryRIFF(chunks...)
+}
+
+// A WebP sticker is stored as sent only when every picture in it decodes; one whose
+// header reads well but whose image data is broken is refused.
+func TestLibraryWebPStickerMustDecode(t *testing.T) {
+	broken := append([]byte{}, libraryVP8L...)
+	for i := 5; i < len(broken); i++ {
+		broken[i] = 0xff
+	}
+	for name, tc := range map[string]struct {
+		body []byte
+		ok   bool
+	}{
+		"still":        {libraryRIFF(libraryRIFFChunk("VP8L", libraryVP8L)), true},
+		"broken still": {libraryRIFF(libraryRIFFChunk("VP8L", broken)), false},
+		"animated":     {libraryAnimatedWebP(libraryVP8L, libraryVP8L), true},
+		"broken frame": {libraryAnimatedWebP(libraryVP8L, broken), false},
+		"no frames":    {libraryAnimatedWebP(), false},
+	} {
+		direct, err := libraryDirectWebP(tc.body, false)
+		if tc.ok && (err != nil || direct == nil) {
+			t.Errorf("%s: refused: %v", name, err)
+		}
+		if !tc.ok && err == nil {
+			t.Errorf("%s: accepted", name)
+		}
+	}
+	if direct, err := libraryDirectWebP(libraryAnimatedWebP(libraryVP8L, libraryVP8L), false); err != nil || direct.durationMs == nil || *direct.durationMs != 200 {
+		t.Fatalf("animated duration: %+v %v", direct, err)
+	}
+}
+
+// A declaration with the right hash but the wrong size or type no longer keeps the file
+// out: whoever holds the bytes uploads it, and the asset records what was really sent.
+func TestLibraryWrongDeclarationDoesNotBlockTheFile(t *testing.T) {
+	s, alice, bob, _, _ := libraryServer(t)
+	body := libraryTGS(t, libraryLottie(1))
+	raw := chatDo(t, s, http.MethodPost, alice.token, "/v1/library/assets", map[string]any{
+		"clientUploadId": auth.NewID(), "kind": "sticker", "contentType": "image/webp", "size": 999,
+		"sha256": librarySum(body), "target": map[string]string{"scope": "personal"},
+	}, http.StatusCreated)
+	squatted := chatDecode[libraryCreated](t, raw)
+	again := libraryDeclare(t, s, bob.token, libraryAdd{kind: "sticker", contentType: "application/x-tgsticker", body: body}, http.StatusCreated)
+	if !again.Upload || again.Item.AssetID != squatted.Item.AssetID {
+		t.Fatalf("bob can't upload the file: %+v", again)
+	}
+	libraryUpload(t, s, bob.token, again.Item.AssetID, body, http.StatusOK)
+	if item := libraryGetItem(t, s, again.Item.ID); item.Status != libraryStatusReady || item.Format != "tgs" {
+		t.Fatalf("after bob's upload: %+v", item)
+	}
+	// Bytes that don't match the hash are still refused.
+	other := libraryTGS(t, libraryLottie(2))
+	created := libraryDeclare(t, s, alice.token, libraryAdd{kind: "sticker", contentType: "application/x-tgsticker", body: other}, http.StatusCreated)
+	libraryUpload(t, s, alice.token, created.Item.AssetID, body, http.StatusUnprocessableEntity)
+}
+
+// Libraries and uploads have per-person limits a server operator can change.
+func TestLibraryQuotas(t *testing.T) {
+	s, alice, bob, _, _ := libraryServer(t)
+	sticker := func(name string) []byte {
+		lottie := libraryLottie(1)
+		lottie["nm"] = name
+		return libraryTGS(t, lottie)
+	}
+	t.Setenv("RAVEN_LIBRARY_MAX_ITEMS", "2")
+	first := sticker("one")
+	libraryAddSticker(t, s, alice.token, libraryAdd{body: first})
+	libraryAddSticker(t, s, alice.token, libraryAdd{body: sticker("two")})
+	raw := libraryDeclareRaw(t, s, alice.token, "application/x-tgsticker", sticker("three"), 0, http.StatusRequestEntityTooLarge)
+	if !strings.Contains(string(raw), "library is full") {
+		t.Fatalf("items quota answer: %s", raw)
+	}
+	// Adding one already there is not a new item.
+	libraryDeclare(t, s, alice.token, libraryAdd{kind: "sticker", contentType: "application/x-tgsticker", body: first}, http.StatusOK)
+
+	// Uploads: a declaration that takes bob past the limit is refused; adding a file
+	// somebody else uploaded costs him nothing.
+	t.Setenv("RAVEN_LIBRARY_MAX_ITEMS", "0")
+	t.Setenv("RAVEN_LIBRARY_UPLOAD_MB", "1")
+	raw = libraryDeclareRaw(t, s, bob.token, "image/webp", []byte("pretend"), 2<<20, http.StatusRequestEntityTooLarge)
+	if !strings.Contains(string(raw), "uploaded as many") {
+		t.Fatalf("bytes quota answer: %s", raw)
+	}
+	libraryDeclare(t, s, bob.token, libraryAdd{kind: "sticker", contentType: "application/x-tgsticker", body: first}, http.StatusCreated)
+	t.Setenv("RAVEN_LIBRARY_UPLOAD_MB", "0")
+	libraryDeclareRaw(t, s, bob.token, "image/webp", []byte("pretend"), 2<<20, http.StatusCreated)
+}
+
+// libraryDeclareRaw declares a sticker with a size that need not match body.
+func libraryDeclareRaw(t *testing.T, s *Server, token, contentType string, body []byte, size, want int) []byte {
+	t.Helper()
+	if size == 0 {
+		size = len(body)
+	}
+	return chatDo(t, s, http.MethodPost, token, "/v1/library/assets", map[string]any{
+		"clientUploadId": auth.NewID(), "kind": "sticker", "contentType": contentType, "size": size,
+		"sha256": librarySum(body), "target": map[string]string{"scope": "personal"},
+	}, want)
+}
+
 func TestLibraryAdminUnpublishAndDelete(t *testing.T) {
 	s, alice, bob, _, _ := libraryServer(t)
 	item := libraryAddSticker(t, s, bob.token, libraryAdd{title: "Shared"})
@@ -600,6 +731,109 @@ func TestLibraryConvertsStaticSticker(t *testing.T) {
 	}
 	if _, err := s.libraryConversion.convert(context.Background(), libraryKindSticker, "image/png", []byte("not a png")); err == nil {
 		t.Fatal("garbage converted")
+	}
+}
+
+// ffmpeg runs with no inherited environment and, where there is a shell, a CPU limit.
+func TestLibraryConverterChildIsConfined(t *testing.T) {
+	t.Setenv("RAVEN_TEST_SECRET", "do-not-leak")
+	converter := &libraryConverter{}
+	out, err := converter.run(context.Background(), t.TempDir(), "/usr/bin/env")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(out), "do-not-leak") || !strings.Contains(string(out), "LC_ALL=C") {
+		t.Fatalf("child environment: %s", out)
+	}
+	if _, err := os.Stat("/bin/sh"); err != nil {
+		t.Skip("no /bin/sh")
+	}
+	out, err = converter.run(context.Background(), t.TempDir(), "/bin/sh", "-c", "ulimit -t")
+	if err != nil || strings.TrimSpace(string(out)) != "120" {
+		t.Fatalf("CPU limit: %q %v", out, err)
+	}
+}
+
+// An original over the store's default 10 MB read cap, and under the 20 MB library
+// limit, converts. It used to fail every read and end up "couldn't be converted".
+func TestLibraryConvertsOriginalOverTenMegabytes(t *testing.T) {
+	s, alice, _, _, _ := libraryServer(t)
+	libraryNeedsFFmpeg(t, s)
+	store, err := profilemedia.NewDiskStore(filepath.Join(t.TempDir(), "media"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.profileMedia = store
+	out := filepath.Join(t.TempDir(), "short.mp4")
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	if raw, err := exec.CommandContext(ctx, s.libraryConversion.ffmpeg, "-nostdin", "-v", "error", "-f", "lavfi", "-i", "testsrc=duration=1:size=64x64:rate=5",
+		"-c:v", "mpeg4", "-f", "mp4", out).CombinedOutput(); err != nil {
+		t.Fatalf("make test video: %v %s", err, raw)
+	}
+	// Pad the file to 11 MB with a trailing "free" box, which players skip.
+	body := readFile(t, out)
+	pad := 11*1024*1024 - len(body)
+	box := make([]byte, pad)
+	box[0], box[1], box[2], box[3] = byte(pad>>24), byte(pad>>16), byte(pad>>8), byte(pad)
+	copy(box[4:8], "free")
+	body = append(body, box...)
+	created := libraryDeclare(t, s, alice.token, libraryAdd{kind: "gif", contentType: "video/mp4", body: body}, http.StatusCreated)
+	libraryUpload(t, s, alice.token, created.Item.AssetID, body, http.StatusOK)
+	deadline := time.Now().Add(90 * time.Second)
+	for {
+		item := libraryGetItem(t, s, created.Item.ID)
+		s.libraryConversion.mu.Lock()
+		running := len(s.libraryConversion.running)
+		s.libraryConversion.mu.Unlock()
+		if running == 0 {
+			if item.Status != libraryStatusReady {
+				t.Fatalf("11 MB original = %+v (failure %q)", item, item.Failure)
+			}
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("conversion did not finish")
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+}
+
+// Without ffmpeg installed, the same 11 MB original still reaches the converter: the
+// store read succeeds (no retry is counted) and only the conversion itself fails.
+func TestLibraryReadsOriginalOverTenMegabytesForConversion(t *testing.T) {
+	s, alice, _, _, _ := libraryServer(t)
+	store, err := profilemedia.NewDiskStore(filepath.Join(t.TempDir(), "media"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.profileMedia = store
+	missing := filepath.Join(t.TempDir(), "no-ffmpeg")
+	s.libraryConversion = &libraryConverter{available: true, ffmpeg: missing, ffprobe: missing, running: map[string]bool{}}
+	body := make([]byte, 11*1024*1024)
+	copy(body, []byte{0, 0, 0, 0x18, 'f', 't', 'y', 'p', 'm', 'p', '4', '2', 0, 0, 0, 0, 'm', 'p', '4', '2', 'i', 's', 'o', 'm'})
+	created := libraryDeclare(t, s, alice.token, libraryAdd{kind: "gif", contentType: "video/mp4", body: body}, http.StatusCreated)
+	libraryUpload(t, s, alice.token, created.Item.AssetID, body, http.StatusOK)
+	deadline := time.Now().Add(30 * time.Second)
+	for {
+		s.libraryConversion.mu.Lock()
+		running := len(s.libraryConversion.running)
+		s.libraryConversion.mu.Unlock()
+		if running == 0 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("conversion did not finish")
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	var status string
+	var attempts int
+	if err := s.db.QueryRow(`SELECT status, attempts FROM library_assets WHERE id = ?`, created.Item.AssetID).Scan(&status, &attempts); err != nil {
+		t.Fatal(err)
+	}
+	if status != libraryStatusFailed || attempts != 0 {
+		t.Fatalf("status %q after %d store retries; the original should have been read", status, attempts)
 	}
 }
 

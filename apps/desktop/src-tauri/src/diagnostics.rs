@@ -13,7 +13,7 @@
 use std::fs::{self, OpenOptions};
 use std::io::Write;
 use std::path::PathBuf;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use tauri::{AppHandle, Manager};
 
@@ -116,6 +116,44 @@ fn timestamp() -> String {
     )
 }
 
+/// Reloads after a renderer crash, bounded: a page that crashes as it loads would
+/// otherwise loop crash, reload, crash for as long as Raven runs.
+#[cfg_attr(not(windows), allow(dead_code))]
+struct ReloadBudget {
+    recent: std::collections::VecDeque<Instant>,
+}
+
+#[cfg_attr(not(windows), allow(dead_code))]
+impl ReloadBudget {
+    /// At most this many reloads within [`Self::WINDOW`]; after that the window is left
+    /// as it is and the log says why.
+    const MAX: usize = 3;
+    const WINDOW: Duration = Duration::from_secs(10 * 60);
+    /// The first reload waits this long, each later one four times longer.
+    const FIRST_DELAY: Duration = Duration::from_secs(1);
+
+    fn new() -> Self {
+        Self { recent: std::collections::VecDeque::new() }
+    }
+
+    /// How long to wait before the next reload, or None when the budget is spent.
+    fn next(&mut self, now: Instant) -> Option<Duration> {
+        while self
+            .recent
+            .front()
+            .is_some_and(|at| now.duration_since(*at) >= Self::WINDOW)
+        {
+            self.recent.pop_front();
+        }
+        if self.recent.len() >= Self::MAX {
+            return None;
+        }
+        let delay = Self::FIRST_DELAY * 4_u32.pow(self.recent.len() as u32);
+        self.recent.push_back(now);
+        Some(delay)
+    }
+}
+
 /// Watch the main window's WebView2 processes. When the page's renderer dies or hangs,
 /// end the native call and reload the page instead of leaving the window blank.
 #[cfg(windows)]
@@ -141,6 +179,7 @@ pub fn watch_webview_processes(app: &AppHandle) {
     let app = app.clone();
     // One recovery at a time: a hung renderer is reported again while it is replaced.
     let recovering = Arc::new(AtomicBool::new(false));
+    let budget = Arc::new(std::sync::Mutex::new(ReloadBudget::new()));
     let result = window.with_webview(move |webview| unsafe {
         let Ok(core) = webview.controller().CoreWebView2() else {
             append(&app, &format!("[{}] could not watch the WebView2 processes", timestamp()));
@@ -190,8 +229,26 @@ pub fn watch_webview_processes(app: &AppHandle) {
             if page_lost && !recovering.swap(true, Ordering::SeqCst) {
                 let app = app.clone();
                 let recovering = Arc::clone(&recovering);
+                let delay = budget
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .next(Instant::now());
                 tauri::async_runtime::spawn(async move {
                     end_call_before_reload(&app).await;
+                    let Some(delay) = delay else {
+                        append(
+                            &app,
+                            &format!(
+                                "[{}] the page crashed {} times in {} minutes; not reloading again",
+                                timestamp(),
+                                ReloadBudget::MAX,
+                                ReloadBudget::WINDOW.as_secs() / 60
+                            ),
+                        );
+                        recovering.store(false, Ordering::SeqCst);
+                        return;
+                    };
+                    tokio::time::sleep(delay).await;
                     if let Some(window) = app.get_webview_window("main") {
                         if let Err(err) = window.reload() {
                             append(&app, &format!("[{}] reload failed: {err}", timestamp()));
@@ -242,6 +299,18 @@ mod tests {
         let clipped = clip(&long);
         assert!(clipped.len() <= FIELD_LIMIT + "…".len());
         assert!(clipped.ends_with('…'));
+    }
+
+    #[test]
+    fn renderer_reloads_back_off_and_stop() {
+        let mut budget = ReloadBudget::new();
+        let start = Instant::now();
+        assert_eq!(budget.next(start), Some(Duration::from_secs(1)));
+        assert_eq!(budget.next(start + Duration::from_secs(5)), Some(Duration::from_secs(4)));
+        assert_eq!(budget.next(start + Duration::from_secs(20)), Some(Duration::from_secs(16)));
+        assert_eq!(budget.next(start + Duration::from_secs(60)), None);
+        // Once the first crash is older than the window, one more reload is allowed.
+        assert_eq!(budget.next(start + ReloadBudget::WINDOW), Some(Duration::from_secs(16)));
     }
 
     #[test]

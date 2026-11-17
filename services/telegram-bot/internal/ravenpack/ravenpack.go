@@ -1,4 +1,4 @@
-// Package ravenpack writes .ravenpack files (see docs/plans/gifs-stickers/README.md).
+// Package ravenpack writes .ravenpack files (the format is in docs/ravenpack.md).
 package ravenpack
 
 import (
@@ -19,6 +19,7 @@ type Item struct {
 	Title    string
 	Emoji    string
 	UniqueID string
+	Size     int64 // bytes on disk, counted against the draft's limit
 }
 
 // Pack is a finished .ravenpack on disk.

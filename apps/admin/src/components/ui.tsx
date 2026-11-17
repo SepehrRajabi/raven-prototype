@@ -167,10 +167,15 @@ interface DialogProps {
   title: string;
   onClose: () => void;
   children: ReactNode;
+  /**
+   * False for a dialog that must be closed on purpose, with its own button: Escape, the
+   * backdrop and the close button then do nothing.
+   */
+  dismissible?: boolean;
 }
 
 /** A modal dialog. Escape and the backdrop close it; focus starts inside and returns after. */
-export function Dialog({ title, onClose, children }: DialogProps) {
+export function Dialog({ title, onClose, children, dismissible = true }: DialogProps) {
   const titleId = useId();
   const panel = useRef<HTMLDivElement>(null);
   useEffect(() => {
@@ -178,7 +183,7 @@ export function Dialog({ title, onClose, children }: DialogProps) {
     const first = panel.current?.querySelector<HTMLElement>("[data-autofocus], input, select, textarea, button");
     first?.focus();
     const onKey = (event: KeyboardEvent) => {
-      if (event.key === "Escape") onClose();
+      if (event.key === "Escape" && dismissible) onClose();
       if (event.key !== "Tab" || !panel.current) return;
       // Keep Tab inside the dialog.
       const focusable = Array.from(panel.current.querySelectorAll<HTMLElement>("a[href], button:not(:disabled), input:not(:disabled), select:not(:disabled), textarea:not(:disabled)"));
@@ -198,17 +203,19 @@ export function Dialog({ title, onClose, children }: DialogProps) {
       document.removeEventListener("keydown", onKey);
       previous?.focus();
     };
-  }, [onClose]);
+  }, [onClose, dismissible]);
   return (
-    <div className="fixed inset-0 z-50 grid place-items-center bg-black/60 p-4" onMouseDown={(event) => event.target === event.currentTarget && onClose()}>
+    <div className="fixed inset-0 z-50 grid place-items-center bg-black/60 p-4" onMouseDown={(event) => dismissible && event.target === event.currentTarget && onClose()}>
       <div ref={panel} role="dialog" aria-modal="true" aria-labelledby={titleId} className="w-full max-w-md rounded-panel bg-popover p-6 shadow-raised">
         <div className="mb-4 flex items-start justify-between gap-4">
           <h2 id={titleId} className="text-title font-semibold">
             {title}
           </h2>
-          <button type="button" onClick={onClose} aria-label="Close" className="grid h-7 w-7 place-items-center rounded-chip text-muted-foreground hover:bg-secondary hover:text-foreground">
-            <X size={16} aria-hidden />
-          </button>
+          {dismissible ? (
+            <button type="button" onClick={onClose} aria-label="Close" className="grid h-7 w-7 place-items-center rounded-chip text-muted-foreground hover:bg-secondary hover:text-foreground">
+              <X size={16} aria-hidden />
+            </button>
+          ) : null}
         </div>
         {children}
       </div>
@@ -273,7 +280,8 @@ export function ConfirmDialog({ title, body, confirmLabel, typeToConfirm, destru
   );
 }
 
-/** Shows a temporary password once, with a way to copy it. */
+/** Shows a temporary password once, with a way to copy it. Only Done closes it, so a stray
+ * click or Escape cannot lose the one copy. */
 export function TemporaryPasswordDialog({ username, password, onClose }: { username: string; password: string; onClose: () => void }) {
   const [copied, setCopied] = useState(false);
   const copy = async () => {
@@ -285,7 +293,7 @@ export function TemporaryPasswordDialog({ username, password, onClose }: { usern
     }
   };
   return (
-    <Dialog title="Temporary password" onClose={onClose}>
+    <Dialog title="Temporary password" onClose={onClose} dismissible={false}>
       <div className="grid gap-4">
         <p className="text-body text-muted-foreground">
           Give this to <span className="font-medium text-foreground">{username}</span>. They will be asked to choose their own the first time they sign in.

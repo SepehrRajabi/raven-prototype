@@ -2,7 +2,7 @@ import type { ChatConversation, ConversationState } from "@/lib/chat/types";
 import { OFFLINE_RANK, reachRank } from "./people";
 import type { ShellPerson } from "./state";
 
-/** How many groups the sidebar lists before it leaves the rest to "All conversations". */
+/** How many groups the sidebar lists; the rest are found by name in the find field. */
 export const GROUPS_SHOWN = 6;
 /** A group with no unread messages stays in the sidebar this long after it was last active. */
 export const GROUP_RECENT_MS = 14 * 24 * 60 * 60 * 1000;
@@ -21,7 +21,7 @@ export type FriendsAndGroupsRow =
 export interface FriendsAndGroups {
   /** Always shown, in order. */
   shown: FriendsAndGroupsRow[];
-  /** Offline friends with nothing unread, behind the "Offline · N" disclosure. */
+  /** Offline friends with nothing unread, last in the list and dimmed. */
   offline: FriendsAndGroupsRow[];
 }
 
@@ -86,6 +86,54 @@ export function friendsAndGroups({
   // Offline people lifted for their unread messages sit just above the disclosure they
   // were lifted out of.
   return { shown: [...reachable, ...groupRows, ...lifted, ...former], offline };
+}
+
+export interface PeopleFilter {
+  /** Friends and groups whose name matches. */
+  rows: FriendsAndGroupsRow[];
+  /** People you share a tree with who are not friends, each with the first tree you share. */
+  inTrees: { person: ShellPerson; caption: string }[];
+  /** Groups and direct messages that match but are not in the list (quiet groups, former friends). */
+  others: ChatConversation[];
+  /** Archived conversations whose name matches. */
+  archived: ChatConversation[];
+}
+
+/**
+ * What typing in the sidebar's find field leaves: the friends and groups that match, the
+ * people from your trees, and the archived conversations. Names are matched anywhere in the
+ * word, ignoring case; a person is also matched by their handle.
+ */
+export function filterPeople({
+  query,
+  rows,
+  people,
+  others,
+  archived,
+  treeName,
+}: {
+  query: string;
+  /** Every friends-and-groups row, offline friends included. */
+  rows: readonly FriendsAndGroupsRow[];
+  /** Everyone this client knows. Friends in it are left out of `inTrees`. */
+  people: readonly ShellPerson[];
+  /** Conversations that are not archived and not among `rows`. */
+  others: readonly ChatConversation[];
+  archived: readonly ChatConversation[];
+  treeName: (treeId: string) => string;
+}): PeopleFilter {
+  const needle = query.trim().replace(/^@/, "").toLocaleLowerCase();
+  if (!needle) return { rows: [...rows], inTrees: [], others: [], archived: [] };
+  const has = (text?: string) => Boolean(text && text.toLocaleLowerCase().includes(needle));
+  return {
+    rows: rows.filter((row) => (row.kind === "group" ? has(row.conversation.name) : has(row.person.name) || has(row.person.username))),
+    inTrees: people
+      .filter((person) => person.relationship === "context" && (has(person.name) || has(person.username)))
+      .sort(byReach)
+      .map((person) => ({ person, caption: person.treeIds[0] ? treeName(person.treeIds[0]) : "" })),
+    others: others.filter((conversation) => has(conversation.name)),
+    archived: archived.filter((conversation) => has(conversation.name)),
+  };
 }
 
 /** Whether a row has anything unread. */

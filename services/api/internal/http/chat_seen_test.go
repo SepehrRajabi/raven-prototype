@@ -168,6 +168,43 @@ func TestChatInvisibleReleaseRecordsTheReleaseTime(t *testing.T) {
 	}
 }
 
+// The audience for a read position is everyone else in the conversation (or the tree,
+// for a nest) with their own switch on, by one query.
+func TestChatReadAudienceFollowsEachMembersSwitch(t *testing.T) {
+	server, aliceToken := newTestServer(t)
+	alice := chatAlice(t, server, aliceToken)
+	bob := chatNewPerson(t, server, "bob")
+	carol := chatNewPerson(t, server, "carol")
+	chatBefriend(t, server, alice, bob)
+	chatBefriend(t, server, alice, carol)
+	group := chatNewGroup(t, server, alice, "trip", bob, carol)
+	chatSwitch(t, server, carol.token, map[string]bool{"readGroup": false})
+	tree := chatNewTree(t, server, alice, "hall", bob, carol)
+	nest := chatNewTextNest(t, server, alice.token, tree.id, "general", "")
+	chatSwitch(t, server, bob.token, map[string]bool{"readPrivateSpace": false})
+
+	for _, tc := range []struct {
+		conversation, category string
+		want                   []string
+	}{
+		{group.ID, chatReadGroup, []string{bob.user.ID}},
+		{nest.ID, chatReadPrivateSpace, []string{carol.user.ID}},
+		{nest.ID, chatReadPublicSpace, nil},
+	} {
+		access, err := server.chatAccessFor(server.db, tc.conversation, alice.user.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		got, err := server.chatReadAudience(server.db, access, tc.category, alice.user.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(got) != len(tc.want) || (len(got) == 1 && got[0] != tc.want[0]) {
+			t.Errorf("%s/%s: audience %v, want %v", tc.conversation, tc.category, got, tc.want)
+		}
+	}
+}
+
 func TestChatSeenInNestsFollowsTheTreesVisibility(t *testing.T) {
 	server, aliceToken := newTestServer(t)
 	alice := chatAlice(t, server, aliceToken)

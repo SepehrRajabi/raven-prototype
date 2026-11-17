@@ -348,16 +348,25 @@ func (s *Server) listWorkshopShares(c *fiber.Ctx) error {
 // workshopAuthenticate is the relay's Hello check. It accepts what requireAuth accepts:
 // a live, unexpired session of an active account that is not stuck on a temporary password.
 func (s *Server) workshopAuthenticate(token string) (User, error) {
-	var userID, expiresAt string
-	err := s.db.QueryRow(
-		`SELECT user_id, expires_at FROM auth_sessions WHERE id = ? AND revoked_at IS NULL`, token,
-	).Scan(&userID, &expiresAt)
+	user, _, err := s.workshopAuthenticateSession(token)
+	return user, err
+}
+
+// workshopAuthenticateSession is workshopAuthenticate that also names the sign-in, by its
+// public id, so its relay connections can be cut when it ends.
+func (s *Server) workshopAuthenticateSession(token string) (User, string, error) {
+	sessionID, userID, expiresAt, err := s.sessionForToken(token)
 	if errors.Is(err, sql.ErrNoRows) || (err == nil && sessionExpired(expiresAt)) {
-		return User{}, fiber.NewError(fiber.StatusUnauthorized, "Sign in again to use port sharing.")
+		return User{}, "", fiber.NewError(fiber.StatusUnauthorized, "Sign in again to use port sharing.")
 	}
 	if err != nil {
-		return User{}, err
+		return User{}, "", err
 	}
+	user, err := s.workshopUser(userID)
+	return user, sessionID, err
+}
+
+func (s *Server) workshopUser(userID string) (User, error) {
 	user, err := s.findUserByID(userID)
 	if errors.Is(err, sql.ErrNoRows) || (err == nil && (user.Status != userStatusActive || user.MustChangePassword)) {
 		return User{}, fiber.NewError(fiber.StatusUnauthorized, "Sign in again to use port sharing.")
@@ -467,11 +476,11 @@ func (s *Server) sweepWorkshopSessions() {
 	if s.relayServer == nil {
 		return
 	}
-	for _, token := range s.relayServer.Sessions() {
+	for _, sessionID := range s.relayServer.Sessions() {
 		var expiresAt string
-		err := s.db.QueryRow(`SELECT expires_at FROM auth_sessions WHERE id = ? AND revoked_at IS NULL`, token).Scan(&expiresAt)
+		err := s.db.QueryRow(`SELECT expires_at FROM auth_sessions WHERE id = ? AND revoked_at IS NULL`, sessionID).Scan(&expiresAt)
 		if errors.Is(err, sql.ErrNoRows) || (err == nil && sessionExpired(expiresAt)) {
-			s.relayServer.EndSession(token)
+			s.relayServer.EndSession(sessionID)
 		} else if err != nil {
 			log.Printf("workshop: check session: %v", err)
 		}
@@ -529,12 +538,12 @@ func relayError(err error) error {
 	return errors.New("Port sharing isn’t available right now.")
 }
 
-func (p relayPolicy) Authenticate(token string) (string, error) {
-	user, err := p.s.workshopAuthenticate(token)
+func (p relayPolicy) Authenticate(token string) (string, string, error) {
+	user, sessionID, err := p.s.workshopAuthenticateSession(token)
 	if err != nil {
-		return "", relayError(err)
+		return "", "", relayError(err)
 	}
-	return user.ID, nil
+	return user.ID, sessionID, nil
 }
 
 func (p relayPolicy) MayPublish(userID string, share relay.ShareInfo) error {
@@ -555,7 +564,11 @@ func (s *Server) StartRelay(addr, certFile, keyFile string) error {
 // networks that block UDP. It is off while the server's port sharing switch is.
 func (s *Server) relayWebSocket() fiber.Handler {
 	upgrade := websocket.New(func(c *websocket.Conn) {
-		s.relayServer.ServeWebSocket(c)
+		release, _ := c.Locals("relayRelease").(func())
+		if release == nil {
+			release = func() {}
+		}
+		s.relayServer.ServeWebSocketAdmitted(c, release)
 	}, websocket.Config{ReadBufferSize: 32 * 1024, WriteBufferSize: 32 * 1024})
 	return func(c *fiber.Ctx) error {
 		if !s.workshop.Limits().Enabled {
@@ -564,7 +577,18 @@ func (s *Server) relayWebSocket() fiber.Handler {
 		if !websocket.IsWebSocketUpgrade(c) {
 			return fiber.ErrUpgradeRequired
 		}
-		return upgrade(c)
+		// Nobody has signed in yet at this point, so the caps on strangers apply.
+		release, ok := s.relayServer.AdmitPending(clientIP(c))
+		if !ok {
+			c.Set(fiber.HeaderRetryAfter, "10")
+			return fiber.NewError(fiber.StatusServiceUnavailable, "Port sharing is busy. Try again in a moment.")
+		}
+		c.Locals("relayRelease", release)
+		if err := upgrade(c); err != nil {
+			release()
+			return err
+		}
+		return nil
 	}
 }
 

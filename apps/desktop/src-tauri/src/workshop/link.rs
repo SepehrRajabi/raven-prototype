@@ -262,6 +262,10 @@ async fn dial(target: &Target) -> Result<Route, ConnectError> {
 /// delaying a network where only the WebSocket route works.
 const RACE_STAGGER: Duration = Duration::from_millis(300);
 
+/// How long the relay has to answer `Hello` and `Attach` once a route is up. A relay that
+/// accepts the connection and then says nothing must not hold a publish or connect.
+const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(10);
+
 /// The route that last worked, per server (its endpoint list), tried first next time.
 fn winners() -> &'static Mutex<HashMap<String, String>> {
     static WINNERS: OnceLock<Mutex<HashMap<String, String>>> = OnceLock::new();
@@ -313,8 +317,21 @@ pub async fn connect(endpoints: &[String], token: &str, role: u8, share_id: &str
         drop(attempts);
         winners().lock().unwrap().insert(key, endpoint.clone());
         let link = RelayLink { route, endpoint, ctrl: Mutex::new(None) };
-        link.handshake(token, role, share_id).await?;
-        return Ok(link);
+        match tokio::time::timeout(HANDSHAKE_TIMEOUT, link.handshake(token, role, share_id)).await {
+            Ok(Ok(())) => return Ok(link),
+            Ok(Err(error)) => {
+                link.close("handshake_failed");
+                return Err(error);
+            }
+            Err(_) => {
+                link.close("handshake_timeout");
+                return Err(ConnectError(format!(
+                    "The relay at {} answered but didn’t finish signing in within {} s.",
+                    link.endpoint,
+                    HANDSHAKE_TIMEOUT.as_secs()
+                )));
+            }
+        }
     }
     Err(last.unwrap_or_else(|| ConnectError("This server has no relay route Raven can use.".to_string())))
 }

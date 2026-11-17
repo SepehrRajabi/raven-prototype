@@ -20,11 +20,11 @@ import (
 
 type testPolicy struct{ deny map[string]bool }
 
-func (p testPolicy) Authenticate(token string) (string, error) {
+func (p testPolicy) Authenticate(token string) (string, string, error) {
 	if token == "bad" {
-		return "", errors.New("Sign in again to use port sharing.")
+		return "", "", errors.New("Sign in again to use port sharing.")
 	}
-	return token, nil
+	return token, token, nil
 }
 func (p testPolicy) MayPublish(userID string, _ ShareInfo) error { return p.err(userID) }
 func (p testPolicy) MayConsume(userID string, _ ShareInfo) error { return p.err(userID) }

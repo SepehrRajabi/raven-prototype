@@ -1,8 +1,8 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "Raven window permissions; updater mutations are enforced natively for the main window only",
-  "windows": ["main", "nest-window-*", "studio-window-*", "voice-overlay", "pip-*"],
+  "description": "Raven's main window: window controls, opening links in the system browser, creating its picture-in-picture windows, and every Raven command (the generated main-window set; see app_commands.rs)",
+  "windows": ["main"],
   "permissions": [
     "core:default",
     "opener:default",
@@ -18,6 +18,7 @@
     "core:window:allow-set-position",
     "core:window:allow-set-size",
     "core:window:allow-start-resize-dragging",
-    "core:webview:allow-create-webview-window"
+    "core:webview:allow-create-webview-window",
+    "main-window"
   ]
 }

@@ -17,7 +17,7 @@
 //! it. `docs/architecture.md` ("Desktop media engines") describes the full topology.
 
 use std::collections::{HashMap, HashSet};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -25,16 +25,15 @@ use futures_util::StreamExt;
 use livekit::options::{AudioEncoding, TrackPublishOptions};
 use livekit::prelude::{
     ConnectionQuality, LocalAudioTrack, LocalParticipant, LocalTrack, Participant,
-    RemoteParticipant, RemoteTrack,
-    RemoteTrackPublication, Room, RoomEvent, RoomOptions, TrackKind, TrackPublication, TrackSid,
-    TrackSource,
+    RemoteParticipant, RemoteTrack, RemoteTrackPublication, Room, RoomEvent, RoomOptions,
+    TrackKind, TrackPublication, TrackSid, TrackSource,
 };
 use livekit::webrtc::audio_frame::AudioFrame;
 use livekit::webrtc::audio_source::native::NativeAudioSource;
 use livekit::webrtc::audio_source::{AudioSourceOptions, RtcAudioSource};
 use livekit::webrtc::audio_stream::native::NativeAudioStream;
 use livekit::webrtc::stats::{IceCandidatePairState, RtcStats};
-use livekit::DisconnectReason;
+use livekit::{ConnectionState, DisconnectReason};
 use tauri::{AppHandle, Emitter};
 use tokio::runtime::{Handle, Runtime};
 use tokio::sync::mpsc;
@@ -56,7 +55,7 @@ use crate::audio::processor::{
 use crate::audio::publisher::stable_webrtc_track_id;
 use crate::audio::resample::StereoResampler;
 use crate::audio::state::{
-    save_remembered_volumes, SharedAudioEngineState, AUDIO_METER_CHANGED_EVENT,
+    save_remembered_volumes, AudioEngineState, SharedAudioEngineState, AUDIO_METER_CHANGED_EVENT,
     AUDIO_STATE_CHANGED_EVENT,
 };
 use crate::audio::suppression::{new_suppressor, SuppressorStage};
@@ -132,7 +131,20 @@ fn parse_shared_meta(metadata: &str) -> HashMap<String, SharedTrackMeta> {
     if metadata.is_empty() {
         return HashMap::new();
     }
-    serde_json::from_str(metadata).unwrap_or_default()
+    let mut meta: HashMap<String, SharedTrackMeta> =
+        serde_json::from_str(metadata).unwrap_or_default();
+    // Peer-controlled and shown as an <img src>: only an inline PNG, never a URL that
+    // would make every listener fetch from a host the peer chose.
+    for entry in meta.values_mut() {
+        if entry
+            .app_icon_data_url
+            .as_deref()
+            .is_some_and(|url| !url.starts_with("data:image/png;base64,"))
+        {
+            entry.app_icon_data_url = None;
+        }
+    }
+    meta
 }
 
 /// Channel layout we publish and play at. libwebrtc resamples to/from its internal
@@ -174,6 +186,58 @@ const RECOVERY_DELAYS: [Duration; 3] = [
     Duration::from_secs(1),
     Duration::from_secs(3),
 ];
+
+/// Longest a room connect may take, LiveKit's own join retries included. LiveKit bounds each
+/// step (5 s signal, 5 s join, 15 s ICE) but retries the whole join three times, so a
+/// black-holed network could otherwise hold the engine's `ops` lock, and with it mute,
+/// gain and leave, for well over a minute. The app's rejoin loop retries after this.
+pub(crate) const ROOM_CONNECT_TIMEOUT: Duration = Duration::from_secs(30);
+/// How long a disconnect waits for LiveKit to say goodbye to the server before it carries
+/// on and leaves the close to finish in the background.
+const ROOM_CLOSE_WAIT: Duration = Duration::from_secs(3);
+/// After this the background close is abandoned and the room dropped.
+const ROOM_CLOSE_TIMEOUT: Duration = Duration::from_secs(15);
+
+/// Connect to a LiveKit room on `handle`, giving up after [`ROOM_CONNECT_TIMEOUT`].
+pub(crate) async fn connect_room_bounded(
+    handle: &Handle,
+    url: String,
+    token: String,
+    options: RoomOptions,
+) -> Result<(Room, mpsc::UnboundedReceiver<RoomEvent>), String> {
+    let mut task = handle.spawn(async move { Room::connect(&url, &token, options).await });
+    match tokio::time::timeout(ROOM_CONNECT_TIMEOUT, &mut task).await {
+        Ok(joined) => joined
+            .map_err(|error| error.to_string())
+            .and_then(|result| result.map_err(|error| error.to_string())),
+        Err(_) => {
+            // Dropping the half-made connection is the only way to cancel it.
+            task.abort();
+            Err(format!(
+                "the media server did not answer within {} s",
+                ROOM_CONNECT_TIMEOUT.as_secs()
+            ))
+        }
+    }
+}
+
+/// Close a room, waiting at most [`ROOM_CLOSE_WAIT`]. A close that takes longer (the
+/// network went away) keeps going in the background, bounded by [`ROOM_CLOSE_TIMEOUT`],
+/// so the caller's lock is not held behind a dead connection.
+pub(crate) async fn close_room_bounded(handle: &Handle, room: Arc<Room>) {
+    let mut task = handle.spawn(async move {
+        let _ = tokio::time::timeout(ROOM_CLOSE_TIMEOUT, room.close()).await;
+    });
+    if tokio::time::timeout(ROOM_CLOSE_WAIT, &mut task)
+        .await
+        .is_err()
+    {
+        eprintln!(
+            "[media-engine] room close is taking longer than {} s; finishing it in the background",
+            ROOM_CLOSE_WAIT.as_secs()
+        );
+    }
+}
 
 /// Run a synchronous LiveKit operation with the audio engine's Tokio reactor installed.
 ///
@@ -222,6 +286,28 @@ mod publish_framer_tests {
             .try_recv()
             .expect("a frame after the poisoned lock");
         assert_eq!(frame.len(), PUBLISH_FRAME_SAMPLES);
+    }
+
+    #[test]
+    fn returned_frame_buffers_are_reused_and_survive_a_poisoned_framer() {
+        let (sender, mut receiver) = mpsc::channel::<Vec<i16>>(PUBLISH_BACKLOG_FRAMES);
+        let (recycle, spare) = std::sync::mpsc::sync_channel(PUBLISH_BACKLOG_FRAMES + 2);
+        let sink = PublishSink::with_spare(sender, spare);
+
+        sink.push_samples(&vec![0.25; 480 * 2], 2, 48_000);
+        let first = receiver.try_recv().expect("first frame");
+        let address = first.as_ptr();
+        recycle.try_send(first).expect("returned");
+
+        let _ = std::panic::catch_unwind(|| {
+            let _framer = sink.framer.lock().unwrap();
+            panic!("poison the framer");
+        });
+        sink.push_samples(&vec![-0.25; 480 * 2], 2, 48_000);
+        let second = receiver.try_recv().expect("second frame");
+        assert_eq!(second.as_ptr(), address);
+        assert_eq!(second.len(), PUBLISH_FRAME_SAMPLES);
+        assert!(second.iter().all(|sample| *sample < 0));
     }
 
     #[test]
@@ -520,6 +606,9 @@ pub struct PublishSink {
 struct PublishFramer {
     resampler: StereoResampler,
     pending: Vec<i16>,
+    /// Frame buffers the drain task has finished with, reused so the capture thread does
+    /// not allocate one every 10 ms. Empty or absent, a new buffer is allocated.
+    spare: Option<std::sync::mpsc::Receiver<Vec<i16>>>,
 }
 
 impl PublishFramer {
@@ -527,29 +616,74 @@ impl PublishFramer {
         Self {
             resampler: StereoResampler::new(PUBLISH_SAMPLE_RATE),
             pending: Vec::with_capacity(PUBLISH_FRAME_SAMPLES * 4),
+            spare: None,
         }
     }
 
-    /// Append a capture block and return every complete 10 ms frame now available.
-    fn push(&mut self, samples: &[f32], channels: usize, sample_rate: u32) -> Vec<Vec<i16>> {
+    /// Start the stream over, keeping the spare buffers.
+    fn reset(&mut self) {
+        let spare = self.spare.take();
+        *self = Self::new();
+        self.spare = spare;
+    }
+
+    fn frame_buffer(&self, frame: &[i16]) -> Vec<i16> {
+        let mut buffer = self
+            .spare
+            .as_ref()
+            .and_then(|spare| spare.try_recv().ok())
+            .unwrap_or_else(|| Vec::with_capacity(PUBLISH_FRAME_SAMPLES));
+        buffer.clear();
+        buffer.extend_from_slice(frame);
+        buffer
+    }
+
+    /// Append a capture block and hand every complete 10 ms frame now available to `emit`.
+    fn push_each(
+        &mut self,
+        samples: &[f32],
+        channels: usize,
+        sample_rate: u32,
+        mut emit: impl FnMut(Vec<i16>),
+    ) {
         self.resampler
             .process(samples, channels, sample_rate, &mut self.pending);
         let complete = self.pending.len() / PUBLISH_FRAME_SAMPLES;
-        let mut frames = Vec::with_capacity(complete);
-        for index in 0..complete {
-            let start = index * PUBLISH_FRAME_SAMPLES;
-            frames.push(self.pending[start..start + PUBLISH_FRAME_SAMPLES].to_vec());
+        for frame in
+            self.pending[..complete * PUBLISH_FRAME_SAMPLES].chunks_exact(PUBLISH_FRAME_SAMPLES)
+        {
+            emit(self.frame_buffer(frame));
         }
         self.pending.drain(..complete * PUBLISH_FRAME_SAMPLES);
+    }
+
+    #[cfg(test)]
+    fn push(&mut self, samples: &[f32], channels: usize, sample_rate: u32) -> Vec<Vec<i16>> {
+        let mut frames = Vec::new();
+        self.push_each(samples, channels, sample_rate, |frame| frames.push(frame));
         frames
     }
 }
 
 impl PublishSink {
+    #[cfg(test)]
     fn new(sender: mpsc::Sender<Vec<i16>>) -> Self {
         Self {
             sender,
             framer: Mutex::new(PublishFramer::new()),
+        }
+    }
+
+    /// A sink whose drain task hands its used frame buffers back through `spare`.
+    fn with_spare(
+        sender: mpsc::Sender<Vec<i16>>,
+        spare: std::sync::mpsc::Receiver<Vec<i16>>,
+    ) -> Self {
+        let mut framer = PublishFramer::new();
+        framer.spare = Some(spare);
+        Self {
+            sender,
+            framer: Mutex::new(framer),
         }
     }
 }
@@ -562,20 +696,20 @@ impl std::fmt::Debug for PublishSink {
 
 impl ProcessedSampleSink for PublishSink {
     fn push_samples(&self, samples: &[f32], channels: usize, sample_rate: u32) {
-        let frames = match self.framer.lock() {
-            Ok(mut framer) => framer.push(samples, channels, sample_rate),
+        // Drop on backpressure rather than block the audio thread; bounds latency.
+        let send = |frame| {
+            let _ = self.sender.try_send(frame);
+        };
+        match self.framer.lock() {
+            Ok(mut framer) => framer.push_each(samples, channels, sample_rate, send),
             // A panic mid-push (caught by capture) left the framer half-updated: start it
             // over rather than dropping this track's audio for the rest of the call.
             Err(poisoned) => {
                 self.framer.clear_poison();
                 let mut framer = poisoned.into_inner();
-                *framer = PublishFramer::new();
-                framer.push(samples, channels, sample_rate)
+                framer.reset();
+                framer.push_each(samples, channels, sample_rate, send);
             }
-        };
-        for frame in frames {
-            // Drop on backpressure rather than block the audio thread; bounds latency.
-            let _ = self.sender.try_send(frame);
         }
     }
 }
@@ -613,11 +747,43 @@ struct RoomConnection {
     auto_level: JoinHandle<()>,
 }
 
+/// Received frames queued for a track's DSP thread: 80 ms. More means the thread is
+/// behind, and holding more would only add latency.
+const RECEIVE_QUEUE_FRAMES: usize = 8;
+
+const READER_RUNNING: u8 = 0;
+/// The stream ended by itself: the DSP thread finishes the queue, then cleans up.
+const READER_ENDED: u8 = 1;
+/// The async reader was aborted: the DSP thread stops at once and touches nothing.
+const READER_CANCELLED: u8 = 2;
+
+/// One decoded 10 ms frame for a track's DSP thread, at the rate it was requested at.
+struct ReceivedFrame {
+    rate: u32,
+    data: Vec<i16>,
+}
+
+/// Marks a reader cancelled when its async task is dropped before the stream ended.
+struct ReaderCancelGuard(Arc<AtomicU8>);
+
+impl Drop for ReaderCancelGuard {
+    fn drop(&mut self) {
+        let _ = self.0.compare_exchange(
+            READER_RUNNING,
+            READER_CANCELLED,
+            Ordering::AcqRel,
+            Ordering::Acquire,
+        );
+    }
+}
+
 #[derive(Clone, Debug)]
 struct ReaderEnded {
     participant_id: ParticipantId,
     track_id: PublishedTrackId,
     key: String,
+    /// The async reader's task, to tell its report from a newer reader's under the same key.
+    reader: Option<tokio::task::Id>,
 }
 
 /// The audio media engine. Stored inside `AudioEngineState` next to the capture manager.
@@ -711,12 +877,8 @@ impl AudioEngine {
         // video tracks or another sidecar belonging to the same user.
         options.auto_subscribe = false;
         let handle = self.handle();
-        let (url, token) = (url.to_string(), token.to_string());
-        let connected = handle
-            .spawn(async move { Room::connect(&url, &token, options).await })
-            .await
-            .map_err(|error| error.to_string())
-            .and_then(|result| result.map_err(|error| error.to_string()));
+        let connected =
+            connect_room_bounded(&handle, url.to_string(), token.to_string(), options).await;
         let (room, events) = match connected {
             Ok(connected) => connected,
             Err(error) => {
@@ -772,7 +934,7 @@ impl AudioEngine {
             }
             let room = connection.room.clone();
             let handle = self.handle();
-            let _ = handle.spawn(async move { room.close().await }).await;
+            close_room_bounded(&handle, room).await;
         }
         let output = Arc::clone(&self.output);
         tokio::task::block_in_place(|| output.stop());
@@ -880,6 +1042,11 @@ impl AudioEngine {
             return Ok(());
         };
         let room = Arc::clone(&connection.room);
+        if room.connection_state() != ConnectionState::Connected {
+            // LiveKit is resuming the session and republishes our tracks itself; a track
+            // looks lost until it has. The resync after `Reconnected` reconciles the rest.
+            return Ok(());
+        }
         let handle = self.handle();
 
         let desired: HashMap<AudioSourceId, &AudioSourceState> = sources
@@ -1035,7 +1202,9 @@ impl AudioEngine {
         };
 
         let (sender, receiver) = mpsc::channel::<Vec<i16>>(PUBLISH_BACKLOG_FRAMES);
-        let sink = Arc::new(PublishSink::new(sender));
+        // Room for every frame that can be in flight, so returned buffers are never lost.
+        let (recycle, spare) = std::sync::mpsc::sync_channel(PUBLISH_BACKLOG_FRAMES + 2);
+        let sink = Arc::new(PublishSink::with_spare(sender, spare));
 
         let handle = self.handle();
         let publish_room = Arc::clone(room);
@@ -1057,7 +1226,7 @@ impl AudioEngine {
             track.mute();
         }
 
-        let drain = handle.spawn(drain_published_audio(native, receiver));
+        let drain = handle.spawn(drain_published_audio(native, receiver, recycle));
 
         self.publications.insert(
             source.id,
@@ -1106,6 +1275,7 @@ impl AudioEngine {
                                 &app,
                                 &shared,
                                 &room,
+                                &output,
                                 &readers,
                                 &retrying_subscriptions,
                                 &receive_remote_audio,
@@ -1287,6 +1457,10 @@ impl AudioEngine {
                         );
 
                         let key = reader_key(&base, &track_id.to_string());
+                        // The listener's settings for this track (mute, gain, chain) apply
+                        // from the first frame: a muted peer must not play until the first
+                        // refresh. Read with a wait here, on the event loop, not on the DSP.
+                        let initial_controls = receiver_snapshot(&shared, participant_id, track_id);
                         output.ensure_track(&key);
                         let rtc_track = audio_track.rtc_track();
                         let mut rate = output.sample_rate();
@@ -1300,190 +1474,271 @@ impl AudioEngine {
                         let reader_app = app.clone();
                         let reader_key_str = key.clone();
                         let reader_ended_sender = reader_ended_sender.clone();
+                        // Decoding stays on the async runtime; the per-track DSP (cleanup, speech
+                        // detection, the chain) runs on its own thread so it never occupies a tokio
+                        // worker that LiveKit's event loops and video tasks also need.
+                        let (frames_tx, frames_rx) =
+                            std::sync::mpsc::sync_channel::<ReceivedFrame>(RECEIVE_QUEUE_FRAMES);
+                        let reader_state = Arc::new(AtomicU8::new(READER_RUNNING));
+                        let dsp_state = Arc::clone(&reader_state);
+                        let reader_task = Arc::new(std::sync::OnceLock::new());
+                        let dsp_reader_task = Arc::clone(&reader_task);
+                        let dsp_spawned = std::thread::Builder::new()
+                            .name(format!("raven-audio-rx-{key}"))
+                            .spawn(move || {
+                                let mut meter_accum: Vec<f32> = Vec::new();
+                                let mut input_level = LevelAccumulator::default();
+                                let mut last_meter = Instant::now();
+                                let seeded = initial_controls.is_some();
+                                let mut receiver_controls = initial_controls.unwrap_or_default();
+                                let mut last_control_refresh = if seeded {
+                                    Instant::now()
+                                } else {
+                                    Instant::now() - RECEIVER_CONTROL_REFRESH_INTERVAL
+                                };
+                                // This peer's own processor chain for the incoming track. Setting
+                                // edits are applied in place; only a different set of processors
+                                // rebuilds it. Applied locally — it never affects other peers.
+                                let mut chain: Option<ProcessorChainRuntime> = None;
+                                let mut chain_def = ProcessorChainState::default();
+                                // Set when a fresh snapshot arrives: the only time the chain
+                                // definition can change, so it is not compared every frame.
+                                let mut controls_refreshed = seeded;
+                                // Reused for every frame instead of a new allocation.
+                                let mut samples: Vec<f32> = Vec::new();
+                                // Receiver gain actually applied to the previous sample.
+                                let mut applied_gain: Option<f32> = None;
+                                // Speech detection and noise cleanup are for microphones only:
+                                // cleaning music or an app's sound would eat it. The cleanup
+                                // stage does nothing until the listener turns it on, and
+                                // switching it fades, so it never clicks.
+                                let mut voice =
+                                    microphone.then(|| VoiceDetector::new(rate, PUBLISH_CHANNELS));
+                                // What Auto-level measures: speech loudness as sent, before
+                                // this listener's fader.
+                                let mut loudness = microphone
+                                    .then(|| SpeechLoudnessMeter::new(rate, PUBLISH_CHANNELS));
+                                let mut cleanup = microphone
+                                    .then(|| SuppressorStage::new(None, rate, PUBLISH_CHANNELS));
+                                let mut cleanup_on = false;
+                                while let Ok(ReceivedFrame {
+                                    rate: frame_rate,
+                                    data,
+                                }) = frames_rx.recv()
+                                {
+                                    if dsp_state.load(Ordering::Acquire) == READER_CANCELLED {
+                                        // Replaced or torn down: the key may belong to a new
+                                        // reader already, so push nothing more under it.
+                                        return;
+                                    }
+                                    // Produced for the previous speaker rate; the bus moved on.
+                                    if frame_rate != reader_output.sample_rate() {
+                                        continue;
+                                    }
+                                    // The speaker was reopened at another sample rate (device
+                                    // switch): the async side asked WebRTC for the new rate, so
+                                    // start this track's state over at it.
+                                    if frame_rate != rate {
+                                        rate = frame_rate;
+                                        reader_output.reset_track(&reader_key_str);
+                                        chain = None;
+                                        voice = microphone
+                                            .then(|| VoiceDetector::new(rate, PUBLISH_CHANNELS));
+                                        loudness = microphone.then(|| {
+                                            SpeechLoudnessMeter::new(rate, PUBLISH_CHANNELS)
+                                        });
+                                        cleanup = microphone.then(|| {
+                                            SuppressorStage::new(None, rate, PUBLISH_CHANNELS)
+                                        });
+                                        cleanup_on = false;
+                                        meter_accum.clear();
+                                    }
+                                    if last_control_refresh.elapsed()
+                                        >= RECEIVER_CONTROL_REFRESH_INTERVAL
+                                    {
+                                        if let Some(snapshot) = try_receiver_snapshot(
+                                            &reader_shared,
+                                            participant_id,
+                                            track_id,
+                                        ) {
+                                            receiver_controls = snapshot;
+                                            controls_refreshed = true;
+                                        }
+                                        last_control_refresh = Instant::now();
+                                    }
+                                    let ReceiverControls {
+                                        gain,
+                                        muted,
+                                        noise_cleanup,
+                                        noise_suppression_depth,
+                                        ..
+                                    } = receiver_controls;
+                                    let target_gain = if muted { 0.0 } else { gain };
+                                    let mut current_gain = applied_gain.unwrap_or(target_gain);
+                                    let gain_step =
+                                        RECEIVER_GAIN_SLEW_PER_MS * 1000.0 / rate.max(1) as f32;
+                                    samples.clear();
+                                    samples
+                                        .extend(data.iter().map(|sample| *sample as f32 / 32768.0));
+                                    for sample in &samples {
+                                        input_level.add(*sample);
+                                    }
+                                    // Both look at what was received, before this listener's
+                                    // gain and mute, so neither depends on them.
+                                    if let Some(voice) = voice.as_mut() {
+                                        voice.process(&samples);
+                                    }
+                                    if let Some(loudness) = loudness.as_mut() {
+                                        loudness.process(&samples);
+                                    }
+                                    if let Some(stage) = cleanup.as_mut() {
+                                        if noise_cleanup != cleanup_on && !stage.is_switching() {
+                                            let suppressor = if noise_cleanup {
+                                                new_suppressor(
+                                                    NoiseSuppressionMode::Strong,
+                                                    noise_suppression_depth,
+                                                )
+                                            } else {
+                                                None
+                                            };
+                                            stage.switch(suppressor);
+                                            cleanup_on = noise_cleanup;
+                                        }
+                                        stage.set_depth(noise_suppression_depth);
+                                        if let Err(error) = stage.process(&mut samples) {
+                                            // Better to hear this person as they come in than
+                                            // to lose them.
+                                            eprintln!(
+                                                "[audio-engine] noise cleanup stopped: {error}"
+                                            );
+                                            stage.bypass();
+                                        }
+                                    }
+                                    for stereo in samples.chunks_mut(PUBLISH_CHANNELS) {
+                                        current_gain = if current_gain < target_gain {
+                                            (current_gain + gain_step).min(target_gain)
+                                        } else {
+                                            (current_gain - gain_step).max(target_gain)
+                                        };
+                                        for sample in stereo {
+                                            *sample *= current_gain;
+                                        }
+                                    }
+                                    applied_gain = Some(current_gain);
+
+                                    let chain_changed = std::mem::take(&mut controls_refreshed)
+                                        && receiver_controls.chain != chain_def;
+                                    if chain.is_none() || chain_changed {
+                                        let def = &receiver_controls.chain;
+                                        // A changed setting is applied in place so the filters
+                                        // and envelopes carry on; only a different set of
+                                        // processors builds a new chain.
+                                        let synced = chain
+                                            .as_mut()
+                                            .is_some_and(|runtime| runtime.sync_state(def));
+                                        if !synced {
+                                            chain = ProcessorChainRuntime::from_state(def).ok();
+                                            if let Some(runtime) = chain.as_mut() {
+                                                let _ = runtime.prepare(
+                                                    AudioProcessorPrepareConfig::new(
+                                                        rate,
+                                                        PUBLISH_CHANNELS,
+                                                        RECEIVER_MAX_BLOCK,
+                                                    ),
+                                                );
+                                            }
+                                        }
+                                        chain_def = def.clone();
+                                    }
+                                    if let Some(runtime) = chain.as_mut() {
+                                        if let Ok(mut audio) = AudioBuffer::from_interleaved(
+                                            PUBLISH_CHANNELS,
+                                            std::mem::take(&mut samples),
+                                        ) {
+                                            let _ = runtime.process(&mut audio);
+                                            samples = audio.into_samples();
+                                        }
+                                    }
+
+                                    reader_output.push(&reader_key_str, &samples);
+                                    // Meter exactly what we play out so the Incoming Tracks strip
+                                    // tracks the received signal (post receiver gain / chain / mute).
+                                    meter_accum.extend_from_slice(&samples);
+                                    if last_meter.elapsed() >= METER_INTERVAL {
+                                        let meter = meter_samples(&meter_accum);
+                                        update_remote_meter(
+                                            &reader_app,
+                                            &reader_shared,
+                                            participant_id,
+                                            track_id,
+                                            meter,
+                                            input_level.take(),
+                                            voice.as_mut().map(VoiceDetector::take_probability),
+                                            loudness.as_mut().map(|meter| SpeechWindow {
+                                                loudness_db: meter.take(),
+                                                duration: last_meter.elapsed(),
+                                            }),
+                                        );
+                                        meter_accum.clear();
+                                        last_meter = Instant::now();
+                                    }
+                                }
+                                if dsp_state.load(Ordering::Acquire) != READER_ENDED {
+                                    return;
+                                }
+                                let _ = reader_ended_sender.send(ReaderEnded {
+                                    participant_id,
+                                    track_id,
+                                    key: reader_key_str,
+                                    reader: dsp_reader_task.get().copied(),
+                                });
+                            });
+                        if let Err(error) = dsp_spawned {
+                            eprintln!("[audio-engine] receive thread could not start: {error}");
+                            output.remove_track(&key);
+                            update_remote_subscription_status(
+                                &app,
+                                &shared,
+                                participant_id,
+                                track_id,
+                                AudioSubscriptionStatus::Failed,
+                                Some(format!("Raven could not play this audio: {error}")),
+                            );
+                            continue;
+                        }
+                        let stream_output = Arc::clone(&output);
                         let reader = runtime_handle.spawn(async move {
-                            let mut meter_accum: Vec<f32> = Vec::new();
-                            let mut input_level = LevelAccumulator::default();
-                            let mut last_meter = Instant::now();
-                            let mut receiver_controls = ReceiverControls::default();
-                            let mut last_control_refresh =
-                                Instant::now() - RECEIVER_CONTROL_REFRESH_INTERVAL;
-                            // This peer's own processor chain for the incoming track. Setting
-                            // edits are applied in place; only a different set of processors
-                            // rebuilds it. Applied locally — it never affects other peers.
-                            let mut chain: Option<ProcessorChainRuntime> = None;
-                            let mut chain_def = ProcessorChainState::default();
-                            // Receiver gain actually applied to the previous sample.
-                            let mut applied_gain: Option<f32> = None;
-                            // Speech detection and noise cleanup are for microphones only:
-                            // cleaning music or an app's sound would eat it. The cleanup
-                            // stage does nothing until the listener turns it on, and
-                            // switching it fades, so it never clicks.
-                            let mut voice =
-                                microphone.then(|| VoiceDetector::new(rate, PUBLISH_CHANNELS));
-                            // What Auto-level measures: speech loudness as sent, before
-                            // this listener's fader.
-                            let mut loudness = microphone
-                                .then(|| SpeechLoudnessMeter::new(rate, PUBLISH_CHANNELS));
-                            let mut cleanup = microphone
-                                .then(|| SuppressorStage::new(None, rate, PUBLISH_CHANNELS));
-                            let mut cleanup_on = false;
+                            // Aborting this task (leave, replace, unsubscribe) drops the
+                            // guard, which tells the DSP thread to stop without cleanup.
+                            let _cancel = ReaderCancelGuard(Arc::clone(&reader_state));
+                            let mut stream_rate = rate;
                             while let Some(frame) = stream.next().await {
                                 // The speaker was reopened at another sample rate (device
                                 // switch): ask WebRTC to resample this track to the new
                                 // rate instead of playing it at the wrong pitch.
-                                let bus_rate = reader_output.sample_rate();
-                                if bus_rate != rate {
-                                    rate = bus_rate;
+                                let bus_rate = stream_output.sample_rate();
+                                if bus_rate != stream_rate {
+                                    stream_rate = bus_rate;
                                     stream = NativeAudioStream::new(
                                         rtc_track.clone(),
-                                        rate as i32,
+                                        stream_rate as i32,
                                         PUBLISH_CHANNELS as i32,
                                     );
-                                    reader_output.reset_track(&reader_key_str);
-                                    chain = None;
-                                    voice = microphone
-                                        .then(|| VoiceDetector::new(rate, PUBLISH_CHANNELS));
-                                    loudness = microphone
-                                        .then(|| SpeechLoudnessMeter::new(rate, PUBLISH_CHANNELS));
-                                    cleanup = microphone.then(|| {
-                                        SuppressorStage::new(None, rate, PUBLISH_CHANNELS)
-                                    });
-                                    cleanup_on = false;
-                                    meter_accum.clear();
                                     continue;
                                 }
-                                if last_control_refresh.elapsed()
-                                    >= RECEIVER_CONTROL_REFRESH_INTERVAL
-                                {
-                                    if let Some(snapshot) = try_receiver_snapshot(
-                                        &reader_shared,
-                                        participant_id,
-                                        track_id,
-                                    ) {
-                                        receiver_controls = snapshot;
-                                    }
-                                    last_control_refresh = Instant::now();
-                                }
-                                let ReceiverControls {
-                                    gain,
-                                    muted,
-                                    noise_cleanup,
-                                    noise_suppression_depth,
-                                    chain: def,
-                                } = receiver_controls.clone();
-                                let target_gain = if muted { 0.0 } else { gain };
-                                let mut current_gain = applied_gain.unwrap_or(target_gain);
-                                let gain_step =
-                                    RECEIVER_GAIN_SLEW_PER_MS * 1000.0 / rate.max(1) as f32;
-                                let mut samples: Vec<f32> = frame
-                                    .data
-                                    .iter()
-                                    .map(|sample| *sample as f32 / 32768.0)
-                                    .collect();
-                                for sample in &samples {
-                                    input_level.add(*sample);
-                                }
-                                // Both look at what was received, before this listener's
-                                // gain and mute, so neither depends on them.
-                                if let Some(voice) = voice.as_mut() {
-                                    voice.process(&samples);
-                                }
-                                if let Some(loudness) = loudness.as_mut() {
-                                    loudness.process(&samples);
-                                }
-                                if let Some(stage) = cleanup.as_mut() {
-                                    if noise_cleanup != cleanup_on && !stage.is_switching() {
-                                        let suppressor = if noise_cleanup {
-                                            new_suppressor(
-                                                NoiseSuppressionMode::Strong,
-                                                noise_suppression_depth,
-                                            )
-                                        } else {
-                                            None
-                                        };
-                                        stage.switch(suppressor);
-                                        cleanup_on = noise_cleanup;
-                                    }
-                                    stage.set_depth(noise_suppression_depth);
-                                    if let Err(error) = stage.process(&mut samples) {
-                                        // Better to hear this person as they come in than
-                                        // to lose them.
-                                        eprintln!("[audio-engine] noise cleanup stopped: {error}");
-                                        stage.bypass();
-                                    }
-                                }
-                                for stereo in samples.chunks_mut(PUBLISH_CHANNELS) {
-                                    current_gain = if current_gain < target_gain {
-                                        (current_gain + gain_step).min(target_gain)
-                                    } else {
-                                        (current_gain - gain_step).max(target_gain)
-                                    };
-                                    for sample in stereo {
-                                        *sample *= current_gain;
-                                    }
-                                }
-                                applied_gain = Some(current_gain);
-
-                                if chain.is_none() || def != chain_def {
-                                    // A changed setting is applied in place so the filters
-                                    // and envelopes carry on; only a different set of
-                                    // processors builds a new chain.
-                                    let synced = chain
-                                        .as_mut()
-                                        .is_some_and(|runtime| runtime.sync_state(&def));
-                                    if !synced {
-                                        chain = ProcessorChainRuntime::from_state(&def).ok();
-                                        if let Some(runtime) = chain.as_mut() {
-                                            let _ =
-                                                runtime.prepare(AudioProcessorPrepareConfig::new(
-                                                    rate,
-                                                    PUBLISH_CHANNELS,
-                                                    RECEIVER_MAX_BLOCK,
-                                                ));
-                                        }
-                                    }
-                                    chain_def = def;
-                                }
-                                if let Some(runtime) = chain.as_mut() {
-                                    if let Ok(mut audio) = AudioBuffer::from_interleaved(
-                                        PUBLISH_CHANNELS,
-                                        std::mem::take(&mut samples),
-                                    ) {
-                                        let _ = runtime.process(&mut audio);
-                                        samples = audio.into_samples();
-                                    }
-                                }
-
-                                reader_output.push(&reader_key_str, &samples);
-                                // Meter exactly what we play out so the Incoming Tracks strip
-                                // tracks the received signal (post receiver gain / chain / mute).
-                                meter_accum.extend_from_slice(&samples);
-                                if last_meter.elapsed() >= METER_INTERVAL {
-                                    let meter = meter_samples(&meter_accum);
-                                    update_remote_meter(
-                                        &reader_app,
-                                        &reader_shared,
-                                        participant_id,
-                                        track_id,
-                                        meter,
-                                        input_level.take(),
-                                        voice.as_mut().map(VoiceDetector::take_probability),
-                                        loudness.as_mut().map(|meter| SpeechWindow {
-                                            loudness_db: meter.take(),
-                                            duration: last_meter.elapsed(),
-                                        }),
-                                    );
-                                    meter_accum.clear();
-                                    last_meter = Instant::now();
+                                // A DSP thread that falls behind loses frames rather than
+                                // building latency (the playout buffer conceals the gap).
+                                match frames_tx.try_send(ReceivedFrame {
+                                    rate: stream_rate,
+                                    data: frame.data.into_owned(),
+                                }) {
+                                    Ok(()) | Err(std::sync::mpsc::TrySendError::Full(_)) => {}
+                                    Err(std::sync::mpsc::TrySendError::Disconnected(_)) => break,
                                 }
                             }
-                            reader_output.remove_track(&reader_key_str);
-                            let _ = reader_ended_sender.send(ReaderEnded {
-                                participant_id,
-                                track_id,
-                                key: reader_key_str,
-                            });
+                            reader_state.store(READER_ENDED, Ordering::Release);
                         });
+                        let _ = reader_task.set(reader.id());
                         if let Some(existing) = readers.lock().unwrap().insert(key.clone(), reader)
                         {
                             existing.abort();
@@ -1759,14 +2014,21 @@ impl AudioEngine {
 /// is producing audio this adds no buffering; when it falls silent the gap is filled with
 /// silence in step with the wall clock, so receivers see an unbroken stream instead of a
 /// burst of "late" packets when audio resumes.
-async fn drain_published_audio(native: NativeAudioSource, mut receiver: mpsc::Receiver<Vec<i16>>) {
+async fn drain_published_audio(
+    native: NativeAudioSource,
+    mut receiver: mpsc::Receiver<Vec<i16>>,
+    recycle: std::sync::mpsc::SyncSender<Vec<i16>>,
+) {
     let frame_duration = Duration::from_millis(10);
     let mut last_frame_at = Instant::now();
     loop {
         match tokio::time::timeout(PUBLISH_IDLE_AFTER, receiver.recv()).await {
             Ok(Some(samples)) => {
                 last_frame_at = Instant::now();
-                if !capture_publish_frame(&native, samples).await {
+                let sent = capture_publish_frame(&native, &samples).await;
+                // Back to the capture thread for reuse; dropped if the pool is full.
+                let _ = recycle.try_send(samples);
+                if !sent {
                     break;
                 }
             }
@@ -1778,7 +2040,7 @@ async fn drain_published_audio(native: NativeAudioSource, mut receiver: mpsc::Re
                 let behind = last_frame_at.elapsed().saturating_sub(frame_duration * 2);
                 let missing = (behind.as_millis() / frame_duration.as_millis()).min(10) as u32;
                 for _ in 0..missing {
-                    if !capture_publish_frame(&native, vec![0; PUBLISH_FRAME_SAMPLES]).await {
+                    if !capture_publish_frame(&native, &[0; PUBLISH_FRAME_SAMPLES]).await {
                         return;
                     }
                 }
@@ -1791,10 +2053,10 @@ async fn drain_published_audio(native: NativeAudioSource, mut receiver: mpsc::Re
     }
 }
 
-async fn capture_publish_frame(native: &NativeAudioSource, samples: Vec<i16>) -> bool {
+async fn capture_publish_frame(native: &NativeAudioSource, samples: &[i16]) -> bool {
     let frame = AudioFrame {
         samples_per_channel: (samples.len() / PUBLISH_CHANNELS) as u32,
-        data: samples.into(),
+        data: std::borrow::Cow::Borrowed(samples),
         sample_rate: PUBLISH_SAMPLE_RATE,
         num_channels: PUBLISH_CHANNELS as u32,
     };
@@ -1963,6 +2225,7 @@ fn handle_reader_ended(
     app: &AppHandle,
     shared: &SharedAudioEngineState,
     room: &Room,
+    output: &OutputMixer,
     readers: &Arc<Mutex<HashMap<String, JoinHandle<()>>>>,
     retrying: &Arc<Mutex<HashSet<String>>>,
     receive_remote_audio: &Arc<AtomicBool>,
@@ -1970,7 +2233,21 @@ fn handle_reader_ended(
     local_identity: &str,
     ended: ReaderEnded,
 ) {
-    readers.lock().unwrap().remove(&ended.key);
+    {
+        let mut readers = readers.lock().unwrap();
+        // A resubscribe can start a new reader under the same key before this report from
+        // the old one arrives. The live reader keeps its track and its status.
+        let stale = match (readers.get(&ended.key), ended.reader) {
+            (Some(current), Some(reader)) => current.id() != reader,
+            (Some(current), None) => !current.is_finished(),
+            (None, _) => false,
+        };
+        if stale {
+            return;
+        }
+        readers.remove(&ended.key);
+    }
+    output.remove_track(&ended.key);
     if !active.load(Ordering::SeqCst) || !receive_remote_audio.load(Ordering::SeqCst) {
         return;
     }
@@ -2031,7 +2308,7 @@ fn update_remote_subscription_status(
 }
 
 /// How a lost connection is described to the app, and whether rejoining may fix it.
-fn describe_disconnect(reason: DisconnectReason) -> (&'static str, &'static str, bool) {
+pub(crate) fn describe_disconnect(reason: DisconnectReason) -> (&'static str, &'static str, bool) {
     match reason {
         DisconnectReason::DuplicateIdentity => (
             "duplicateIdentity",
@@ -2212,9 +2489,23 @@ fn try_receiver_snapshot(
     participant_id: ParticipantId,
     track_id: PublishedTrackId,
 ) -> Option<ReceiverControls> {
-    let Ok(guard) = shared.try_read() else {
-        return None;
-    };
+    receiver_controls_in(&*shared.try_read().ok()?, participant_id, track_id)
+}
+
+/// [`try_receiver_snapshot`], waiting for the lock. Not for the audio path.
+fn receiver_snapshot(
+    shared: &SharedAudioEngineState,
+    participant_id: ParticipantId,
+    track_id: PublishedTrackId,
+) -> Option<ReceiverControls> {
+    receiver_controls_in(&*shared.read().ok()?, participant_id, track_id)
+}
+
+fn receiver_controls_in(
+    guard: &AudioEngineState,
+    participant_id: ParticipantId,
+    track_id: PublishedTrackId,
+) -> Option<ReceiverControls> {
     for track in &guard.mixer.remote_tracks {
         if track.track.participant_id == participant_id && track.track.track_id == track_id {
             let strip = &track.receiver_channel_strip;

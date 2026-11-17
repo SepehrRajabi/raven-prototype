@@ -18,13 +18,12 @@ import {
 } from "@/lib/video";
 import { sharePausedText } from "./stageState";
 import { useNativeMediaTiles } from "./useNativeMediaTiles";
+import { VideoSurface } from "./VideoSurface";
 
 /** Long enough that a person rejoining or a track re-subscribing does not close the window. */
 const GONE_GRACE_MS = 5000;
 const REMEMBER_AFTER_MS = 300;
 const NO_SPEAKING_ACTIVITY = {};
-/** A shared window can change shape at any time, and an MJPEG stream sends no event for it. */
-const SHAPE_CHECK_MS = 1000;
 
 /** Whether the window needed correcting. */
 async function fitToAspect(appWindow: AppWindow, aspect: number) {
@@ -44,7 +43,6 @@ export function PictureInPictureWindow({ target }: { target: PipTarget }) {
   const [endpoint, setEndpoint] = useState<VideoStreamEndpoint | null>(null);
   const [aspect, setAspect] = useState<number | null>(null);
   const aspectRef = useRef(aspect);
-  const imageRef = useRef<HTMLImageElement>(null);
 
   useEffect(() => {
     document.body.dataset.ravenWindow = "pip";
@@ -81,16 +79,11 @@ export function PictureInPictureWindow({ target }: { target: PipTarget }) {
 
   // The window always has the picture's shape: when the picture arrives or changes shape,
   // and after a resize on a platform that cannot hold the shape during the drag.
-  const readAspect = () => {
-    const image = imageRef.current;
-    if (!image?.naturalWidth || !image.naturalHeight) return;
-    const next = image.naturalWidth / image.naturalHeight;
+  const readAspect = (width: number, height: number) => {
+    if (!width || !height) return;
+    const next = width / height;
     setAspect((current) => (current !== null && Math.abs(current - next) < 0.01 ? current : next));
   };
-  useEffect(() => {
-    const timer = window.setInterval(readAspect, SHAPE_CHECK_MS);
-    return () => window.clearInterval(timer);
-  }, []);
   useEffect(() => {
     aspectRef.current = aspect;
     if (aspect === null) return;
@@ -139,12 +132,9 @@ export function PictureInPictureWindow({ target }: { target: PipTarget }) {
       }}
     >
       {playing ? (
-        <img
-          ref={imageRef}
-          src={tile?.streamUrl}
-          alt=""
-          draggable={false}
-          onLoad={readAspect}
+        <VideoSurface
+          src={tile!.streamUrl!}
+          onFrameSize={readAspect}
           className={`pointer-events-none absolute inset-0 h-full w-full object-contain transition-[filter] duration-200 ${paused ? "brightness-[0.6]" : ""}`}
         />
       ) : null}

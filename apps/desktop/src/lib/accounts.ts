@@ -3,7 +3,11 @@
  *
  * The list holds only live sessions. Whatever ends the active session (sign out, an expiry)
  * drops that account, so a saved entry is always one a click away from being usable.
- * `raven.apiServerUrl` and `raven.sessionId` stay the *active* pointers; this list is the rest.
+ * `raven.apiServerUrl` and the active session stay the *active* pointers; this list is the rest.
+ *
+ * The sessions themselves live in the OS credential store (`sessionVault.ts`). The list in
+ * `localStorage` then carries no `sessionId`; it carries one only where no credential store
+ * is available, or in what an older version of Raven wrote.
  */
 
 export type SavedAccount = {
@@ -53,27 +57,52 @@ export const ACCOUNTS_KEY = "raven.accounts";
 
 type AccountStorage = Pick<Storage, "getItem" | "setItem">;
 
-const STRING_FIELDS = ["serverUrl", "sessionId", "userId", "username", "displayName", "serverName"] as const;
+const STRING_FIELDS = ["serverUrl", "userId", "username", "displayName", "serverName"] as const;
 
-function isAccount(value: unknown): value is SavedAccount {
+function isAccount(value: unknown, requireSession: boolean): value is SavedAccount {
   if (!value || typeof value !== "object") return false;
   const candidate = value as Record<string, unknown>;
+  const session = candidate.sessionId;
   return STRING_FIELDS.every((field) => typeof candidate[field] === "string")
     && typeof candidate.serverUrl === "string" && candidate.serverUrl !== ""
-    && typeof candidate.sessionId === "string" && candidate.sessionId !== ""
+    && (requireSession ? typeof session === "string" && session !== "" : session === undefined || typeof session === "string")
     && typeof candidate.userId === "string" && candidate.userId !== ""
     && typeof candidate.lastUsedAt === "number" && Number.isFinite(candidate.lastUsedAt);
 }
 
-/** Reads the saved list. Malformed entries are dropped; never throws. */
+/** Reads the saved list. Malformed entries, and entries without a session, are dropped; never throws. */
 export function readAccounts(storage: AccountStorage): SavedAccount[] {
+  return readStoredAccounts(storage).filter((item) => item.sessionId !== "");
+}
+
+/**
+ * Reads the saved list as stored, where an entry may have no session of its own (it is in
+ * the credential store); such entries come back with `sessionId: ""`.
+ */
+export function readStoredAccounts(storage: AccountStorage): SavedAccount[] {
   try {
     const raw = storage.getItem(ACCOUNTS_KEY);
     if (!raw) return [];
     const parsed: unknown = JSON.parse(raw);
-    return Array.isArray(parsed) ? parsed.filter(isAccount) : [];
+    if (!Array.isArray(parsed)) return [];
+    return parsed
+      .filter((item): item is SavedAccount => isAccount(item, false))
+      .map((item) => ({ ...item, sessionId: item.sessionId ?? "" }));
   } catch {
     return [];
+  }
+}
+
+/** The list as written beside a credential store: everything but the sessions. */
+export function withoutSessions(list: SavedAccount[]): Array<Omit<SavedAccount, "sessionId">> {
+  return list.map(({ sessionId: _sessionId, ...rest }) => rest);
+}
+
+export function writeAccountsWithoutSessions(storage: AccountStorage, list: SavedAccount[]) {
+  try {
+    storage.setItem(ACCOUNTS_KEY, JSON.stringify(withoutSessions(list)));
+  } catch {
+    // Storage unavailable: the switcher just will not remember accounts.
   }
 }
 

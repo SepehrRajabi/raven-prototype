@@ -22,6 +22,8 @@ const (
 	eventRuleUntilLayout = "20060102T150405Z"
 	// eventRuleMaxPeriods bounds a search through a series, whatever the rule.
 	eventRuleMaxPeriods = 20000
+	// eventRuleMonthlyBackoff is how many periods a monthly fast-forward steps back.
+	eventRuleMonthlyBackoff = 12
 )
 
 var errEventRule = errors.New("unsupported recurrence rule")
@@ -212,17 +214,25 @@ func (sched eventSchedule) around(now time.Time) (next eventOccurrence, ok bool,
 		if rule.Until != nil && rule.Until.Before(target) {
 			target = *rule.Until
 		}
-		var periodLength time.Duration
-		switch rule.Freq {
-		case "DAILY":
-			periodLength = 24 * time.Hour * time.Duration(rule.Interval)
-		case "WEEKLY":
-			periodLength = 7 * 24 * time.Hour * time.Duration(rule.Interval)
-		default:
-			periodLength = 28 * 24 * time.Hour * time.Duration(rule.Interval)
-		}
-		if elapsed := target.Sub(sched.First) - sched.Length; elapsed > 0 {
-			period = int(elapsed/periodLength) - 2
+		if target = target.Add(-sched.Length); target.After(sched.First) {
+			switch rule.Freq {
+			case "DAILY", "WEEKLY":
+				// Days are 23 to 25 hours across daylight saving, which moves the estimate by
+				// at most one period; stepping back two keeps the occurrence before now.
+				periodLength := 24 * time.Hour * time.Duration(rule.Interval)
+				if rule.Freq == "WEEKLY" {
+					periodLength *= 7
+				}
+				period = int(target.Sub(sched.First)/periodLength) - 2
+			default:
+				// Months differ in length, so count calendar months in the event's zone. Step
+				// back far enough that the occurrence before now is still found when months
+				// without the start's day are skipped (the 29th of February can be absent for
+				// seven years in a row around 2100).
+				t := target.In(zone)
+				months := (t.Year()-year)*12 + int(t.Month()) - int(month)
+				period = months/rule.Interval - eventRuleMonthlyBackoff
+			}
 			if period < 0 {
 				period = 0
 			}

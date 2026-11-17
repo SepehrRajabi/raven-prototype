@@ -17,7 +17,7 @@
 
 use std::collections::{HashMap, VecDeque};
 use std::f32::consts::TAU;
-use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
@@ -49,11 +49,15 @@ const PLAYOUT_TARGET_MS: usize = 30;
 /// Above this a reader has burst after a stall; the buffer is trimmed back to the target
 /// so the delay is not carried for the rest of the call.
 const PLAYOUT_MAX_MS: usize = 120;
-/// Length of the crossfade used when trimming, so the jump is not a click.
+/// Length of the crossfade used when trimming, and of the fades around an underrun, so
+/// neither jump is a click.
 const PLAYOUT_TRIM_FADE_MS: usize = 5;
+/// Weight of each callback's fill level in the smoothed fill (about one second of history).
+const DRIFT_SMOOTHING: f32 = 0.02;
 
 /// How often the worker re-checks the default device / a missing preferred device.
-const DEVICE_PROBE_INTERVAL: Duration = Duration::from_secs(2);
+/// Same pace as the device watcher: ALSA enumeration probes each PCM, so Linux is slower.
+const DEVICE_PROBE_INTERVAL: Duration = crate::audio::devices::POLL_INTERVAL;
 const WORKER_TICK: Duration = Duration::from_millis(50);
 /// Backoff between failed attempts to open a speaker. The last delay repeats forever.
 const OPEN_RETRY_DELAYS: [Duration; 3] = [
@@ -127,11 +131,30 @@ pub struct RenderCursor {
 }
 
 impl RenderReference {
+    #[cfg(test)]
     pub(crate) fn push_stereo(&self, interleaved_stereo: &[f32], sample_rate: u32) {
         if interleaved_stereo.is_empty() || sample_rate == 0 {
             return;
         }
-        let mut ring = self.lock_ring();
+        Self::append(&mut self.lock_ring(), interleaved_stereo, sample_rate);
+    }
+
+    /// [`Self::push_stereo`] for the device callback: never waits. False when a capture
+    /// thread holds the ring, and the caller keeps the block to push with the next one.
+    fn try_push_stereo(&self, interleaved_stereo: &[f32], sample_rate: u32) -> bool {
+        if interleaved_stereo.is_empty() || sample_rate == 0 {
+            return true;
+        }
+        let mut ring = match self.ring.try_lock() {
+            Ok(ring) => ring,
+            Err(std::sync::TryLockError::WouldBlock) => return false,
+            Err(std::sync::TryLockError::Poisoned(_)) => self.lock_ring(),
+        };
+        Self::append(&mut ring, interleaved_stereo, sample_rate);
+        true
+    }
+
+    fn append(ring: &mut RenderRing, interleaved_stereo: &[f32], sample_rate: u32) {
         if ring.sample_rate != sample_rate {
             ring.samples.clear();
             ring.sample_rate = sample_rate;
@@ -227,15 +250,25 @@ impl PlayoutLimits {
     }
 }
 
-/// Jitter buffer between one reader task and the device callback.
+/// Jitter buffer between one reader task and the device callback. Owned by the callback.
 ///
 /// A plain queue lets latency ratchet upward: every underrun plays silence, then the late
 /// audio is queued behind it and stays there. This buffer instead waits until `target` is
 /// available before it (re)starts, and cuts back to `target` once it exceeds `max`.
+///
+/// The sender's clock and the speaker's never run at exactly the same rate. While playing,
+/// the buffer follows its smoothed fill level and drops or repeats one frame per callback
+/// (about 0.2 %, inaudible) to hold it near the target, so a drifting peer neither keeps
+/// re-priming nor walks up to the hard trim.
 #[derive(Debug, Default)]
 struct PlayoutBuffer {
     queue: VecDeque<f32>,
     playing: bool,
+    /// Smoothed fill level in samples, sampled at each callback while playing.
+    fill_ema: f32,
+    /// Frames of the start-up fade applied so far, and its length.
+    fade_in_done: usize,
+    fade_in_frames: usize,
     underruns: u64,
     trims: u64,
 }
@@ -267,31 +300,79 @@ impl PlayoutBuffer {
             }
         }
         self.queue.drain(..drop);
+        self.fill_ema = self.fill_ema.min(self.queue.len() as f32);
         self.trims += 1;
+    }
+
+    /// Nudge the fill level toward the target by one frame: merge the two oldest frames
+    /// when the sender runs fast, repeat the oldest when it runs slow.
+    fn correct_drift(&mut self, limits: PlayoutLimits) {
+        let fill = self.queue.len() as f32;
+        self.fill_ema += (fill - self.fill_ema) * DRIFT_SMOOTHING;
+        let target = limits.target as f32;
+        if self.fill_ema > target * 1.5 && self.queue.len() >= 2 * BUS_CHANNELS {
+            for channel in 0..BUS_CHANNELS {
+                let merged = (self.queue[channel] + self.queue[BUS_CHANNELS + channel]) * 0.5;
+                self.queue[BUS_CHANNELS + channel] = merged;
+            }
+            self.queue.drain(..BUS_CHANNELS);
+            self.fill_ema -= BUS_CHANNELS as f32;
+        } else if self.fill_ema < target * 0.5 && self.queue.len() >= BUS_CHANNELS {
+            for channel in (0..BUS_CHANNELS).rev() {
+                let sample = self.queue[channel];
+                self.queue.push_front(sample);
+            }
+            self.fill_ema += BUS_CHANNELS as f32;
+        }
     }
 
     /// Add this track into `out` (interleaved stereo). Returns nothing while priming.
     fn mix_into(&mut self, out: &mut [f32], limits: PlayoutLimits) {
+        let fade_frames = limits.fade / BUS_CHANNELS;
         if !self.playing {
             if self.queue.len() < limits.target {
                 return;
             }
             self.playing = true;
+            self.fill_ema = self.queue.len() as f32;
+            // Start (and restart after an underrun) from silence, not mid-waveform.
+            self.fade_in_done = 0;
+            self.fade_in_frames = fade_frames;
+        } else {
+            self.correct_drift(limits);
         }
         let count = out.len().min(self.queue.len());
-        let (front, back) = self.queue.as_slices();
-        let from_front = count.min(front.len());
-        for (target, sample) in out[..from_front].iter_mut().zip(&front[..from_front]) {
-            *target += *sample;
+        let underrun = count < out.len();
+        let frames = count / BUS_CHANNELS;
+        // Running dry: fade the last audio out so the gap does not start with a step.
+        let fade_out_from = if underrun {
+            frames.saturating_sub(fade_frames)
+        } else {
+            frames
+        };
+        let fade_out_len = frames - fade_out_from;
+        let mut samples = self.queue.iter();
+        for (index, frame) in out[..frames * BUS_CHANNELS]
+            .chunks_exact_mut(BUS_CHANNELS)
+            .enumerate()
+        {
+            let mut gain = 1.0;
+            if self.fade_in_done < self.fade_in_frames {
+                self.fade_in_done += 1;
+                gain = self.fade_in_done as f32 / (self.fade_in_frames + 1) as f32;
+            }
+            if index >= fade_out_from {
+                gain *= (frames - index) as f32 / (fade_out_len + 1) as f32;
+            }
+            for (target, sample) in frame.iter_mut().zip(&mut samples) {
+                *target += *sample * gain;
+            }
         }
-        let from_back = count - from_front;
-        for (target, sample) in out[from_front..count].iter_mut().zip(&back[..from_back]) {
-            *target += *sample;
-        }
-        self.queue.drain(..count);
-        if count < out.len() {
+        self.queue.drain(..frames * BUS_CHANNELS);
+        if underrun {
             // Ran dry mid-callback: rebuild the cushion before resuming so one late frame
             // does not turn into a string of micro-dropouts.
+            self.queue.clear();
             self.playing = false;
             self.underruns += 1;
         }
@@ -303,13 +384,37 @@ impl PlayoutBuffer {
     }
 }
 
+/// What a track's reader has delivered since the callback last took it.
+#[derive(Debug, Default)]
+struct TrackIncoming {
+    samples: Vec<f32>,
+    /// The reader restarted at a new rate: the callback drops what it buffered.
+    reset: bool,
+}
+
+/// One track's hand-off from its reader to the device callback. The reader holds the lock
+/// only to append; the callback only `try_lock`s it, so neither ever waits on the other.
+#[derive(Debug, Default)]
+struct TrackFeed {
+    incoming: Mutex<TrackIncoming>,
+}
+
+/// A track as the callback sees it: its feed and the playout buffer only it touches.
+struct RenderTrack {
+    feed: Arc<TrackFeed>,
+    buffer: PlayoutBuffer,
+}
+
 // ---------------------------------------------------------------------------
 // Mix bus
 // ---------------------------------------------------------------------------
 
 #[derive(Debug)]
 struct MixBus {
-    tracks: Mutex<HashMap<String, PlayoutBuffer>>,
+    /// The registry of track feeds. Readers lock it briefly to find their feed; the
+    /// callback re-reads it with `try_lock` only when `tracks_version` moved.
+    tracks: Mutex<HashMap<String, Arc<TrackFeed>>>,
+    tracks_version: AtomicU64,
     /// Sound cues being played, already rendered at `sample_rate`.
     cues: Mutex<CueVoices>,
     sample_rate: AtomicU32,
@@ -360,6 +465,7 @@ impl Default for MixBus {
     fn default() -> Self {
         Self {
             tracks: Mutex::new(HashMap::new()),
+            tracks_version: AtomicU64::new(0),
             cues: Mutex::new(CueVoices::default()),
             sample_rate: AtomicU32::new(48_000),
             muted: AtomicBool::new(false),
@@ -370,6 +476,80 @@ impl Default for MixBus {
 }
 
 impl MixBus {
+    fn limits(&self) -> PlayoutLimits {
+        PlayoutLimits::for_rate(self.sample_rate.load(Ordering::Relaxed))
+    }
+
+    fn feed(&self, key: &str) -> Option<Arc<TrackFeed>> {
+        self.tracks.lock().ok()?.get(key).cloned()
+    }
+
+    fn ensure_track(&self, key: &str) {
+        if let Ok(mut tracks) = self.tracks.lock() {
+            if !tracks.contains_key(key) {
+                tracks.insert(key.to_string(), Arc::default());
+                self.tracks_version.fetch_add(1, Ordering::Release);
+            }
+        }
+    }
+
+    /// Queue audio for a track. A track that is not registered (removed while its reader
+    /// was finishing) takes nothing, so a stale reader cannot bring it back.
+    fn push(&self, key: &str, stereo: &[f32]) {
+        let Some(feed) = self.feed(key) else {
+            return;
+        };
+        let limits = self.limits();
+        if let Ok(mut incoming) = feed.incoming.lock() {
+            incoming.samples.extend_from_slice(stereo);
+            // The callback is not draining (device gone): keep only the newest audio.
+            let excess = incoming.samples.len().saturating_sub(limits.max);
+            let excess = excess - (excess % BUS_CHANNELS);
+            if excess > 0 {
+                incoming.samples.drain(..excess);
+            }
+        };
+    }
+
+    fn reset_feed(feed: &TrackFeed) {
+        if let Ok(mut incoming) = feed.incoming.lock() {
+            incoming.samples.clear();
+            incoming.reset = true;
+        }
+    }
+
+    fn reset_track(&self, key: &str) {
+        if let Some(feed) = self.feed(key) {
+            Self::reset_feed(&feed);
+        }
+    }
+
+    fn reset_all(&self) {
+        let feeds: Vec<_> = self
+            .tracks
+            .lock()
+            .map(|tracks| tracks.values().cloned().collect())
+            .unwrap_or_default();
+        for feed in feeds {
+            Self::reset_feed(&feed);
+        }
+    }
+
+    fn remove_track(&self, key: &str) {
+        if let Ok(mut tracks) = self.tracks.lock() {
+            if tracks.remove(key).is_some() {
+                self.tracks_version.fetch_add(1, Ordering::Release);
+            }
+        }
+    }
+
+    fn clear_tracks(&self) {
+        if let Ok(mut tracks) = self.tracks.lock() {
+            tracks.clear();
+            self.tracks_version.fetch_add(1, Ordering::Release);
+        }
+    }
+
     fn volume_gain(&self) -> f32 {
         f32::from_bits(self.volume.load(Ordering::Relaxed))
     }
@@ -388,9 +568,15 @@ struct BusRenderer {
     reference: Arc<RenderReference>,
     sample_rate: u32,
     limits: PlayoutLimits,
+    /// The tracks this callback plays, refreshed from the registry when it changes.
+    tracks: Vec<RenderTrack>,
+    tracks_version: u64,
     master_gain: f32,
     volume: VolumeRamp,
     limiter_gain: f32,
+    /// Played audio the echo reference was busy for, pushed ahead of the next block so
+    /// the canceller still sees one unbroken stream. Capacity is reserved up front.
+    reference_backlog: Vec<f32>,
 }
 
 impl BusRenderer {
@@ -406,18 +592,89 @@ impl BusRenderer {
             reference,
             sample_rate,
             limits: PlayoutLimits::for_rate(sample_rate),
+            tracks: Vec::new(),
+            // Never a real version, so the first callback reads the registry.
+            tracks_version: u64::MAX,
             master_gain,
             volume: VolumeRamp::new(bus_volume),
             limiter_gain: 1.0,
+            reference_backlog: Vec::with_capacity(reference_backlog_cap(sample_rate)),
         }
+    }
+
+    /// Hand the played block to the echo reference without waiting on a capture thread
+    /// that is reading it. A busy ring keeps the block for the next callback; a backlog
+    /// that would outgrow its reserved space (the reader is stuck) drops its oldest audio,
+    /// which the reader treats like any other gap.
+    fn push_reference(&mut self, out: &[f32]) {
+        if self.reference_backlog.is_empty() {
+            if self.reference.try_push_stereo(out, self.sample_rate) {
+                return;
+            }
+        } else if self
+            .reference
+            .try_push_stereo(&self.reference_backlog, self.sample_rate)
+        {
+            self.reference_backlog.clear();
+            if self.reference.try_push_stereo(out, self.sample_rate) {
+                return;
+            }
+        }
+        let cap = self.reference_backlog.capacity();
+        let overflow = (self.reference_backlog.len() + out.len()).saturating_sub(cap);
+        if overflow > 0 {
+            let overflow = overflow.min(self.reference_backlog.len());
+            let overflow = overflow - overflow % BUS_CHANNELS;
+            self.reference_backlog.drain(..overflow);
+        }
+        let room = cap.saturating_sub(self.reference_backlog.len());
+        let take = out.len().min(room) - out.len().min(room) % BUS_CHANNELS;
+        self.reference_backlog
+            .extend_from_slice(&out[out.len() - take..]);
+    }
+
+    /// Match the callback's track list to the registry. A busy registry is retried on the
+    /// next callback; the current list keeps playing meanwhile.
+    fn refresh_tracks(&mut self) {
+        let version = self.bus.tracks_version.load(Ordering::Acquire);
+        if version == self.tracks_version {
+            return;
+        }
+        let Ok(registry) = self.bus.tracks.try_lock() else {
+            return;
+        };
+        self.tracks
+            .retain(|track| registry.values().any(|feed| Arc::ptr_eq(feed, &track.feed)));
+        for feed in registry.values() {
+            if !self
+                .tracks
+                .iter()
+                .any(|track| Arc::ptr_eq(feed, &track.feed))
+            {
+                self.tracks.push(RenderTrack {
+                    feed: Arc::clone(feed),
+                    buffer: PlayoutBuffer::default(),
+                });
+            }
+        }
+        self.tracks_version = version;
     }
 
     /// Fill `out` (interleaved stereo, pre-zeroed) with the mixed bus.
     fn render(&mut self, out: &mut [f32]) {
-        if let Ok(mut tracks) = self.bus.tracks.lock() {
-            for buffer in tracks.values_mut() {
-                buffer.mix_into(out, self.limits);
+        self.refresh_tracks();
+        for track in &mut self.tracks {
+            // A reader mid-append is taken on the next callback; the cushion covers it.
+            if let Ok(mut incoming) = track.feed.incoming.try_lock() {
+                if std::mem::take(&mut incoming.reset) {
+                    track.buffer.reset();
+                }
+                if !incoming.samples.is_empty() {
+                    track.buffer.push(&incoming.samples, self.limits);
+                    incoming.samples.clear();
+                }
             }
+            track.buffer.mix_into(out, self.limits);
         }
         // Cues are mixed on either side of the deafen ramp: most go silent with the call,
         // your own mute toggle is still heard. A busy cue list waits for the next block.
@@ -448,8 +705,14 @@ impl BusRenderer {
         }
         self.limiter_gain = limit_bus(out, self.limiter_gain, self.sample_rate);
         // The canceller must see exactly what reached the speaker, post mute and limiter.
-        self.reference.push_stereo(out, self.sample_rate);
+        self.push_reference(out);
     }
+}
+
+/// Space the render backlog reserves: 100 ms of stereo, far more than a capture thread
+/// holds the ring for.
+fn reference_backlog_cap(sample_rate: u32) -> usize {
+    (sample_rate as usize / 10).max(1) * BUS_CHANNELS
 }
 
 /// Glides the output volume to its target in a straight line over [`VOLUME_RAMP_MS`].
@@ -645,9 +908,7 @@ impl OutputMixer {
         if let Some(handle) = handle {
             let _ = handle.join();
         }
-        if let Ok(mut tracks) = self.bus.tracks.lock() {
-            tracks.clear();
-        }
+        self.bus.clear_tracks();
         if let Ok(mut cues) = self.bus.cues.lock() {
             cues.clear();
         }
@@ -800,34 +1061,21 @@ impl OutputMixer {
     }
 
     pub(crate) fn ensure_track(&self, key: &str) {
-        if let Ok(mut tracks) = self.bus.tracks.lock() {
-            tracks.entry(key.to_string()).or_default();
-        }
+        self.bus.ensure_track(key);
     }
 
+    /// Queue audio for a track registered with [`Self::ensure_track`]; others take nothing.
     pub(crate) fn push(&self, key: &str, stereo: &[f32]) {
-        let limits = PlayoutLimits::for_rate(self.sample_rate());
-        if let Ok(mut tracks) = self.bus.tracks.lock() {
-            tracks
-                .entry(key.to_string())
-                .or_default()
-                .push(stereo, limits);
-        }
+        self.bus.push(key, stereo);
     }
 
     /// Drop a track's queued audio (its stream was recreated at a new sample rate).
     pub(crate) fn reset_track(&self, key: &str) {
-        if let Ok(mut tracks) = self.bus.tracks.lock() {
-            if let Some(buffer) = tracks.get_mut(key) {
-                buffer.reset();
-            }
-        }
+        self.bus.reset_track(key);
     }
 
     pub(crate) fn remove_track(&self, key: &str) {
-        if let Ok(mut tracks) = self.bus.tracks.lock() {
-            tracks.remove(key);
-        }
+        self.bus.remove_track(key);
     }
 }
 
@@ -934,11 +1182,7 @@ impl OutputWorker {
     fn adopt_sample_rate(&self, sample_rate: u32) {
         let previous = self.bus.sample_rate.swap(sample_rate, Ordering::SeqCst);
         if previous != sample_rate {
-            if let Ok(mut tracks) = self.bus.tracks.lock() {
-                for buffer in tracks.values_mut() {
-                    buffer.reset();
-                }
-            }
+            self.bus.reset_all();
             if let Ok(mut cues) = self.bus.cues.lock() {
                 cues.clear();
             }
@@ -1381,6 +1625,44 @@ fn play_on_stream(
 mod tests {
     use super::*;
 
+    #[test]
+    fn a_busy_echo_reference_gets_the_block_with_the_next_one_in_order() {
+        let reference = Arc::new(RenderReference::default());
+        let mut renderer =
+            BusRenderer::new(Arc::new(MixBus::default()), Arc::clone(&reference), 48_000);
+        let first = vec![0.25_f32; 480 * BUS_CHANNELS];
+        let second = vec![0.5_f32; 480 * BUS_CHANNELS];
+        {
+            // A capture thread reading the ring: the callback must not wait for it.
+            let _reader = reference.ring.lock().unwrap();
+            renderer.push_reference(&first);
+        }
+        assert_eq!(renderer.reference_backlog.len(), first.len());
+        renderer.push_reference(&second);
+        assert!(renderer.reference_backlog.is_empty());
+
+        let ring = reference.ring.lock().unwrap();
+        assert_eq!(ring.written, 960);
+        let samples: Vec<f32> = ring.samples.iter().copied().collect();
+        assert_eq!(samples[..first.len()], first[..]);
+        assert_eq!(samples[first.len()..], second[..]);
+    }
+
+    #[test]
+    fn a_stuck_echo_reference_keeps_only_the_newest_audio_it_has_room_for() {
+        let reference = Arc::new(RenderReference::default());
+        let mut renderer =
+            BusRenderer::new(Arc::new(MixBus::default()), Arc::clone(&reference), 48_000);
+        let cap = renderer.reference_backlog.capacity();
+        let _reader = reference.ring.lock().unwrap();
+        for _ in 0..40 {
+            renderer.push_reference(&vec![0.1_f32; 480 * BUS_CHANNELS]);
+        }
+        assert!(renderer.reference_backlog.len() <= cap);
+        assert_eq!(renderer.reference_backlog.capacity(), cap);
+        assert_eq!(renderer.reference_backlog.len() % BUS_CHANNELS, 0);
+    }
+
     fn limits() -> PlayoutLimits {
         PlayoutLimits::for_rate(48_000)
     }
@@ -1505,7 +1787,12 @@ mod tests {
 
         buffer.push(&ten_ms, limits());
         buffer.push(&ten_ms, limits());
-        assert!(mixed(&mut buffer, 480).iter().all(|sample| *sample == 0.5));
+        let out = mixed(&mut buffer, 480);
+        assert!(
+            out[0] > 0.0 && out[0] < 0.01,
+            "starts with a fade, not a step"
+        );
+        assert!(out[limits().fade..].iter().all(|sample| *sample == 0.5));
     }
 
     #[test]
@@ -1530,7 +1817,9 @@ mod tests {
 
         // ...and playback resumes once it is.
         buffer.push(&vec![0.5; 480 * 3 * BUS_CHANNELS], limits());
-        assert!(mixed(&mut buffer, 480).iter().all(|sample| *sample == 0.5));
+        let out = mixed(&mut buffer, 480);
+        assert!(out[0] < 0.01, "resumes with a fade");
+        assert!(out[limits().fade..].iter().all(|sample| *sample == 0.5));
     }
 
     #[test]
@@ -1538,9 +1827,10 @@ mod tests {
         let mut buffer = PlayoutBuffer::default();
         buffer.push(&vec![0.5; 480 * 3 * BUS_CHANNELS], limits());
         let out = mixed(&mut buffer, 480 * 4);
-        assert!(out[..480 * 3 * BUS_CHANNELS]
-            .iter()
-            .all(|sample| *sample == 0.5));
+        let played = 480 * 3 * BUS_CHANNELS;
+        let fade = limits().fade;
+        assert!(out[fade..played - fade].iter().all(|sample| *sample == 0.5));
+        assert!(out[played - 1] < 0.01, "fades out before the gap");
         assert!(out[480 * 3 * BUS_CHANNELS..]
             .iter()
             .all(|sample| *sample == 0.0));
@@ -1568,6 +1858,44 @@ mod tests {
             mixed(&mut buffer, 480);
             assert!(buffer.queue.len() <= limits.max);
         }
+    }
+
+    /// Feed `produced` frames per 480-frame callback for `callbacks`, returning the buffer.
+    fn run_clock(produced: usize, callbacks: usize) -> PlayoutBuffer {
+        let mut buffer = PlayoutBuffer::default();
+        let mut owed = 0.0_f64;
+        for _ in 0..callbacks {
+            owed += produced as f64 / 1000.0;
+            let frames = owed as usize;
+            owed -= frames as f64;
+            buffer.push(&vec![0.1; frames * BUS_CHANNELS], limits());
+            mixed(&mut buffer, 480);
+        }
+        buffer
+    }
+
+    #[test]
+    fn a_slow_sender_is_stretched_instead_of_re_priming() {
+        // The sender's clock runs 0.1 % slow: 479.52 frames per 480 played.
+        let buffer = run_clock(479_520, 6_000);
+        assert_eq!(buffer.underruns, 0);
+    }
+
+    #[test]
+    fn a_fast_sender_is_held_near_the_target_without_trimming() {
+        // 0.1 % fast: the queue would reach the 120 ms cap in about two minutes.
+        let buffer = run_clock(480_480, 30_000);
+        assert_eq!(buffer.trims, 0);
+        assert!(buffer.queue.len() <= limits().target * 2);
+    }
+
+    #[test]
+    fn a_removed_track_is_not_brought_back_by_a_late_push() {
+        let bus = MixBus::default();
+        bus.ensure_track("track");
+        bus.remove_track("track");
+        bus.push("track", &[0.5; 960]);
+        assert!(bus.tracks.lock().unwrap().is_empty());
     }
 
     #[test]
@@ -1770,14 +2098,8 @@ mod tests {
         let mut played = Vec::new();
         for _ in 0..blocks {
             let feed = vec![amplitude; 480 * BUS_CHANNELS];
-            renderer
-                .bus
-                .tracks
-                .lock()
-                .unwrap()
-                .entry("track".to_string())
-                .or_default()
-                .push(&feed, limits());
+            renderer.bus.ensure_track("track");
+            renderer.bus.push("track", &feed);
             let mut out = vec![0.0; 480 * BUS_CHANNELS];
             renderer.render(&mut out);
             played.extend(out);

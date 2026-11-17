@@ -12,8 +12,19 @@ export type Route =
   | { page: "settings" }
   | { page: "audit" };
 
+/** A path segment decoded, or as written when it is not valid percent-encoding. */
+function decodeSegment(segment: string): string {
+  try {
+    return decodeURIComponent(segment);
+  } catch {
+    // A pasted or hand-edited link such as #/users/%E0. The page then reports that
+    // nothing has that id, instead of the whole dashboard failing.
+    return segment;
+  }
+}
+
 export function parseRoute(hash: string): Route {
-  const parts = hash.replace(/^#\/?/, "").split("/").filter(Boolean).map(decodeURIComponent);
+  const parts = hash.replace(/^#\/?/, "").split("/").filter(Boolean).map(decodeSegment);
   switch (parts[0]) {
     case "users":
       return parts[1] ? { page: "user", id: parts[1] } : { page: "users" };

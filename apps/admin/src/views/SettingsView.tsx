@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import type { AdminApi } from "../api";
 import type { AccountSettings, CapabilityDefault, CapabilityName } from "../types";
 import { Button, Input, List, Loading, Notice, PageHeader, Row, Section, Select } from "../components/ui";
-import { CAPABILITY_LIMITS, CAPABILITY_TEXT } from "../lib/format";
+import { CAPABILITY_LIMITS, capabilityText } from "../lib/format";
 import { IMAGE_TYPES, imageProblem } from "../lib/image";
 import { errorMessage, useLoad } from "../lib/useLoad";
 
@@ -66,12 +66,12 @@ export function SettingsView({ api }: { api: AdminApi }) {
         {draft ? (
           <List>
             {draft.map((item) => {
-              const text = CAPABILITY_TEXT[item.capability];
+              const text = capabilityText(item.capability);
               return (
                 <Row key={item.capability}>
                   <div className="min-w-0 flex-1 py-1">
                     <p className="font-medium">{text.title}</p>
-                    <p className="text-small text-muted-foreground">{text.description}</p>
+                    {text.description ? <p className="text-small text-muted-foreground">{text.description}</p> : null}
                   </div>
                   {CAPABILITY_LIMITS[item.capability] && item.allowed ? (
                     <Input

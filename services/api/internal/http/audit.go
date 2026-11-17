@@ -1,6 +1,7 @@
 package http
 
 import (
+	"encoding/base64"
 	"encoding/json"
 	"log"
 	"strings"
@@ -84,9 +85,17 @@ func (s *Server) adminListAudit(c *fiber.Ctx) error {
 		clauses = append(clauses, `entity_id = ?`)
 		args = append(args, entityID)
 	}
+	// before is either the opaque cursor a previous page returned as next, which
+	// continues exactly after that page's last entry, or a plain timestamp, which older
+	// dashboards send and which skips entries sharing the last one's time.
 	if before := strings.TrimSpace(c.Query("before")); before != "" {
-		clauses = append(clauses, `created_at < ?`)
-		args = append(args, before)
+		if createdAt, id, ok := decodeAuditCursor(before); ok {
+			clauses = append(clauses, `(created_at < ? OR (created_at = ? AND id < ?))`)
+			args = append(args, createdAt, createdAt, id)
+		} else {
+			clauses = append(clauses, `created_at < ?`)
+			args = append(args, before)
+		}
 	}
 	where := ""
 	if len(clauses) > 0 {
@@ -121,5 +130,38 @@ func (s *Server) adminListAudit(c *fiber.Ctx) error {
 	if err := rows.Err(); err != nil {
 		return err
 	}
-	return c.JSON(fiber.Map{"events": events})
+	// next is null on the last page. A full page may still be the last one; asking
+	// again then returns an empty page with next null.
+	var next any
+	if len(events) == limit {
+		last := events[len(events)-1]
+		next = encodeAuditCursor(last.CreatedAt, last.ID)
+	}
+	return c.JSON(fiber.Map{"events": events, "next": next})
+}
+
+// auditCursorPrefix marks a cursor, so it is never mistaken for a timestamp.
+const auditCursorPrefix = "c1."
+
+// encodeAuditCursor names a position in the audit log, newest first, by the last entry
+// shown: its time and, for entries that share a time, its id. Clients pass it back
+// unchanged and should not read anything into it.
+func encodeAuditCursor(createdAt, id string) string {
+	return auditCursorPrefix + base64.RawURLEncoding.EncodeToString([]byte(createdAt+"|"+id))
+}
+
+func decodeAuditCursor(cursor string) (createdAt, id string, ok bool) {
+	encoded, found := strings.CutPrefix(cursor, auditCursorPrefix)
+	if !found {
+		return "", "", false
+	}
+	raw, err := base64.RawURLEncoding.DecodeString(encoded)
+	if err != nil {
+		return "", "", false
+	}
+	createdAt, id, found = strings.Cut(string(raw), "|")
+	if !found || createdAt == "" || id == "" {
+		return "", "", false
+	}
+	return createdAt, id, true
 }

@@ -1,10 +1,12 @@
 package main
 
 import (
+	"bufio"
 	"errors"
 	"flag"
 	"fmt"
 	"io"
+	"os"
 	"strings"
 
 	"raven/services/api/internal/database"
@@ -57,13 +59,20 @@ func runUserCreate(server *apihttp.Server, args []string, stdout, stderr io.Writ
 	fs := newFlagSet("user create", stderr)
 	username := fs.String("username", "", "username")
 	displayName := fs.String("display-name", "", "display name")
-	password := fs.String("password", "", "password")
+	password := fs.String("password", "", "password (visible to other users of this machine in the process list; leave it out to read the password from standard input)")
 	role := fs.String("role", "user", "role: admin or user")
 	if err := parseFlags(fs, args); err != nil {
 		return err
 	}
-	if strings.TrimSpace(*username) == "" || *password == "" {
-		return fmt.Errorf("user create requires --username and --password")
+	if strings.TrimSpace(*username) == "" {
+		return fmt.Errorf("user create requires --username")
+	}
+	if *password == "" {
+		read, err := readPassword(cliStdin, stderr)
+		if err != nil {
+			return fmt.Errorf("user create: %w", err)
+		}
+		*password = read
 	}
 	if err := apihttp.ValidateNewUsername(strings.TrimSpace(*username)); err != nil {
 		return fmt.Errorf("create user: %w", err)
@@ -81,6 +90,30 @@ func runUserCreate(server *apihttp.Server, args []string, stdout, stderr io.Writ
 	server.RecordCLIChange("user.created", "user", user.ID, user.Username, map[string]any{"role": user.Role})
 	fmt.Fprintf(stdout, "created %s user %q (%s) with display name %q\n", user.Role, user.Username, user.ID, user.DisplayName)
 	return nil
+}
+
+// cliStdin is where a password left off the command line is read from.
+var cliStdin io.Reader = os.Stdin
+
+// readPassword reads one line from in, without its line ending. A password given on the
+// command line shows in the process list and the shell's history; one piped in does not:
+//
+//	printf '%s\n' "$PASSWORD" | raven-api user create --username anna
+func readPassword(in io.Reader, prompt io.Writer) (string, error) {
+	if file, ok := in.(*os.File); ok {
+		if info, err := file.Stat(); err == nil && info.Mode()&os.ModeCharDevice != 0 {
+			fmt.Fprint(prompt, "Password (shown as you type): ")
+		}
+	}
+	line, err := bufio.NewReader(in).ReadString('\n')
+	if err != nil && !errors.Is(err, io.EOF) {
+		return "", err
+	}
+	line = strings.TrimRight(line, "\r\n")
+	if line == "" {
+		return "", fmt.Errorf("no password: pass --password or write it to standard input")
+	}
+	return line, nil
 }
 
 func runUserSetRole(server *apihttp.Server, args []string, stdout, stderr io.Writer) error {

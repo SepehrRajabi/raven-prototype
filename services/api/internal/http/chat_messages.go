@@ -746,6 +746,23 @@ func (s *Server) deleteChatMessage(c *fiber.Ctx) error {
 // the tree's owners and moderators, may delete anyone's. In a direct message nobody can
 // delete the other person's words.
 func (s *Server) deleteChatMessageForEveryone(c *fiber.Ctx) error {
+	// A copy made between listing the copies and erasing them lives in a conversation
+	// whose lock is not held; the attempt then starts again with it. The last attempt
+	// erases it anyway: its event may then reach the stream out of commit order, which
+	// clients repair through /changes.
+	for attempt := 1; ; attempt++ {
+		err := s.deleteChatMessageForEveryoneOnce(c, attempt < chatDeleteAttempts)
+		if errors.Is(err, errChatCopiesMoved) {
+			continue
+		}
+		return err
+	}
+}
+
+// chatDeleteAttempts bounds how often a delete starts again because copies moved.
+const chatDeleteAttempts = 4
+
+func (s *Server) deleteChatMessageForEveryoneOnce(c *fiber.Ctx, strict bool) error {
 	user := currentUser(c)
 	conversationID := c.Params("id")
 	messageID := c.Params("messageId")
@@ -756,8 +773,14 @@ func (s *Server) deleteChatMessageForEveryone(c *fiber.Ctx) error {
 	if err != nil {
 		return err
 	}
-	for _, id := range chatSortedUnique(append(copyConversations, conversationID)...) {
+	locked := map[string]bool{}
+	ordered := chatSortedUnique(append(copyConversations, conversationID)...)
+	for _, id := range ordered {
 		defer s.chatLocks.lock(id)()
+		locked[id] = true
+	}
+	if !strict {
+		locked = nil
 	}
 
 	tx, err := s.db.Begin()
@@ -765,6 +788,13 @@ func (s *Server) deleteChatMessageForEveryone(c *fiber.Ctx) error {
 		return err
 	}
 	defer tx.Rollback()
+	// Take the conversations' rows in the same id order too, as attachment expiry does,
+	// so the two never wait on each other in a cycle on PostgreSQL.
+	for _, id := range ordered {
+		if _, err := tx.Exec(`UPDATE chat_conversations SET last_seq = last_seq WHERE id = ?`, id); err != nil {
+			return err
+		}
+	}
 	now := database.Now()
 	seq, err := chatNextSeq(tx, conversationID, false, now)
 	if err != nil {
@@ -818,7 +848,7 @@ func (s *Server) deleteChatMessageForEveryone(c *fiber.Ctx) error {
 	if err != nil {
 		return err
 	}
-	copies, err := s.chatEraseCopiesTx(tx, messageID, user.ID, now)
+	copies, err := s.chatEraseCopiesTx(tx, messageID, user.ID, now, locked)
 	if err != nil {
 		return err
 	}

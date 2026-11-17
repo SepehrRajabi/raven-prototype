@@ -1015,10 +1015,10 @@ fn layout_view(state: &VoiceOverlayState) -> Result<VoiceOverlayLayoutView, Voic
     })
 }
 
+/// Every window hears it: the main window stops sending snapshots while the overlay is
+/// off, and the overlay window may not exist yet when it is turned on.
 fn emit_settings(app: &AppHandle, view: &VoiceOverlaySettingsView) {
-    if let Some(window) = app.get_webview_window(VOICE_OVERLAY_LABEL) {
-        let _ = window.emit(VOICE_OVERLAY_SETTINGS_EVENT, view.clone());
-    }
+    let _ = app.emit(VOICE_OVERLAY_SETTINGS_EVENT, view.clone());
 }
 
 fn emit_layout(app: &AppHandle) {

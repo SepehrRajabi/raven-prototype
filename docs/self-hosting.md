@@ -35,6 +35,15 @@ volume; no S3 is needed.
    (`htpasswd -c /etc/nginx/raven.htpasswd <name>`), reload nginx and run
    `certbot --nginx -d raven.example.org -d rtc.example.org -d admin.example.org`.
    Check `https://raven.example.org/healthz` answers.
+
+   The example sends the API the address nginx saw (`X-Forwarded-For $remote_addr`) and
+   drops any `X-Forwarded-For` a client sent, because the API believes the leftmost
+   address in that header: passing a client's own header on would let anyone choose the
+   address used for sign-in throttling and shown beside their sessions. If something sits
+   in front of nginx (a CDN or another proxy), keep those lines and add that hop's ranges
+   with nginx's `set_real_ip_from`, as the comment at the top of the file shows. The
+   example also sends `Strict-Transport-Security`, `X-Content-Type-Options: nosniff` and
+   `X-Frame-Options: DENY`.
 5. Create the first administrator and a space (the people's group):
 
    ```bash
@@ -43,6 +52,12 @@ volume; no S3 is needed.
    docker compose run --rm api user create --username bob --password '<password>'
    docker compose run --rm api space add-user --space "My space" --username bob
    ```
+
+   A password given with `--password` is visible in the process list and the shell history.
+   Leave the flag out and `user create` reads the password from standard input instead:
+   `printf '%s\n' "$PASSWORD" | docker compose run --rm -T api user create --username bob`.
+   The API also refuses to start when `LIVEKIT_API_KEY` or `LIVEKIT_API_SECRET` is unset and it
+   listens on anything but loopback, since the development pair would let anyone sign call tokens.
 
 6. Install Raven from <https://updates.rvn.bluehour.cloud> (the official client), fill in
    the "Server address" field on the sign-in screen, enter `https://raven.example.org` and sign in.
@@ -54,7 +69,8 @@ sign-in. See `docs/permissions.md` for what roles can do.
 
 ## Upgrading
 
-Set `RAVEN_IMAGE_TAG` in `.env` to a release (or keep `latest`), then:
+`RAVEN_IMAGE_TAG` in `.env` names the release you run (`compose.yaml` falls back to the
+release it was written for). Set it to the new release, then:
 
 ```bash
 docker compose pull
@@ -80,6 +96,19 @@ docker run --rm -v "$(basename "$PWD")_raven_media:/media:ro" -v "$PWD/backups:/
 the machine. Restore a dump with `pg_restore --clean --dbname raven` inside the `postgres`
 container, and unpack the media archive back into the volume.
 
+## Storage limits per person
+
+Rate limits bound how fast one account can store files; these bound how much it can keep.
+Set them in the `api` service's environment and restart it. `0` turns a limit off.
+
+| Variable | Default | |
+|---|---|---|
+| `RAVEN_CHAT_PENDING_MB` | 256 | images a person has uploaded but not yet sent, in MB (declared size, previews included). Unsent uploads expire after a day. |
+| `RAVEN_LIBRARY_MAX_ITEMS` | 1000 | GIFs and stickers in one library: a person's own, or a space's set |
+| `RAVEN_LIBRARY_UPLOAD_MB` | 512 | stored size of the GIFs and stickers a person uploaded, in MB. Adding one somebody else already uploaded costs nothing. |
+
+Sent attachments are not counted. They stay as long as their messages do.
+
 ## Port sharing (Workshop)
 
 Port sharing lets people in a call or room share a local TCP or UDP port with each other, relayed through your server. It is off until you turn it on, and the server never dials anything itself: it only joins two Raven clients.
@@ -98,6 +127,8 @@ Environment variables for the `api` service:
 | `RAVEN_WORKSHOP_SHARE_MBPS` | 20 | bandwidth per share, both directions together |
 | `RAVEN_WORKSHOP_DAILY_GB` | 20 | traffic per person per UTC day (kept in memory; a restart resets it) |
 | `RAVEN_WORKSHOP_MAX_MINUTES` | 720 | longest a share may last (the default is 120) |
+| `RAVEN_WORKSHOP_MAX_PENDING` | 512 | relay connections (QUIC and WebSocket together) that may be waiting to sign in at once |
+| `RAVEN_WORKSHOP_MAX_PENDING_PER_IP` | 16 | of those, how many may come from one address; further ones are closed (QUIC) or answered `503` (WebSocket) |
 
 Things to know:
 

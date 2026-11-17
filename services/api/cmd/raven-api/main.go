@@ -37,6 +37,9 @@ func main() {
 	if addr == "" {
 		addr = "127.0.0.1:6977"
 	}
+	if err := server.CheckLiveKitConfig(addr); err != nil {
+		log.Fatalf("livekit: %v", err)
+	}
 	// On a stop signal, finish what is in flight instead of cutting it off: a send that
 	// was acknowledged is already committed, and one that was not gets a clean error the
 	// client retries.

@@ -31,7 +31,7 @@ func chatQueuePurgesTx(tx *database.Tx, where string, args ...any) error {
 // with every maintenance pass, so it looks before it takes any lock: almost always there
 // is nothing to do.
 func (s *Server) expireChatAttachments(now time.Time) error {
-	cutoff := now.Add(-24 * time.Hour).UTC().Format(time.RFC3339Nano)
+	cutoff := database.Timestamp(now.Add(-24 * time.Hour))
 	var found int
 	err := s.db.QueryRow(`SELECT 1 FROM chat_attachments WHERE message_id IS NULL AND created_at < ? LIMIT 1`, cutoff).Scan(&found)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -47,9 +47,17 @@ func (s *Server) expireChatAttachments(now time.Time) error {
 	defer tx.Rollback()
 	// Serialize with upload and send, including on PostgreSQL. Recheck the predicate
 	// after obtaining the locks so a newly claimed attachment is never expired.
-	if _, err := tx.Exec(`UPDATE chat_conversations SET last_seq = last_seq WHERE id IN
- (SELECT conversation_id FROM chat_attachments WHERE message_id IS NULL AND created_at < ?)`, cutoff); err != nil {
+	// The rows are locked one at a time in id order, the order every other path that
+	// locks several conversations uses, so PostgreSQL never finds a deadlock here.
+	conversations, err := stringColumnTx(tx, `SELECT DISTINCT conversation_id FROM chat_attachments
+ WHERE message_id IS NULL AND created_at < ? ORDER BY conversation_id`, cutoff)
+	if err != nil {
 		return err
+	}
+	for _, id := range conversations {
+		if _, err := tx.Exec(`UPDATE chat_conversations SET last_seq = last_seq WHERE id = ?`, id); err != nil {
+			return err
+		}
 	}
 	if err := chatQueuePurgesTx(tx, `message_id IS NULL AND created_at < ?`, cutoff); err != nil {
 		return err

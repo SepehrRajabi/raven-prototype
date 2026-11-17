@@ -1,0 +1,7 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "studio",
+  "description": "The Studio (mixer) window's Raven commands",
+  "windows": ["studio-window-*"],
+  "permissions": ["studio-window-commands"]
+}

@@ -1,9 +1,11 @@
 import { describe, expect, test } from "bun:test";
-import { AdminApi, ApiError } from "./api";
+import { readFileSync, readdirSync } from "node:fs";
+import { join } from "node:path";
+import { AdminApi, ApiError, nextAuditCursor } from "./api";
 import { parseRoute, routeHref } from "./lib/route";
 import { sendResult } from "./lib/sendResult";
-import { describeDetail, describeEffective, formatAgo } from "./lib/format";
-import type { UserCapability } from "./types";
+import { capabilityText, describeAction, describeDetail, describeEffective, formatAgo } from "./lib/format";
+import type { AuditEvent, UserCapability } from "./types";
 
 class MemoryStore {
   private values = new Map<string, string>();
@@ -149,6 +151,39 @@ describe("routes", () => {
     expect(parseRoute("#/nonsense")).toEqual({ page: "overview" });
     expect(parseRoute("")).toEqual({ page: "overview" });
   });
+
+  test("keeps a malformed segment as written instead of throwing", () => {
+    expect(parseRoute("#/users/%E0")).toEqual({ page: "user", id: "%E0" });
+    expect(parseRoute("#/spaces/%")).toEqual({ page: "space", id: "%" });
+    expect(parseRoute("#/users/a%20b")).toEqual({ page: "user", id: "a b" });
+  });
+});
+
+describe("audit paging", () => {
+  const page = (count: number): AuditEvent[] =>
+    Array.from({ length: count }, (_, index) => ({ id: String(index), actorLabel: "root", action: "user.updated", entityType: "user", entityId: "u", entityLabel: "bo", createdAt: `2026-01-01T00:00:${String(59 - (index % 60)).padStart(2, "0")}Z` }));
+
+  test("uses the server's cursor when it sends one", () => {
+    expect(nextAuditCursor({ next: "opaque" }, page(3))).toBe("opaque");
+    expect(nextAuditCursor({ next: null }, page(100))).toBeNull();
+    expect(nextAuditCursor({ cursor: "c" }, page(1))).toBe("c");
+  });
+
+  test("falls back to the last event's time from a server without a cursor", () => {
+    const full = page(100);
+    expect(nextAuditCursor({}, full)).toBe(full[99].createdAt);
+    expect(nextAuditCursor({}, page(99))).toBeNull();
+  });
+
+  test("asks for the next page with before", async () => {
+    const store = new MemoryStore();
+    const server = fakeServer(() => ({ body: { events: page(2), next: "k" } }));
+    const api = new AdminApi(server.fetchImpl, store);
+    const result = await api.auditPage({ entityType: "space", before: "j" });
+    expect(server.calls[0].path).toBe("/v1/admin/audit?entityType=space&before=j");
+    expect(result.before).toBe("k");
+    expect(result.events.length).toBe(2);
+  });
 });
 
 describe("wording", () => {
@@ -163,6 +198,27 @@ describe("wording", () => {
     expect(describeEffective({ ...base, capability: "invites.create", effectiveLimit: 3 }, false)).toBe("Allowed, up to 3 open invites");
     expect(describeEffective({ ...base, capability: "invites.create", effective: false }, false)).toBe("Not allowed (Invitations are off)");
     expect(describeEffective({ ...base, capability: "invites.create", effective: false }, true)).toBe("Not allowed (Invitations are off)");
+  });
+
+  test("names a capability this dashboard does not know by its key", () => {
+    expect(capabilityText("rooms.join").title).toBe("Join rooms");
+    expect(capabilityText("future.thing")).toEqual({ title: "future.thing", description: "" });
+  });
+
+  test("has words for every audit action the server records", () => {
+    // Reads the API's Go source so a new action without wording fails here.
+    const dir = join(import.meta.dir, "../../../services/api/internal/http");
+    const actions = new Set<string>();
+    for (const name of readdirSync(dir)) {
+      if (!name.endsWith(".go") || name.endsWith("_test.go")) continue;
+      const source = readFileSync(join(dir, name), "utf8");
+      for (const match of source.matchAll(/\.audit\([^,]+,\s*"([a-z_]+\.[a-z_]+)"/g)) actions.add(match[1]);
+    }
+    const cli = readFileSync(join(import.meta.dir, "../../../services/api/cmd/raven-api/cli.go"), "utf8");
+    for (const match of cli.matchAll(/RecordCLIChange\("([a-z_]+\.[a-z_]+)"/g)) actions.add(match[1]);
+    expect(actions.size).toBeGreaterThan(20);
+    const unworded = [...actions].filter((action) => describeAction(action) === action);
+    expect(unworded).toEqual([]);
   });
 
   test("leaves ids out of audit details", () => {

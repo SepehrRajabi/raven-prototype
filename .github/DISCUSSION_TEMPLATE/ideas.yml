@@ -1,0 +1,37 @@
+title: "Idea: "
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thank you for proposing something. Every idea is weighed against Raven's principles; please read [How ideas are weighed](https://github.com/raven-collective/raven-prototype/discussions/categories/ideas) first. One idea per discussion, and search before you post.
+  - type: textarea
+    id: problem
+    attributes:
+      label: The problem
+      description: What happened, or what could you not do? Concrete experience beats general wishes.
+    validations:
+      required: true
+  - type: textarea
+    id: idea
+    attributes:
+      label: The idea
+      description: As simply as you can put it.
+    validations:
+      required: true
+  - type: textarea
+    id: affected
+    attributes:
+      label: Who it affects
+      description: Who gains from it, who could be exposed or pressured by it, and whether it gives anyone power over someone else.
+    validations:
+      required: true
+  - type: textarea
+    id: cost
+    attributes:
+      label: What it costs
+      description: Interface, performance, maintenance, and whether it works on self-hosted servers. A rough guess is fine.
+  - type: textarea
+    id: alternative
+    attributes:
+      label: If the answer is no
+      description: What you do today instead, or a smaller version that would still help.

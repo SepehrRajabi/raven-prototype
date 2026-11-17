@@ -1,4 +1,4 @@
-import { api, parseNestLiveUpdateData, type EventStreamHandlers, type NestLiveUpdate } from "@/lib/api";
+import { api, parseNestLiveUpdateData, subscribeUpdateRequired, type EventStreamHandlers, type NestLiveUpdate } from "@/lib/api";
 
 /**
  * What a part of the app wants from the server's event stream. Each takes the events it
@@ -83,6 +83,16 @@ export class EventStreamHub {
     });
   }
 
+  /**
+   * Opens the stream again if anyone is listening and it is not up. While the server
+   * required an update, opening it did nothing; once that clears, this starts it.
+   */
+  restart() {
+    if (this.listeners.size === 0 || this.isOpen) return;
+    this.stop();
+    this.start();
+  }
+
   private stop() {
     this.close?.();
     this.close = null;
@@ -91,6 +101,10 @@ export class EventStreamHub {
 }
 
 export const eventStream = new EventStreamHub((handlers) => api.openEventStream(handlers));
+
+subscribeUpdateRequired((required) => {
+  if (!required) eventStream.restart();
+});
 
 /**
  * Listens for the updates that mean "fetch this again", the way

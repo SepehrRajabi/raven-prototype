@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { PasswordChangeForm } from "./PasswordChangeForm";
 import { InvitationsSettings } from "./InvitationsSettings";
 import { YourDataSettings } from "./YourDataSettings";
@@ -40,7 +40,9 @@ import { cn } from "@/lib/utils";
 import { SPEAKING_COLORS, useSpeakingColor, writeSpeakingColor } from "@/lib/speakingColor";
 import { THEME_COLORS, THEME_DEPTHS, THEME_STRENGTHS, useTheme, writeTheme, type ThemeColorId } from "@/lib/theme";
 import { ConfirmLeaveSection, DockOrderSection } from "./DockSettings";
-import type { RavenShellData, RavenView } from "./state";
+import { useSettingsSearch } from "./SettingsSearchField";
+import { revealSettingsItem, SETTINGS_PAGE_LABELS, settingsSearchIndex, type UserSettingsSection } from "./settingsSearch";
+import type { RavenShellData, RavenView, UILabelCopy } from "./state";
 import type {
   NetworkActivityCategory,
   NetworkActivityDirection,
@@ -49,40 +51,33 @@ import type {
 
 const onMacSettings = typeof navigator !== "undefined" && /Macintosh|Mac OS X/i.test(navigator.userAgent);
 
-export type UserSettingsSection = "profile" | "messages" | "library" | "sessions" | "data" | "invitations" | "appearance" | "audio-video" | "hotkeys" | "voice-overlay" | "tray" | "notifications" | "server" | "workshop" | "updates" | "about";
+export type { UserSettingsSection } from "./settingsSearch";
+
+const ICONS: Record<UserSettingsSection, ReactNode> = {
+  profile: <UserIcon />,
+  messages: <MessageSquare />,
+  library: <StickerIcon />,
+  sessions: <ShieldCheck />,
+  data: <Download />,
+  invitations: <Ticket />,
+  appearance: <Palette />,
+  "audio-video": <Video />,
+  hotkeys: <Keyboard />,
+  "voice-overlay": <MonitorUp />,
+  tray: <PanelBottom />,
+  notifications: <Bell />,
+  server: <ServerIcon />,
+  workshop: <Wrench />,
+  updates: <RefreshCw />,
+  about: <Info />,
+};
+
+const category = (id: UserSettingsSection) => ({ id, label: SETTINGS_PAGE_LABELS[id], icon: ICONS[id] });
 
 const GROUPS: SettingsCategoryGroup[] = [
-  {
-    label: "You",
-    categories: [
-      { id: "profile", label: "Profile", icon: <UserIcon /> },
-      { id: "messages", label: "Messages", icon: <MessageSquare /> },
-      { id: "library", label: "GIFs and stickers", icon: <StickerIcon /> },
-      { id: "sessions", label: "Password and devices", icon: <ShieldCheck /> },
-      { id: "data", label: "Your data", icon: <Download /> },
-      { id: "invitations", label: "Invitations", icon: <Ticket /> },
-    ],
-  },
-  {
-    label: "App",
-    categories: [
-      { id: "appearance", label: "Appearance", icon: <Palette /> },
-      { id: "audio-video", label: "Audio and video", icon: <Video /> },
-      { id: "hotkeys", label: "Hotkeys", icon: <Keyboard /> },
-      { id: "voice-overlay", label: "Voice overlay", icon: <MonitorUp /> },
-      { id: "tray", label: "Tray", icon: <PanelBottom /> },
-      { id: "notifications", label: "Notifications", icon: <Bell /> },
-    ],
-  },
-  {
-    label: "System",
-    categories: [
-      { id: "server", label: "Server", icon: <ServerIcon /> },
-      { id: "workshop", label: "Workshop", icon: <Wrench /> },
-      { id: "updates", label: "Updates", icon: <RefreshCw /> },
-      { id: "about", label: "About", icon: <Info /> },
-    ],
-  },
+  { label: "You", categories: (["profile", "messages", "library", "sessions", "data", "invitations"] as const).map(category) },
+  { label: "App", categories: (["appearance", "audio-video", "hotkeys", "voice-overlay", "tray", "notifications"] as const).map(category) },
+  { label: "System", categories: (["server", "workshop", "updates", "about"] as const).map(category) },
 ];
 
 const SECTION_IDS = new Set(GROUPS.flatMap((group) => group.categories.map((category) => category.id)));
@@ -101,14 +96,25 @@ const GROUPS_WITHOUT_INVITATIONS = GROUPS.map((group) => ({
 export function UserSettingsNav({
   section,
   canInvite,
+  labels,
   onSelect,
   onBack,
 }: {
   section: UserSettingsSection;
   canInvite: boolean;
+  labels: UILabelCopy;
   onSelect: (section: UserSettingsSection) => void;
   onBack: () => void;
 }) {
+  const index = useMemo(() => settingsSearchIndex({ labels, canInvite, mac: onMacSettings }), [labels, canInvite]);
+  const search = useSettingsSearch({
+    index,
+    icons: ICONS,
+    onOpen: (entry) => {
+      if (entry.page !== section) onSelect(entry.page);
+      revealSettingsItem(entry.page, entry.anchor);
+    },
+  });
   return (
     <SettingsNav
       title="Settings"
@@ -117,6 +123,8 @@ export function UserSettingsNav({
       groups={canInvite ? GROUPS : GROUPS_WITHOUT_INVITATIONS}
       activeId={section}
       onSelect={(id) => onSelect(id as UserSettingsSection)}
+      search={search.field}
+      results={search.results}
     />
   );
 }
@@ -135,14 +143,7 @@ function useAppliedPreference<T>(stored: T, apply: (value: T) => Promise<void>) 
   return [value, change] as const;
 }
 
-export function UserSettingsView({
-  section,
-  data,
-  media,
-  updater,
-  chat = null,
-  onNavigate,
-}: {
+export function UserSettingsView(props: {
   section: UserSettingsSection;
   data: RavenShellData;
   media: RavenMediaAdapterState;
@@ -151,6 +152,22 @@ export function UserSettingsView({
   /** Absent where there is nowhere to go, such as while Raven needs an update. */
   onNavigate?: (view: RavenView) => void;
 }) {
+  // Marked with its page, so a search result looks for its setting on the right page.
+  return (
+    <div className="contents" data-settings-page={props.section}>
+      <UserSettingsPage {...props} />
+    </div>
+  );
+}
+
+function UserSettingsPage({
+  section,
+  data,
+  media,
+  updater,
+  chat = null,
+  onNavigate,
+}: Parameters<typeof UserSettingsView>[0]) {
   switch (section) {
     case "profile":
       return <ProfileSettings data={data} />;
@@ -679,6 +696,7 @@ function AudioVideoSettings({ data, media }: { data: RavenShellData; media: Rave
       <SoundCueSection media={media} nest={nest} />
 
       <SettingsSection
+        anchor="Network activity"
         title={(
           <span className="inline-flex items-center gap-1.5">
             Network activity

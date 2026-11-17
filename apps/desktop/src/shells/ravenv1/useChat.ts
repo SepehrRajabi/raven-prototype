@@ -8,6 +8,7 @@ import { chatApi } from "@/lib/chat/chatApi";
 import { chatTray, setAttachmentsReady } from "@/lib/chat/composerTray";
 import { seedAttachment } from "@/lib/chat/media";
 import { hasUnread } from "@/lib/chat/reducer";
+import { accountScope } from "@/lib/chat/outbox";
 import { ChatStore } from "@/lib/chat/store";
 import type { ChatEvent, ChatState, ConversationState } from "@/lib/chat/types";
 import { eventStream } from "@/lib/eventStream";
@@ -28,7 +29,7 @@ export function useChat(data: RavenShellData): ChatStore | null {
   // An account the administrator has turned messages off for has no chat, exactly as if
   // the server had none.
   const available = Boolean(data.serverProperties.properties?.chat) && capabilitiesOf(data.user).readMessages;
-  const { sessionExpired } = data;
+  const { sessionExpired, apiServerUrl } = data;
   const [store, setStore] = useState<ChatStore | null>(null);
 
   useEffect(() => {
@@ -40,6 +41,7 @@ export function useChat(data: RavenShellData): ChatStore | null {
       api: chatApi,
       me: { id: userId, username, displayName },
       storage: localStorage,
+      outboxScope: accountScope(apiServerUrl, userId),
       onSignedOut: sessionExpired,
       attachments: { readVariant, discard, sweep, seed: seedAttachment },
     });
@@ -65,7 +67,7 @@ export function useChat(data: RavenShellData): ChatStore | null {
     };
     // The display name is only used for messages shown before the server answers.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [userId, available, sessionExpired]);
+  }, [userId, apiServerUrl, available, sessionExpired]);
 
   useEffect(() => {
     store?.setReactionLimits(reactionLimits(data.serverProperties.properties));

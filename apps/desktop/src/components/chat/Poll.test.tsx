@@ -59,6 +59,11 @@ describe("polls", () => {
 
   test("show results to whoever asked", () => {
     expect(render({}, true)).toContain("75%");
+    expect(render({ quiz: true, revealed: true }, true)).toContain("75%");
+  });
+
+  test("keep a copied quiz's results hidden until its new sender answers", () => {
+    expect(render({ quiz: true, revealed: false }, true)).not.toContain("75%");
   });
 
   test("mark right and wrong answers in a quiz", () => {

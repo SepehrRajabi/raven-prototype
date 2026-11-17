@@ -23,6 +23,7 @@ const nestEntryDelaySeconds = 3
 // request triggers the cleanup.
 func (s *Server) startMaintenance() {
 	go s.workshop.Run(context.Background())
+	s.startLiveKitReconcile()
 	go func() {
 		ticker := time.NewTicker(maintenanceInterval)
 		defer ticker.Stop()
@@ -57,6 +58,10 @@ func (s *Server) runMaintenance(now time.Time) {
 	}
 	if err := s.runTreeEvents(now); err != nil {
 		log.Printf("maintenance: scheduled events: %v", err)
+	}
+	s.loginThrottle.sweep()
+	if err := s.purgeSessions(now); err != nil {
+		log.Printf("maintenance: purge sign-ins: %v", err)
 	}
 	s.revalidateWorkshop("")
 	s.sweepWorkshopSessions()
@@ -123,7 +128,7 @@ func (s *Server) presenceGoodbye(c *fiber.Ctx) error {
 
 // markPresenceAway makes a user read as offline now and tells connected clients.
 func (s *Server) markPresenceAway(userID string) error {
-	stale := time.Now().UTC().Add(-2 * presenceHeartbeatTTL).Format(time.RFC3339Nano)
+	stale := database.Timestamp(time.Now().Add(-2 * presenceHeartbeatTTL))
 	if _, err := s.db.Exec(
 		`UPDATE user_presence SET active_nest_id = NULL, updated_at = ? WHERE user_id = ?`,
 		stale, userID,

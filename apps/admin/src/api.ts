@@ -46,6 +46,40 @@ export interface SpaceSettings {
 
 const id = encodeURIComponent;
 
+export interface AuditFilter {
+  entityType?: string;
+  entityId?: string;
+  actor?: string;
+  before?: string;
+}
+
+export interface AuditPage {
+  events: AuditEvent[];
+  /** The `before` value that asks for the next older page, or null when there is none. */
+  before: string | null;
+}
+
+interface AuditReply {
+  events?: AuditEvent[];
+  next?: string | null;
+  cursor?: string | null;
+}
+
+/** How many events the server sends in one page when no limit is asked for. */
+export const AUDIT_PAGE_SIZE = 100;
+
+/**
+ * Where the next older page starts. A server that pages by (time, id) names it in a `next`
+ * (or `cursor`) field, null at the end, and it is passed back unchanged as `before`. An older
+ * server sends neither; then a full page means there may be more, before the last event's time.
+ */
+export function nextAuditCursor(reply: AuditReply, events: AuditEvent[]): string | null {
+  if (reply.next !== undefined) return reply.next || null;
+  if (reply.cursor !== undefined) return reply.cursor || null;
+  if (events.length < AUDIT_PAGE_SIZE) return null;
+  return events[events.length - 1]?.createdAt ?? null;
+}
+
 export class AdminApi {
   /** Called when the server no longer accepts the session, so the app can show sign-in. */
   onSignedOut: () => void = () => {};
@@ -164,13 +198,20 @@ export class AdminApi {
     await this.request<unknown>("POST", "/v1/admin/server/avatar", undefined, image);
   }
 
-  async audit(filter: { entityType?: string; entityId?: string; actor?: string; before?: string } = {}): Promise<AuditEvent[]> {
+  async audit(filter: AuditFilter = {}): Promise<AuditEvent[]> {
+    return (await this.auditPage(filter)).events;
+  }
+
+  /** One page of the audit log, newest first, and what to pass as `before` for the next. */
+  async auditPage(filter: AuditFilter = {}): Promise<AuditPage> {
     const query = new URLSearchParams();
     for (const [key, value] of Object.entries(filter)) {
       if (value) query.set(key, value);
     }
     const suffix = query.size > 0 ? `?${query}` : "";
-    return (await this.request<{ events: AuditEvent[] }>("GET", `/v1/admin/audit${suffix}`)).events;
+    const data = await this.request<AuditReply>("GET", `/v1/admin/audit${suffix}`);
+    const events = data.events ?? [];
+    return { events, before: nextAuditCursor(data, events) };
   }
 
   // Users

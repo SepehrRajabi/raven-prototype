@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { classifySendFailure, LocalSendFailure, loadOutbox, newClientMessageId, nextToSend, outboxHandles, retryDelayMs, saveOutbox } from "./outbox";
+import { accountScope, classifySendFailure, forgetUnsentMessages, LocalSendFailure, loadOutbox, migrateOutboxKey, newClientMessageId, nextToSend, outboxHandles, retryDelayMs, saveOutbox } from "./outbox";
 import type { PendingAttachment, PendingMessage } from "./types";
 
 function httpError(status: number, message = "refused", retryAfterSeconds?: number) {
@@ -176,5 +176,37 @@ describe("unsent images across a restart", () => {
     saveOutbox(storage, "other", [{ ...pending("c", "failed"), attachments: [image("h3")] }]);
     storage.setItem("unrelated", "x");
     expect(outboxHandles(storage).sort()).toEqual(["h1", "h2", "h3"]);
+  });
+});
+
+describe("outboxes per account", () => {
+  test("signing out of one account leaves another account's unsent messages", () => {
+    const storage = memoryStorage();
+    saveOutbox(storage, accountScope("https://a.example", "u1"), [pending("a", "failed")]);
+    saveOutbox(storage, accountScope("https://b.example", "u2"), [pending("b", "failed")]);
+    saveOutbox(storage, "u1", [pending("old", "failed")]);
+    forgetUnsentMessages(storage, "https://a.example", "u1");
+    expect(loadOutbox(storage, accountScope("https://a.example", "u1"))).toEqual([]);
+    expect(loadOutbox(storage, "u1")).toEqual([]);
+    expect(loadOutbox(storage, accountScope("https://b.example", "u2")).map((item) => item.clientMessageId)).toEqual(["b"]);
+  });
+
+  test("the same user id on two servers keeps two outboxes", () => {
+    const storage = memoryStorage();
+    saveOutbox(storage, accountScope("https://a.example", "u1"), [pending("a", "failed")]);
+    expect(loadOutbox(storage, accountScope("https://b.example", "u1"))).toEqual([]);
+  });
+
+  test("an outbox kept by user id alone moves to the account's key once, without overwriting", () => {
+    const storage = memoryStorage();
+    saveOutbox(storage, "u1", [pending("old", "failed")]);
+    const scope = accountScope("https://a.example", "u1");
+    migrateOutboxKey(storage, "u1", scope);
+    expect(loadOutbox(storage, "u1")).toEqual([]);
+    expect(loadOutbox(storage, scope).map((item) => item.clientMessageId)).toEqual(["old"]);
+
+    saveOutbox(storage, "u1", [pending("older", "failed")]);
+    migrateOutboxKey(storage, "u1", scope);
+    expect(loadOutbox(storage, scope).map((item) => item.clientMessageId)).toEqual(["old"]);
   });
 });

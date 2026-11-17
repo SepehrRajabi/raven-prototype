@@ -1,0 +1,41 @@
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Ask anything about using Raven. If something is clearly broken, please open an [Issue](https://github.com/raven-collective/raven-prototype/issues) instead. Never paste passwords, tokens, invite codes or `.env` files.
+  - type: textarea
+    id: question
+    attributes:
+      label: Your question
+      description: What you did, what you expected, and what happened.
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Raven version
+      description: Shown at the top of Settings › Updates.
+      placeholder: "0.1.12"
+    validations:
+      required: true
+  - type: input
+    id: os
+    attributes:
+      label: Operating system
+      placeholder: "Windows 11 24H2 / macOS 15.4 / Ubuntu 24.04 (Wayland)"
+    validations:
+      required: true
+  - type: dropdown
+    id: server
+    attributes:
+      label: Server
+      options:
+        - A server someone else runs
+        - My own server
+        - Not sure
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs (optional)
+      description: Relevant lines from `ui-errors.log`. Remove names and addresses first.
+      render: text

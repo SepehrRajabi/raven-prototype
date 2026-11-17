@@ -50,12 +50,32 @@ var errDatagramQueueFull = errors.New("datagram queue full")
 
 // ServeWebSocket runs one client connection that arrived over WebSocket, until it ends.
 func (s *Server) ServeWebSocket(ws WebSocket) {
+	s.ServeWebSocketAdmitted(ws, func() {})
+}
+
+// AdmitPending reserves a place for a connection from source that has not signed in
+// yet, for a transport that has to decide before the connection exists (the WebSocket
+// route answers the upgrade request). The reservation is released by calling release,
+// which ServeWebSocketAdmitted does once the client signs in or goes; if the connection
+// never gets that far, it lapses by itself shortly after the hello timeout.
+func (s *Server) AdmitPending(source string) (release func(), ok bool) {
+	release, ok = s.admitPending(source)
+	if !ok {
+		return nil, false
+	}
+	time.AfterFunc(helloTimeout+5*time.Second, release)
+	return release, true
+}
+
+// ServeWebSocketAdmitted is ServeWebSocket for a connection AdmitPending let in.
+func (s *Server) ServeWebSocketAdmitted(ws WebSocket, release func()) {
+	defer release()
 	conn, err := newWSConn(ws)
 	if err != nil {
 		_ = ws.Close()
 		return
 	}
-	s.Serve(conn)
+	s.serve(conn, release)
 	conn.Close("")
 	// Returning closes the socket, so wait out the close handshake here, not in Close.
 	<-conn.closed
