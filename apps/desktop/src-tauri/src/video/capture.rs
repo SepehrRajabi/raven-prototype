@@ -898,6 +898,27 @@ mod camera {
         match Camera::new(index.clone(), closest) {
             Ok(camera) => Ok(camera),
             Err(primary_error) => {
+                // nokhwa's `Closest` only considers formats with exactly the requested pixel
+                // format, and takes frame rates only at exactly the requested size. Mac
+                // cameras offer no MJPEG at all, and its list of compatible formats comes
+                // back empty on AVFoundation, so the fallback below never finds one there.
+                // Asking for each decodable format at a few common sizes finds what the
+                // camera has.
+                if let Some(camera) =
+                    alternative_formats(requested)
+                        .into_iter()
+                        .find_map(|format| {
+                            Camera::new(
+                                index.clone(),
+                                RequestedFormat::new::<RgbFormat>(RequestedFormatType::Closest(
+                                    format,
+                                )),
+                            )
+                            .ok()
+                        })
+                {
+                    return Ok(camera);
+                }
                 let mut camera = Camera::new(
                     index,
                     RequestedFormat::new::<RgbFormat>(RequestedFormatType::None),
@@ -916,6 +937,35 @@ mod camera {
                 }
             }
         }
+    }
+
+    /// Formats to ask for when the camera has no MJPEG at the requested size: every format
+    /// the RGB decoder reads, first at the requested size, then at common camera sizes.
+    fn alternative_formats(requested: CameraFormat) -> Vec<CameraFormat> {
+        let sizes = [
+            (requested.width(), requested.height()),
+            (1280, 720),
+            (1920, 1080),
+            (640, 480),
+        ];
+        let mut formats = Vec::new();
+        for (index, (width, height)) in sizes.into_iter().enumerate() {
+            if index > 0 && (width, height) == (requested.width(), requested.height()) {
+                continue;
+            }
+            for &format in RgbFormat::FORMATS {
+                if index == 0 && format == requested.format() {
+                    continue;
+                }
+                formats.push(CameraFormat::new_from(
+                    width,
+                    height,
+                    format,
+                    requested.frame_rate(),
+                ));
+            }
+        }
+        formats
     }
 
     fn select_camera_format(
@@ -941,6 +991,48 @@ mod camera {
             })
     }
 
+    /// How long `start` waits for an answer to the macOS camera prompt. Longer answers are
+    /// still recorded by macOS; the user then turns the camera on again.
+    #[cfg(target_os = "macos")]
+    const PERMISSION_TIMEOUT: Duration = Duration::from_secs(8);
+
+    /// Makes sure macOS lets Raven use the camera, asking the first time.
+    ///
+    /// nokhwa locks the device for configuration before it starts a capture session, and
+    /// that lock fails without permission before macOS has shown its prompt. So the prompt
+    /// never appeared and Raven never showed up under Privacy & Security → Camera. Asking
+    /// here, before nokhwa touches the device, is what makes macOS show it.
+    #[cfg(target_os = "macos")]
+    fn camera_access() -> Result<(), VideoCaptureError> {
+        use nokhwa_bindings_macos::{
+            current_authorization_status, request_permission_with_callback, AVAuthorizationStatus,
+        };
+
+        let refused = || VideoCaptureError::DeviceUnavailable {
+            message: "Raven is not allowed to use the camera. Turn on Raven under System \
+                      Settings → Privacy & Security → Camera, then turn your camera on again."
+                .to_string(),
+        };
+        match current_authorization_status() {
+            AVAuthorizationStatus::Authorized => Ok(()),
+            AVAuthorizationStatus::NotDetermined => {
+                let (sender, receiver) = sync_channel::<bool>(1);
+                request_permission_with_callback(move |granted| {
+                    let _ = sender.try_send(granted);
+                });
+                match receiver.recv_timeout(PERMISSION_TIMEOUT) {
+                    Ok(true) => Ok(()),
+                    Ok(false) => Err(refused()),
+                    Err(_) => Err(VideoCaptureError::DeviceUnavailable {
+                        message: "Answer the macOS camera prompt, then turn your camera on again."
+                            .to_string(),
+                    }),
+                }
+            }
+            AVAuthorizationStatus::Denied | AVAuthorizationStatus::Restricted => Err(refused()),
+        }
+    }
+
     /// How long an opened camera may go without a usable frame before it is reported as
     /// failed.
     const FIRST_FRAME_TIMEOUT: Duration = Duration::from_millis(4000);
@@ -958,6 +1050,9 @@ mod camera {
         let runtime_state = super::running_runtime_state(&profile);
         let stop = Arc::new(AtomicBool::new(false));
         let thread_stop = Arc::clone(&stop);
+        #[cfg(target_os = "macos")]
+        camera_access()?;
+
         let (startup_sender, startup_receiver) = sync_channel::<Result<(), String>>(1);
 
         let handle = thread::spawn(move || {

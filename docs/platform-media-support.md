@@ -9,6 +9,11 @@ This note tracks native desktop media capture support by operating system.
 - **Camera capture**
   - Uses `nokhwa` through the existing camera interface.
   - On macOS this relies on AVFoundation-compatible camera devices.
+  - Raven asks macOS for camera access the first time the camera is turned on, before
+    `nokhwa` touches the device. If access was refused, turning the camera on says where
+    in System Settings to allow it.
+  - Mac cameras offer no MJPEG, so Raven falls back to the formats they do offer
+    (usually YUYV) when the MJPEG request fails.
 
 - **Display capture**
   - Uses ScreenCaptureKit through the existing video capture interface.
