@@ -1,7 +1,7 @@
 {
   "name": "@raven/desktop",
   "private": true,
-  "version": "0.1.11",
+  "version": "0.1.12",
   "type": "module",
   "scripts": {
     "dev": "vite --host 127.0.0.1",
@@ -10,7 +10,12 @@
     "build": "tsc && vite build",
     "test": "bun test",
     "preview": "vite preview",
-    "tauri": "bun ./scripts/tauri.ts"
+    "tauri": "bun ./scripts/tauri.ts",
+    "mobile-native:init": "bun run tauri android init",
+    "mobile-native:dev": "bun run tauri android dev",
+    "mobile-native:build": "bun run tauri android build",
+    "mobile-native:check": "bun test && bun run mobile-native:build --debug --apk",
+    "mobile-native:phone": "bun run tauri android phone"
   },
   "dependencies": {
     "@dnd-kit/core": "^6.3.1",

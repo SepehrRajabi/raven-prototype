@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
-import { canMoveCategory, entryKey, layoutSections, moveCategory, moveEntry, toEntries, toLayoutRequest, type ArrangeEntry, type NestRef } from "./layout";
+import { canMoveCategory, entryKey, existingNestRefs, layoutSections, orderedNestRefs, moveCategory, moveEntry, toEntries, toLayoutRequest, type ArrangeEntry, type NestRef } from "./layout";
 import { previewLine, systemLine, typingLine, continuesRun, namesSentence } from "./text";
-import type { ChatConversation, ChatMessage, TreeLayout } from "./types";
+import type { ChatConversation, ChatMessage, ConversationState, TreeLayout } from "./types";
 
 const voice = (id: string): NestRef => ({ kind: "voice", id });
 const text = (id: string): NestRef => ({ kind: "text", id });
@@ -39,6 +39,21 @@ describe("reading a layout", () => {
 
   test("with no layout at all, everything is simply listed", () => {
     expect(describeSections(layoutSections(undefined, existing))).toEqual(["-: standup,lounge,general,welcome,brand-new"]);
+  });
+});
+
+describe("a tree's nests in one list", () => {
+  const textNest = (id: string, createdAt: string) => ({ summary: { id, createdAt } }) as unknown as ConversationState;
+
+  test("lists text nests oldest first, then voice nests", () => {
+    const refs = existingNestRefs([textNest("b", "2026-02-01"), textNest("a", "2026-01-01")], [{ id: "v" }]);
+    expect(refs).toEqual([text("a"), text("b"), voice("v")]);
+  });
+
+  test("follows the layout across kinds, with categories flattened", () => {
+    const refs = [text("general"), text("welcome"), voice("standup"), voice("lounge"), voice("new")];
+    expect(orderedNestRefs(layout, refs).map((ref) => ref.id)).toEqual(["welcome", "new", "general", "standup", "lounge"]);
+    expect(orderedNestRefs(undefined, refs).map((ref) => ref.id)).toEqual(["general", "welcome", "standup", "lounge", "new"]);
   });
 });
 

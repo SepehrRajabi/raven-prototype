@@ -11,6 +11,11 @@ export function neighbour(cells: HTMLElement[], from: HTMLElement, key: string):
   const candidates = cells.filter((cell) => (down ? top(cell) > here.top + 4 : top(cell) < here.top - 4));
   if (candidates.length === 0) return undefined;
   const rowTop = (down ? Math.min : Math.max)(...candidates.map(top));
-  const left = (cell: HTMLElement) => Math.abs(cell.getBoundingClientRect().left - here.left);
+  // Nearest by horizontal centre, so rows of different-width tiles line up sensibly.
+  const centre = here.left + here.width / 2;
+  const left = (cell: HTMLElement) => {
+    const box = cell.getBoundingClientRect();
+    return Math.abs(box.left + box.width / 2 - centre);
+  };
   return candidates.filter((cell) => Math.abs(top(cell) - rowTop) < 4).reduce((best, cell) => (left(cell) < left(best) ? cell : best));
 }

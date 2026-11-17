@@ -1,6 +1,6 @@
 import { accountScope } from "@/lib/chat/outbox";
 
-/** The last tree and nest this person looked at, kept on this device for Home's "Pick up". */
+/** The last tree and nest this person looked at, kept on this device for Home's "Last visited". */
 export interface LastVisited {
   treeId?: string;
   nestId?: string;

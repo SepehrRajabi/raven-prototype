@@ -1,4 +1,7 @@
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { handCueStep, INITIAL_HAND_CUE_STATE } from "@/lib/soundCues";
+import { raisedHandSupported } from "@/lib/callState";
+import { audioCommands } from "@/lib/audio";
 import { createPortal } from "react-dom";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { closestCenter, DndContext, KeyboardSensor, PointerSensor, useSensor, useSensors } from "@dnd-kit/core";
@@ -53,7 +56,7 @@ import { focusPanelOnOpen } from "@/lib/focusHandoff";
 import { cn } from "@/lib/utils";
 import { toast } from "@/components/ui/toast";
 import { type VideoQualityProfileId } from "@/lib/video";
-import { Activity, AlertTriangle, ArrowDown, ArrowLeftRight, ArrowUp, Check, ChevronUp, Coffee, HeadphoneOff, Headphones, Loader2, Mic, MicOff, MonitorPause, MonitorUp, PhoneOff, Settings, SignalLow, SlidersHorizontal, UserPlus, UserRound, Video, VideoOff, LogOut } from "lucide-react";
+import { Activity, AlertTriangle, ArrowDown, ArrowLeftRight, ArrowUp, Check, ChevronUp, Coffee, Hand, HeadphoneOff, Headphones, Loader2, Mic, MicOff, MonitorPause, MonitorUp, PhoneOff, Settings, SignalLow, SlidersHorizontal, UserPlus, UserRound, Video, VideoOff, LogOut } from "lucide-react";
 import { AccountSummary, ElapsedTime, InfoTooltip, LiveDot, PresenceDot } from "./atoms";
 import { displayNameFor, PRESENCE, presenceFromApi, SELECTABLE_PRESENCES, type RavenShellData, type RavenView } from "./state";
 import type { ChatStore } from "@/lib/chat/store";
@@ -81,6 +84,7 @@ import {
   restrictToRow,
   useConfirmLeave,
   useDockOrder,
+  useShowHand,
   writeDockOrder,
   type DockControlId,
 } from "./dockLayout";
@@ -172,6 +176,19 @@ export function DeviceDock({
   const networkActivity = useNetworkActivity(media.activeNestId != null, media.networkActivity);
   const sendQuality = useSendQuality(media.phase === "connected" && media.activeNestId != null);
   const connected = media.phase === "connected" && media.activeNestId != null;
+
+  // A soft note when someone else raises their hand. Lowering is silent, and hands already
+  // up when you arrive are not news.
+  const handCueRef = useRef(INITIAL_HAND_CUE_STATE);
+  const othersRaised = useMemo(() => {
+    if (!connected || !activeSession || !raisedHandSupported(activeSession)) return null;
+    return new Set(activeSession.participants.filter((participant) => participant.userId !== data.user?.id && (participant.handOrder ?? 0) > 0).map((participant) => participant.userId));
+  }, [activeSession, connected, data.user?.id]);
+  useEffect(() => {
+    const { state, cue } = handCueStep(handCueRef.current, { nestId: connected ? media.activeNestId : null, raised: othersRaised });
+    handCueRef.current = state;
+    if (cue) void audioCommands.playSoundCue("handRaised").catch(() => undefined);
+  }, [connected, media.activeNestId, othersRaised]);
   const signedIn = Boolean(data.user);
   // "You're muted" once per mute: the dock callout and the voice overlay show the same signal.
   const talkingWhileMuted = useTalkingWhileMuted(
@@ -241,6 +258,10 @@ export function DeviceDock({
         runCallAction(action);
         return;
       }
+      if (action === "hand") {
+        if (current.handSupported) void current.setHand(!current.localHand).catch(() => undefined);
+        return;
+      }
       let operation: Promise<void> | null = null;
       if (action === "camera" && current.cameraSupported) {
         operation = current.localCameraEnabled ? current.stopCamera() : current.toggleCamera();
@@ -296,6 +317,10 @@ export function DeviceDock({
       if (action.kind === "away") {
         // A failure is shown by the adapter; the next snapshot carries the real state.
         void current.setAway(action.away).catch(() => undefined);
+        return;
+      }
+      if (action.kind === "hand") {
+        void current.setHand(action.hand).catch(() => undefined);
         return;
       }
       const gainDb = volumePercentToGainDb(action.percent);
@@ -543,7 +568,7 @@ export function DeviceDock({
       locationLabel: data.labels.nestSingular,
       reconnecting: media.reconnecting,
       localMutedHint: mutedHint,
-      localCallState: { away: media.localAway, deafened: media.localDeafened },
+      localCallState: { away: media.localAway, deafened: media.localDeafened, hand: media.localHand },
       headsUp,
     });
     const serialized = JSON.stringify(snapshot);
@@ -569,6 +594,7 @@ export function DeviceDock({
     headsUp,
     media.audioState,
     media.localAway,
+    media.localHand,
     media.localDeafened,
     media.phase,
     media.reconnecting,
@@ -776,11 +802,12 @@ export function DeviceDock({
               aria-pressed={mixerOpen}
               onClick={onToggleMixer}
               className={cn(
-                "flex h-9 w-9 shrink-0 items-center justify-center rounded-control transition-colors",
+                "flex h-9 w-9 shrink-0 items-center justify-center gap-2 rounded-control transition-colors min-[1100px]:w-auto min-[1100px]:px-2.5",
                 mixerOpen ? "bg-secondary text-foreground" : "text-muted-foreground hover:bg-secondary hover:text-foreground",
               )}
             >
               <SlidersHorizontal className="h-[18px] w-[18px]" />
+              <span className="hidden text-small min-[1100px]:inline">Mixer</span>
             </button>
           </Tooltip>
         </div>
@@ -916,6 +943,7 @@ function DockDeviceControls({
   onArrangeEnd: () => void;
 }) {
   const order = useDockOrder();
+  const showHand = useShowHand();
   const groupRef = useRef<HTMLDivElement>(null);
   const wasArrangingRef = useRef(arranging);
   useEffect(() => {
@@ -1049,6 +1077,23 @@ function DockDeviceControls({
         {media.localDeafened || media.localServerDeafened ? <HeadphoneOff /> : <Headphones />}
       </DockControl>
     ),
+    // Shown only in a call that supports it, unless hidden in Settings. Its hotkey works either way.
+    hand: showHand && (arranging || (inCall && media.handSupported)) ? (
+      <DockControl
+        label={media.localHand ? "Lower your hand" : "I’d like to speak"}
+        description={media.localHand
+          ? "Everyone here sees your hand. It goes down by itself once you’ve spoken for a few seconds."
+          : "Lets everyone here know you’d like a turn, without interrupting."}
+        shortcut={hotkeyLabel(hotkeys?.hand)}
+        tone={media.localHand ? "on" : "off"}
+        pressed={media.localHand}
+        disabled={!inCall || !media.handSupported}
+        onClick={() => void media.setHand(!media.localHand).catch(() => undefined)}
+        onArrange={onArrange}
+      >
+        <Hand />
+      </DockControl>
+    ) : null,
   };
 
   if (arranging) return <DockArrangeGroup initial={order} controls={controls} onEnd={onArrangeEnd} />;
@@ -1081,6 +1126,8 @@ function DockArrangeGroup({
   onEnd: () => void;
 }) {
   const [order, setOrder] = useState(initial);
+  // A control hidden in Settings keeps its place in the order but is not offered here.
+  const shown = order.filter((id) => controls[id] != null);
   const groupRef = useRef<HTMLDivElement>(null);
   const draggingRef = useRef(false);
   const orderRef = useRef(order);
@@ -1151,9 +1198,9 @@ function DockArrangeGroup({
           setOrder((current) => reorderDockControls(current, active.id as DockControlId, over.id as DockControlId));
         }}
       >
-        <SortableContext items={order} strategy={horizontalListSortingStrategy}>
-          {order.map((id, index) => (
-            <SortableDockItem key={id} id={id} label={`${DOCK_CONTROL_NAMES[id]}, ${index + 1} of ${order.length}`}>
+        <SortableContext items={shown} strategy={horizontalListSortingStrategy}>
+          {shown.map((id, index) => (
+            <SortableDockItem key={id} id={id} label={`${DOCK_CONTROL_NAMES[id]}, ${index + 1} of ${shown.length}`}>
               {controls[id]}
             </SortableDockItem>
           ))}
@@ -1386,7 +1433,7 @@ function SwitchRow({
   );
 }
 
-function MicMenu({ media }: { media: RavenMediaAdapterState }) {
+export function MicMenu({ media }: { media: RavenMediaAdapterState }) {
   const processing = media.localAudioProcessing;
   const updateProcessing = (patch: Partial<NonNullable<typeof processing>>) => {
     if (!processing) return;
@@ -1421,12 +1468,12 @@ function MicMenu({ media }: { media: RavenMediaAdapterState }) {
       />
       <SwitchRow label="Echo cancellation" hint="Keeps speaker sound out of your mic." checked={Boolean(processing?.echoCancellation)} disabled={!processing} onChange={(checked) => updateProcessing({ echoCancellation: checked })} />
       <SwitchRow label="Automatic gain" hint="Evens out how loud you are." checked={Boolean(processing?.autoGainControl)} disabled={!processing} onChange={(checked) => updateProcessing({ autoGainControl: checked })} />
-      {processing ? null : <p className="px-2 pb-1 pt-1.5 text-caption text-subtle">These unlock once your microphone has been turned on.</p>}
+      {processing ? null : <p className="px-2 pb-1 pt-1.5 text-caption text-subtle">These are available once Raven finds a microphone.</p>}
     </div>
   );
 }
 
-function CameraMenu({ media }: { media: RavenMediaAdapterState }) {
+export function CameraMenu({ media }: { media: RavenMediaAdapterState }) {
   const currentCameraProfile = media.activeCameraProfile ?? media.preferredCameraProfile;
   const [cameraQuality, setCameraQuality] = useState<VideoQualityProfileId>(currentCameraProfile.profileId);
   const [customVideoDraft, setCustomVideoDraft] = useState(() => customDraftFromProfile(currentCameraProfile));
@@ -1473,7 +1520,7 @@ function CameraMenu({ media }: { media: RavenMediaAdapterState }) {
   );
 }
 
-function OutputMenu({ media }: { media: RavenMediaAdapterState }) {
+export function OutputMenu({ media }: { media: RavenMediaAdapterState }) {
   const supported = Boolean(media.audioCapabilities?.supportsOutputDevices);
   const selected = media.selectedOutput ?? "";
   return (

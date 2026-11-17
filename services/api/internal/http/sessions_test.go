@@ -8,21 +8,28 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 
 	profilemedia "raven/services/api/internal/media"
 )
 
+// memoryProfileMedia is safe for concurrent use: link previews store images from their own goroutine.
 type memoryProfileMedia struct {
+	mu      sync.Mutex
 	objects map[string]profilemedia.Object
 }
 
 func (m *memoryProfileMedia) Put(_ context.Context, key string, body []byte, contentType string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	m.objects[key] = profilemedia.Object{Bytes: append([]byte(nil), body...), ContentType: contentType}
 	return nil
 }
 
 func (m *memoryProfileMedia) Get(_ context.Context, key string) (profilemedia.Object, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	object, ok := m.objects[key]
 	if !ok {
 		return profilemedia.Object{}, sql.ErrNoRows
@@ -31,6 +38,8 @@ func (m *memoryProfileMedia) Get(_ context.Context, key string) (profilemedia.Ob
 }
 
 func (m *memoryProfileMedia) Delete(_ context.Context, key string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	delete(m.objects, key)
 	return nil
 }
@@ -1181,6 +1190,60 @@ func TestCallStateIsSharedAndOnlyChangesTheCaller(t *testing.T) {
 	}
 	if columns != 0 {
 		t.Fatalf("call state must not be logged as history, found %d events", columns)
+	}
+}
+
+func TestRaisedHandsAreOrderedWithoutTimes(t *testing.T) {
+	server, aliceToken := newTestServer(t)
+	_, bobToken := createTestUser(t, server, "bob")
+	nestID := createTestNest(t, server, aliceToken, "/v1/nests/temporary", "Quick call")
+	postJSON(t, server, aliceToken, "/v1/nests/"+nestID+"/invitations", map[string]string{"username": "bob"}, http.StatusCreated)
+	postJSON(t, server, bobToken, "/v1/nests/"+nestID+"/join", nil, http.StatusOK)
+	joinResponse := postJSON(t, server, aliceToken, "/v1/nests/"+nestID+"/session/join", nil, http.StatusOK)
+	postJSON(t, server, bobToken, "/v1/nests/"+nestID+"/session/join", nil, http.StatusOK)
+	if !bytes.Contains(joinResponse, []byte(`"handOrder":0`)) {
+		t.Fatalf("participants should always carry a hand order: %s", joinResponse)
+	}
+	state := "/v1/nests/" + nestID + "/session/state"
+	order := func() (int, int) {
+		people := sessionParticipants(t, server, bobToken, nestID)
+		return participantByUsername(t, people, "alice").HandOrder, participantByUsername(t, people, "bob").HandOrder
+	}
+
+	postJSON(t, server, aliceToken, state, map[string]bool{"hand": true}, http.StatusOK)
+	response := postJSON(t, server, bobToken, state, map[string]bool{"hand": true}, http.StatusOK)
+	if alice, bob := order(); alice != 1 || bob != 2 {
+		t.Fatalf("hands should be in the order they went up: alice=%d bob=%d", alice, bob)
+	}
+	if bytes.Contains(response, []byte("hand_raised")) || bytes.Contains(response, []byte("raisedAt")) {
+		t.Fatalf("the time a hand went up must not be sent: %s", response)
+	}
+
+	// Raising again keeps the place; lowering moves the next one up.
+	postJSON(t, server, aliceToken, state, map[string]bool{"hand": true}, http.StatusOK)
+	if alice, bob := order(); alice != 1 || bob != 2 {
+		t.Fatalf("raising again should keep the place: alice=%d bob=%d", alice, bob)
+	}
+	postJSON(t, server, aliceToken, state, map[string]bool{"hand": false}, http.StatusOK)
+	if alice, bob := order(); alice != 0 || bob != 1 {
+		t.Fatalf("lowering should move bob up: alice=%d bob=%d", alice, bob)
+	}
+
+	// Stepping away lowers the hand.
+	postJSON(t, server, bobToken, state, map[string]bool{"away": true}, http.StatusOK)
+	if _, bob := order(); bob != 0 {
+		t.Fatalf("Back in a bit should lower the hand: bob=%d", bob)
+	}
+
+	// Leaving keeps no trace of a raised hand.
+	postJSON(t, server, aliceToken, state, map[string]bool{"hand": true}, http.StatusOK)
+	postJSON(t, server, aliceToken, "/v1/nests/"+nestID+"/session/leave", nil, http.StatusOK)
+	var kept int
+	if err := server.db.QueryRow(`SELECT COUNT(*) FROM session_participants WHERE nest_id = ? AND hand_raised_at IS NOT NULL`, nestID).Scan(&kept); err != nil {
+		t.Fatal(err)
+	}
+	if kept != 0 {
+		t.Fatalf("a raised hand should not outlive the call: %d rows", kept)
 	}
 }
 

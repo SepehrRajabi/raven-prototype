@@ -4,6 +4,7 @@ import type {
   AdminUser,
   AuditEvent,
   AccountSettings,
+  ServerNameSettings,
   CapabilityDefault,
   CapabilityMode,
   CapabilityName,
@@ -192,6 +193,14 @@ export class AdminApi {
 
   setAccountSettings(settings: AccountSettings): Promise<AccountSettings> {
     return this.request("POST", "/v1/admin/settings/accounts", settings);
+  }
+
+  serverName(): Promise<ServerNameSettings> {
+    return this.request("GET", "/v1/admin/settings/server");
+  }
+
+  setServerName(name: string): Promise<ServerNameSettings> {
+    return this.request("POST", "/v1/admin/settings/server", { name });
   }
 
   async uploadServerImage(image: Blob): Promise<void> {

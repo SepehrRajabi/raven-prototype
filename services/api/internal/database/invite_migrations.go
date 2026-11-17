@@ -28,3 +28,11 @@ func signUpInviteStatements() []string {
 		 VALUES ('` + CapabilityInvitesCreate + `', FALSE, NULL, '2026-11-02T00:00:00Z') ON CONFLICT(capability) DO NOTHING`,
 	}
 }
+
+// serverNameStatements adds the server's display name, set from the admin dashboard.
+// Empty means RAVEN_SERVER_NAME, or "Raven" when that is not set either.
+func serverNameStatements() []string {
+	return []string{
+		`ALTER TABLE server_settings ADD COLUMN display_name TEXT NOT NULL DEFAULT ''`,
+	}
+}

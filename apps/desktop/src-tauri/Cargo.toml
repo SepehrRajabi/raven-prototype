@@ -1,6 +1,6 @@
 [package]
 name = "raven-desktop"
-version = "0.1.11"
+version = "0.1.12"
 description = "Raven desktop client"
 authors = ["Raven"]
 license = ""
@@ -87,6 +87,11 @@ rtrb = "0.3.6"
 # vendor/deep_filter/README.md. ndarray is the version its API takes.
 deep_filter = { path = "vendor/deep_filter", optional = true }
 ndarray = { version = "0.15", optional = true }
+
+[target.'cfg(target_os = "android")'.dependencies]
+raven-mobile-native = { path = "plugins/raven-mobile-native" }
+
+[target.'cfg(not(target_os = "android"))'.dependencies]
 # Native camera capture (MSMF on Windows, AVFoundation on macOS, V4L2 on Linux).
 nokhwa = { version = "0.10", features = ["input-native"] }
 

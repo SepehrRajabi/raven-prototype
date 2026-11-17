@@ -1,4 +1,4 @@
-import type { ChatConversation, ConversationState } from "@/lib/chat/types";
+import type { ChatConversation } from "@/lib/chat/types";
 import { OFFLINE_RANK, reachRank } from "./people";
 import type { ShellPerson } from "./state";
 
@@ -139,12 +139,4 @@ export function filterPeople({
 /** Whether a row has anything unread. */
 export function rowUnread(row: FriendsAndGroupsRow): number {
   return row.conversation?.unreadCount ?? 0;
-}
-
-/**
- * The text nests an expanded tree lists: those with unread messages and the one that is
- * open. The rest are in the tree's lobby. Keeps the order it is given.
- */
-export function visibleTextNests(nests: ConversationState[], activeConversationId = ""): ConversationState[] {
-  return nests.filter(({ summary }) => summary.unreadCount > 0 || summary.id === activeConversationId);
 }

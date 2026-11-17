@@ -45,6 +45,8 @@ pub enum SoundCue {
     PersonLeft,
     /// Someone is about to enter your room (the knock heads-up before a join).
     EntryHeadsUp,
+    /// Someone else in your room raised their hand ("I'd like to speak").
+    HandRaised,
 }
 
 /// Cues that replace each other instead of overlapping.
@@ -56,6 +58,7 @@ pub(crate) enum CueGroup {
     Share,
     Presence,
     HeadsUp,
+    Hand,
 }
 
 impl SoundCue {
@@ -67,6 +70,7 @@ impl SoundCue {
             SoundCue::ShareStarted | SoundCue::ShareStopped => CueGroup::Share,
             SoundCue::PersonJoined | SoundCue::PersonLeft => CueGroup::Presence,
             SoundCue::EntryHeadsUp => CueGroup::HeadsUp,
+            SoundCue::HandRaised => CueGroup::Hand,
         }
     }
 
@@ -94,7 +98,9 @@ impl SoundCue {
             CueGroup::Microphone => Duration::ZERO,
             CueGroup::Presence => Duration::from_millis(900),
             CueGroup::Share => Duration::from_millis(600),
-            CueGroup::Message | CueGroup::Knock | CueGroup::HeadsUp => Duration::from_millis(1500),
+            CueGroup::Message | CueGroup::Knock | CueGroup::HeadsUp | CueGroup::Hand => {
+                Duration::from_millis(1500)
+            }
         }
     }
 }
@@ -117,6 +123,8 @@ pub struct SoundCueSettings {
     pub screen_shares: bool,
     pub people: bool,
     pub entry_heads_up: bool,
+    /// Someone else raised their hand.
+    pub hands: bool,
 }
 
 impl Default for SoundCueSettings {
@@ -130,6 +138,7 @@ impl Default for SoundCueSettings {
             screen_shares: true,
             people: true,
             entry_heads_up: true,
+            hands: true,
         }
     }
 }
@@ -157,6 +166,7 @@ impl SoundCueSettings {
             CueGroup::Share => self.screen_shares,
             CueGroup::Presence => self.people,
             CueGroup::HeadsUp => self.entry_heads_up,
+            CueGroup::Hand => self.hands,
         }
     }
 
@@ -335,6 +345,8 @@ fn notes(cue: SoundCue) -> Vec<Note> {
             note(0.0, D5, 110.0, 400.0, 1.0, PURE),
             note(110.0, G5, 170.0, 400.0, 1.0, PURE),
         ],
+        // One soft, short note: noticeable to whoever is talking, gone before it interrupts.
+        SoundCue::HandRaised => vec![note(0.0, B5, 200.0, 55.0, 0.55, SOFT)],
     }
 }
 
@@ -595,7 +607,7 @@ impl PresenceCues {
 mod tests {
     use super::*;
 
-    const ALL: [SoundCue; 9] = [
+    const ALL: [SoundCue; 10] = [
         SoundCue::Mute,
         SoundCue::Unmute,
         SoundCue::ProfileKnock,
@@ -605,6 +617,7 @@ mod tests {
         SoundCue::PersonJoined,
         SoundCue::PersonLeft,
         SoundCue::EntryHeadsUp,
+        SoundCue::HandRaised,
     ];
 
     fn peak(samples: &[f32]) -> f32 {

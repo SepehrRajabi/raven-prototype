@@ -345,10 +345,10 @@
       "description": "Permission identifier",
       "oneOf": [
         {
-          "description": "Raven's main window: every Raven command.\n#### This permission set includes:\n\n- `allow-secret-get`\n- `allow-secret-set`\n- `allow-secret-delete`\n- `allow-attachment-prepare`\n- `allow-attachment-read`\n- `allow-attachment-discard`\n- `allow-attachment-sweep`\n- `allow-attachment-save`\n- `allow-library-stage`\n- `allow-library-read`\n- `allow-library-discard`\n- `allow-library-pick-pack`\n- `allow-read-ravenpack`\n- `allow-save-export-file`\n- `allow-audio-get-state`\n- `allow-audio-get-capabilities`\n- `allow-audio-get-network-totals`\n- `allow-audio-get-channel-health`\n- `allow-audio-list-input-devices`\n- `allow-audio-list-output-devices`\n- `allow-audio-get-selected-output-device`\n- `allow-audio-set-output-device`\n- `allow-audio-set-output-muted`\n- `allow-audio-set-output-volume`\n- `allow-audio-play-ui-sound`\n- `allow-audio-play-sound-cue`\n- `allow-audio-preview-sound-cue`\n- `allow-audio-set-sound-cue-settings`\n- `allow-audio-test-output-device`\n- `allow-audio-set-remote-audio-receiving`\n- `allow-audio-list-app-audio-sources`\n- `allow-audio-list-presets`\n- `allow-audio-apply-preset-to-local-channel`\n- `allow-audio-apply-preset-to-remote-track`\n- `allow-audio-save-local-channel-as-preset`\n- `allow-audio-save-remote-track-as-preset`\n- `allow-audio-delete-user-preset`\n- `allow-audio-rename-user-preset`\n- `allow-audio-reset-local-channel-processor-chain`\n- `allow-audio-reset-remote-track-processor-chain`\n- `allow-audio-reset-local-channel-to-safe-defaults`\n- `allow-audio-reset-remote-track-to-safe-defaults`\n- `allow-audio-set-local-safety-limiter-ceiling`\n- `allow-audio-set-remote-safety-limiter-ceiling`\n- `allow-audio-add-local-source`\n- `allow-audio-remove-local-source`\n- `allow-audio-rename-local-source`\n- `allow-audio-set-local-source-enabled`\n- `allow-audio-set-local-source-capture-device`\n- `allow-audio-set-local-channel-gain`\n- `allow-audio-set-local-channel-mute`\n- `allow-audio-set-local-webrtc-processing`\n- `allow-audio-publish-audio-source`\n- `allow-audio-unpublish-audio-source`\n- `allow-audio-connect-room`\n- `allow-audio-disconnect-room`\n- `allow-audio-set-call-active`\n- `allow-audio-set-monitoring`\n- `allow-audio-publish-local-source-metadata`\n- `allow-audio-unpublish-local-source-metadata`\n- `allow-audio-update-published-track-metadata`\n- `allow-audio-add-or-update-remote-track`\n- `allow-audio-remove-remote-track`\n- `allow-audio-set-remote-track-gain`\n- `allow-audio-set-auto-level`\n- `allow-audio-resume-auto-level`\n- `allow-audio-set-remote-track-mute`\n- `allow-audio-set-remote-noise-cleanup`\n- `allow-audio-add-processor-to-remote-track`\n- `allow-audio-set-remote-processor-enabled`\n- `allow-audio-remove-processor-from-remote-track`\n- `allow-audio-update-remote-processor-parameter`\n- `allow-audio-reorder-remote-processors`\n- `allow-audio-set-processor-enabled`\n- `allow-audio-set-processor-parameter`\n- `allow-audio-add-processor-to-local-channel`\n- `allow-audio-remove-processor-from-local-channel`\n- `allow-audio-update-processor-parameter`\n- `allow-audio-reorder-processors`\n- `allow-video-get-state`\n- `allow-video-get-capabilities`\n- `allow-video-get-network-totals`\n- `allow-video-get-quality-report`\n- `allow-video-get-stream-stats`\n- `allow-video-get-stream-endpoint`\n- `allow-video-set-local-preview-enabled`\n- `allow-video-set-self-preview-mode`\n- `allow-video-set-presentation-profile`\n- `allow-video-set-remote-video-receiving`\n- `allow-video-list-cameras`\n- `allow-video-list-displays`\n- `allow-video-list-windows`\n- `allow-video-connect-room`\n- `allow-video-disconnect-room`\n- `allow-video-start-camera`\n- `allow-video-start-display-share`\n- `allow-video-start-window-share`\n- `allow-video-set-source-profile`\n- `allow-video-stop-source`\n- `allow-overlay-is-supported`\n- `allow-overlay-get-settings`\n- `allow-overlay-update-settings`\n- `allow-overlay-toggle`\n- `allow-overlay-show`\n- `allow-overlay-hide`\n- `allow-overlay-set-content-size`\n- `allow-overlay-drag`\n- `allow-overlay-drag-release`\n- `allow-overlay-reset-position`\n- `allow-overlay-get-layout`\n- `allow-overlay-get-snapshot`\n- `allow-overlay-update-snapshot`\n- `allow-overlay-action`\n- `allow-media-hotkeys-get-settings`\n- `allow-media-hotkeys-update-settings`\n- `allow-push-to-talk-get-settings`\n- `allow-push-to-talk-update-settings`\n- `allow-thumbnail-toolbar-update`\n- `allow-notifications-supported`\n- `allow-notify-knock`\n- `allow-notify-message`\n- `allow-tray-update`\n- `allow-window-show-main`\n- `allow-window-lock-aspect`\n- `allow-tray-set-unread`\n- `allow-tray-get-settings`\n- `allow-tray-update-settings`\n- `allow-updater-get-state`\n- `allow-updater-check`\n- `allow-updater-download`\n- `allow-updater-install`\n- `allow-updater-set-busy`\n- `allow-diagnostics-log-ui-error`\n- `allow-workshop-publish`\n- `allow-workshop-stop`\n- `allow-workshop-connect`\n- `allow-workshop-disconnect`\n- `allow-workshop-stop-all`",
+          "description": "Raven's main window: every Raven command.\n#### This permission set includes:\n\n- `allow-mobile-native-get-state`\n- `allow-mobile-native-begin-call`\n- `allow-mobile-native-end-call`\n- `allow-mobile-native-request-permission`\n- `allow-mobile-native-open-settings`\n- `allow-secret-get`\n- `allow-secret-set`\n- `allow-secret-delete`\n- `allow-attachment-prepare`\n- `allow-attachment-read`\n- `allow-attachment-discard`\n- `allow-attachment-sweep`\n- `allow-attachment-save`\n- `allow-library-stage`\n- `allow-library-read`\n- `allow-library-discard`\n- `allow-library-pick-pack`\n- `allow-read-ravenpack`\n- `allow-save-export-file`\n- `allow-audio-get-state`\n- `allow-audio-get-capabilities`\n- `allow-audio-get-network-totals`\n- `allow-audio-get-channel-health`\n- `allow-audio-list-input-devices`\n- `allow-audio-list-output-devices`\n- `allow-audio-get-selected-output-device`\n- `allow-audio-set-output-device`\n- `allow-audio-set-output-muted`\n- `allow-audio-set-output-volume`\n- `allow-audio-play-ui-sound`\n- `allow-audio-play-sound-cue`\n- `allow-audio-preview-sound-cue`\n- `allow-audio-set-sound-cue-settings`\n- `allow-audio-test-output-device`\n- `allow-audio-set-remote-audio-receiving`\n- `allow-audio-set-deafen-keeps-satellites`\n- `allow-audio-list-app-audio-sources`\n- `allow-audio-list-presets`\n- `allow-audio-apply-preset-to-local-channel`\n- `allow-audio-apply-preset-to-remote-track`\n- `allow-audio-save-local-channel-as-preset`\n- `allow-audio-save-remote-track-as-preset`\n- `allow-audio-delete-user-preset`\n- `allow-audio-rename-user-preset`\n- `allow-audio-reset-local-channel-processor-chain`\n- `allow-audio-reset-remote-track-processor-chain`\n- `allow-audio-reset-local-channel-to-safe-defaults`\n- `allow-audio-reset-remote-track-to-safe-defaults`\n- `allow-audio-set-local-safety-limiter-ceiling`\n- `allow-audio-set-remote-safety-limiter-ceiling`\n- `allow-audio-add-local-source`\n- `allow-audio-remove-local-source`\n- `allow-audio-rename-local-source`\n- `allow-audio-set-local-source-enabled`\n- `allow-audio-set-local-source-capture-device`\n- `allow-audio-set-local-channel-gain`\n- `allow-audio-set-local-channel-mute`\n- `allow-audio-set-local-webrtc-processing`\n- `allow-audio-publish-audio-source`\n- `allow-audio-unpublish-audio-source`\n- `allow-audio-connect-room`\n- `allow-audio-disconnect-room`\n- `allow-audio-set-call-active`\n- `allow-audio-set-monitoring`\n- `allow-audio-publish-local-source-metadata`\n- `allow-audio-unpublish-local-source-metadata`\n- `allow-audio-update-published-track-metadata`\n- `allow-audio-add-or-update-remote-track`\n- `allow-audio-remove-remote-track`\n- `allow-audio-set-remote-track-gain`\n- `allow-audio-set-auto-level`\n- `allow-audio-resume-auto-level`\n- `allow-audio-set-remote-track-mute`\n- `allow-audio-set-remote-noise-cleanup`\n- `allow-audio-add-processor-to-remote-track`\n- `allow-audio-set-remote-processor-enabled`\n- `allow-audio-remove-processor-from-remote-track`\n- `allow-audio-update-remote-processor-parameter`\n- `allow-audio-reorder-remote-processors`\n- `allow-audio-set-processor-enabled`\n- `allow-audio-set-processor-parameter`\n- `allow-audio-add-processor-to-local-channel`\n- `allow-audio-remove-processor-from-local-channel`\n- `allow-audio-update-processor-parameter`\n- `allow-audio-reorder-processors`\n- `allow-video-get-state`\n- `allow-video-get-capabilities`\n- `allow-video-get-network-totals`\n- `allow-video-get-quality-report`\n- `allow-video-get-stream-stats`\n- `allow-video-get-stream-endpoint`\n- `allow-video-set-local-preview-enabled`\n- `allow-video-set-self-preview-mode`\n- `allow-video-set-presentation-profile`\n- `allow-video-set-remote-video-receiving`\n- `allow-video-list-cameras`\n- `allow-video-list-displays`\n- `allow-video-list-windows`\n- `allow-video-connect-room`\n- `allow-video-disconnect-room`\n- `allow-video-start-camera`\n- `allow-video-start-display-share`\n- `allow-video-start-window-share`\n- `allow-video-set-source-profile`\n- `allow-video-stop-source`\n- `allow-overlay-is-supported`\n- `allow-overlay-get-settings`\n- `allow-overlay-update-settings`\n- `allow-overlay-toggle`\n- `allow-overlay-show`\n- `allow-overlay-hide`\n- `allow-overlay-set-content-size`\n- `allow-overlay-drag`\n- `allow-overlay-drag-release`\n- `allow-overlay-reset-position`\n- `allow-overlay-get-layout`\n- `allow-overlay-get-snapshot`\n- `allow-overlay-update-snapshot`\n- `allow-overlay-action`\n- `allow-media-hotkeys-get-settings`\n- `allow-media-hotkeys-update-settings`\n- `allow-push-to-talk-get-settings`\n- `allow-push-to-talk-update-settings`\n- `allow-thumbnail-toolbar-update`\n- `allow-notifications-supported`\n- `allow-notify-knock`\n- `allow-notify-message`\n- `allow-tray-update`\n- `allow-window-show-main`\n- `allow-window-lock-aspect`\n- `allow-tray-set-unread`\n- `allow-tray-get-settings`\n- `allow-tray-update-settings`\n- `allow-updater-get-state`\n- `allow-updater-check`\n- `allow-updater-download`\n- `allow-updater-install`\n- `allow-updater-set-busy`\n- `allow-diagnostics-log-ui-error`\n- `allow-workshop-publish`\n- `allow-workshop-stop`\n- `allow-workshop-connect`\n- `allow-workshop-disconnect`\n- `allow-workshop-stop-all`",
           "type": "string",
           "const": "main-window",
-          "markdownDescription": "Raven's main window: every Raven command.\n#### This permission set includes:\n\n- `allow-secret-get`\n- `allow-secret-set`\n- `allow-secret-delete`\n- `allow-attachment-prepare`\n- `allow-attachment-read`\n- `allow-attachment-discard`\n- `allow-attachment-sweep`\n- `allow-attachment-save`\n- `allow-library-stage`\n- `allow-library-read`\n- `allow-library-discard`\n- `allow-library-pick-pack`\n- `allow-read-ravenpack`\n- `allow-save-export-file`\n- `allow-audio-get-state`\n- `allow-audio-get-capabilities`\n- `allow-audio-get-network-totals`\n- `allow-audio-get-channel-health`\n- `allow-audio-list-input-devices`\n- `allow-audio-list-output-devices`\n- `allow-audio-get-selected-output-device`\n- `allow-audio-set-output-device`\n- `allow-audio-set-output-muted`\n- `allow-audio-set-output-volume`\n- `allow-audio-play-ui-sound`\n- `allow-audio-play-sound-cue`\n- `allow-audio-preview-sound-cue`\n- `allow-audio-set-sound-cue-settings`\n- `allow-audio-test-output-device`\n- `allow-audio-set-remote-audio-receiving`\n- `allow-audio-list-app-audio-sources`\n- `allow-audio-list-presets`\n- `allow-audio-apply-preset-to-local-channel`\n- `allow-audio-apply-preset-to-remote-track`\n- `allow-audio-save-local-channel-as-preset`\n- `allow-audio-save-remote-track-as-preset`\n- `allow-audio-delete-user-preset`\n- `allow-audio-rename-user-preset`\n- `allow-audio-reset-local-channel-processor-chain`\n- `allow-audio-reset-remote-track-processor-chain`\n- `allow-audio-reset-local-channel-to-safe-defaults`\n- `allow-audio-reset-remote-track-to-safe-defaults`\n- `allow-audio-set-local-safety-limiter-ceiling`\n- `allow-audio-set-remote-safety-limiter-ceiling`\n- `allow-audio-add-local-source`\n- `allow-audio-remove-local-source`\n- `allow-audio-rename-local-source`\n- `allow-audio-set-local-source-enabled`\n- `allow-audio-set-local-source-capture-device`\n- `allow-audio-set-local-channel-gain`\n- `allow-audio-set-local-channel-mute`\n- `allow-audio-set-local-webrtc-processing`\n- `allow-audio-publish-audio-source`\n- `allow-audio-unpublish-audio-source`\n- `allow-audio-connect-room`\n- `allow-audio-disconnect-room`\n- `allow-audio-set-call-active`\n- `allow-audio-set-monitoring`\n- `allow-audio-publish-local-source-metadata`\n- `allow-audio-unpublish-local-source-metadata`\n- `allow-audio-update-published-track-metadata`\n- `allow-audio-add-or-update-remote-track`\n- `allow-audio-remove-remote-track`\n- `allow-audio-set-remote-track-gain`\n- `allow-audio-set-auto-level`\n- `allow-audio-resume-auto-level`\n- `allow-audio-set-remote-track-mute`\n- `allow-audio-set-remote-noise-cleanup`\n- `allow-audio-add-processor-to-remote-track`\n- `allow-audio-set-remote-processor-enabled`\n- `allow-audio-remove-processor-from-remote-track`\n- `allow-audio-update-remote-processor-parameter`\n- `allow-audio-reorder-remote-processors`\n- `allow-audio-set-processor-enabled`\n- `allow-audio-set-processor-parameter`\n- `allow-audio-add-processor-to-local-channel`\n- `allow-audio-remove-processor-from-local-channel`\n- `allow-audio-update-processor-parameter`\n- `allow-audio-reorder-processors`\n- `allow-video-get-state`\n- `allow-video-get-capabilities`\n- `allow-video-get-network-totals`\n- `allow-video-get-quality-report`\n- `allow-video-get-stream-stats`\n- `allow-video-get-stream-endpoint`\n- `allow-video-set-local-preview-enabled`\n- `allow-video-set-self-preview-mode`\n- `allow-video-set-presentation-profile`\n- `allow-video-set-remote-video-receiving`\n- `allow-video-list-cameras`\n- `allow-video-list-displays`\n- `allow-video-list-windows`\n- `allow-video-connect-room`\n- `allow-video-disconnect-room`\n- `allow-video-start-camera`\n- `allow-video-start-display-share`\n- `allow-video-start-window-share`\n- `allow-video-set-source-profile`\n- `allow-video-stop-source`\n- `allow-overlay-is-supported`\n- `allow-overlay-get-settings`\n- `allow-overlay-update-settings`\n- `allow-overlay-toggle`\n- `allow-overlay-show`\n- `allow-overlay-hide`\n- `allow-overlay-set-content-size`\n- `allow-overlay-drag`\n- `allow-overlay-drag-release`\n- `allow-overlay-reset-position`\n- `allow-overlay-get-layout`\n- `allow-overlay-get-snapshot`\n- `allow-overlay-update-snapshot`\n- `allow-overlay-action`\n- `allow-media-hotkeys-get-settings`\n- `allow-media-hotkeys-update-settings`\n- `allow-push-to-talk-get-settings`\n- `allow-push-to-talk-update-settings`\n- `allow-thumbnail-toolbar-update`\n- `allow-notifications-supported`\n- `allow-notify-knock`\n- `allow-notify-message`\n- `allow-tray-update`\n- `allow-window-show-main`\n- `allow-window-lock-aspect`\n- `allow-tray-set-unread`\n- `allow-tray-get-settings`\n- `allow-tray-update-settings`\n- `allow-updater-get-state`\n- `allow-updater-check`\n- `allow-updater-download`\n- `allow-updater-install`\n- `allow-updater-set-busy`\n- `allow-diagnostics-log-ui-error`\n- `allow-workshop-publish`\n- `allow-workshop-stop`\n- `allow-workshop-connect`\n- `allow-workshop-disconnect`\n- `allow-workshop-stop-all`"
+          "markdownDescription": "Raven's main window: every Raven command.\n#### This permission set includes:\n\n- `allow-mobile-native-get-state`\n- `allow-mobile-native-begin-call`\n- `allow-mobile-native-end-call`\n- `allow-mobile-native-request-permission`\n- `allow-mobile-native-open-settings`\n- `allow-secret-get`\n- `allow-secret-set`\n- `allow-secret-delete`\n- `allow-attachment-prepare`\n- `allow-attachment-read`\n- `allow-attachment-discard`\n- `allow-attachment-sweep`\n- `allow-attachment-save`\n- `allow-library-stage`\n- `allow-library-read`\n- `allow-library-discard`\n- `allow-library-pick-pack`\n- `allow-read-ravenpack`\n- `allow-save-export-file`\n- `allow-audio-get-state`\n- `allow-audio-get-capabilities`\n- `allow-audio-get-network-totals`\n- `allow-audio-get-channel-health`\n- `allow-audio-list-input-devices`\n- `allow-audio-list-output-devices`\n- `allow-audio-get-selected-output-device`\n- `allow-audio-set-output-device`\n- `allow-audio-set-output-muted`\n- `allow-audio-set-output-volume`\n- `allow-audio-play-ui-sound`\n- `allow-audio-play-sound-cue`\n- `allow-audio-preview-sound-cue`\n- `allow-audio-set-sound-cue-settings`\n- `allow-audio-test-output-device`\n- `allow-audio-set-remote-audio-receiving`\n- `allow-audio-set-deafen-keeps-satellites`\n- `allow-audio-list-app-audio-sources`\n- `allow-audio-list-presets`\n- `allow-audio-apply-preset-to-local-channel`\n- `allow-audio-apply-preset-to-remote-track`\n- `allow-audio-save-local-channel-as-preset`\n- `allow-audio-save-remote-track-as-preset`\n- `allow-audio-delete-user-preset`\n- `allow-audio-rename-user-preset`\n- `allow-audio-reset-local-channel-processor-chain`\n- `allow-audio-reset-remote-track-processor-chain`\n- `allow-audio-reset-local-channel-to-safe-defaults`\n- `allow-audio-reset-remote-track-to-safe-defaults`\n- `allow-audio-set-local-safety-limiter-ceiling`\n- `allow-audio-set-remote-safety-limiter-ceiling`\n- `allow-audio-add-local-source`\n- `allow-audio-remove-local-source`\n- `allow-audio-rename-local-source`\n- `allow-audio-set-local-source-enabled`\n- `allow-audio-set-local-source-capture-device`\n- `allow-audio-set-local-channel-gain`\n- `allow-audio-set-local-channel-mute`\n- `allow-audio-set-local-webrtc-processing`\n- `allow-audio-publish-audio-source`\n- `allow-audio-unpublish-audio-source`\n- `allow-audio-connect-room`\n- `allow-audio-disconnect-room`\n- `allow-audio-set-call-active`\n- `allow-audio-set-monitoring`\n- `allow-audio-publish-local-source-metadata`\n- `allow-audio-unpublish-local-source-metadata`\n- `allow-audio-update-published-track-metadata`\n- `allow-audio-add-or-update-remote-track`\n- `allow-audio-remove-remote-track`\n- `allow-audio-set-remote-track-gain`\n- `allow-audio-set-auto-level`\n- `allow-audio-resume-auto-level`\n- `allow-audio-set-remote-track-mute`\n- `allow-audio-set-remote-noise-cleanup`\n- `allow-audio-add-processor-to-remote-track`\n- `allow-audio-set-remote-processor-enabled`\n- `allow-audio-remove-processor-from-remote-track`\n- `allow-audio-update-remote-processor-parameter`\n- `allow-audio-reorder-remote-processors`\n- `allow-audio-set-processor-enabled`\n- `allow-audio-set-processor-parameter`\n- `allow-audio-add-processor-to-local-channel`\n- `allow-audio-remove-processor-from-local-channel`\n- `allow-audio-update-processor-parameter`\n- `allow-audio-reorder-processors`\n- `allow-video-get-state`\n- `allow-video-get-capabilities`\n- `allow-video-get-network-totals`\n- `allow-video-get-quality-report`\n- `allow-video-get-stream-stats`\n- `allow-video-get-stream-endpoint`\n- `allow-video-set-local-preview-enabled`\n- `allow-video-set-self-preview-mode`\n- `allow-video-set-presentation-profile`\n- `allow-video-set-remote-video-receiving`\n- `allow-video-list-cameras`\n- `allow-video-list-displays`\n- `allow-video-list-windows`\n- `allow-video-connect-room`\n- `allow-video-disconnect-room`\n- `allow-video-start-camera`\n- `allow-video-start-display-share`\n- `allow-video-start-window-share`\n- `allow-video-set-source-profile`\n- `allow-video-stop-source`\n- `allow-overlay-is-supported`\n- `allow-overlay-get-settings`\n- `allow-overlay-update-settings`\n- `allow-overlay-toggle`\n- `allow-overlay-show`\n- `allow-overlay-hide`\n- `allow-overlay-set-content-size`\n- `allow-overlay-drag`\n- `allow-overlay-drag-release`\n- `allow-overlay-reset-position`\n- `allow-overlay-get-layout`\n- `allow-overlay-get-snapshot`\n- `allow-overlay-update-snapshot`\n- `allow-overlay-action`\n- `allow-media-hotkeys-get-settings`\n- `allow-media-hotkeys-update-settings`\n- `allow-push-to-talk-get-settings`\n- `allow-push-to-talk-update-settings`\n- `allow-thumbnail-toolbar-update`\n- `allow-notifications-supported`\n- `allow-notify-knock`\n- `allow-notify-message`\n- `allow-tray-update`\n- `allow-window-show-main`\n- `allow-window-lock-aspect`\n- `allow-tray-set-unread`\n- `allow-tray-get-settings`\n- `allow-tray-update-settings`\n- `allow-updater-get-state`\n- `allow-updater-check`\n- `allow-updater-download`\n- `allow-updater-install`\n- `allow-updater-set-busy`\n- `allow-diagnostics-log-ui-error`\n- `allow-workshop-publish`\n- `allow-workshop-stop`\n- `allow-workshop-connect`\n- `allow-workshop-disconnect`\n- `allow-workshop-stop-all`"
         },
         {
           "description": "Picture-in-picture windows: read the video state and the loopback frame endpoint, keep their aspect, and raise the main window.\n#### This permission set includes:\n\n- `allow-video-get-state`\n- `allow-video-get-stream-endpoint`\n- `allow-window-lock-aspect`\n- `allow-window-show-main`\n- `allow-diagnostics-log-ui-error`",
@@ -639,6 +639,12 @@
           "markdownDescription": "Enables the audio_set_call_active command without any pre-configured scope."
         },
         {
+          "description": "Enables the audio_set_deafen_keeps_satellites command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-audio-set-deafen-keeps-satellites",
+          "markdownDescription": "Enables the audio_set_deafen_keeps_satellites command without any pre-configured scope."
+        },
+        {
           "description": "Enables the audio_set_local_channel_gain command without any pre-configured scope.",
           "type": "string",
           "const": "allow-audio-set-local-channel-gain",
@@ -829,6 +835,36 @@
           "type": "string",
           "const": "allow-media-hotkeys-update-settings",
           "markdownDescription": "Enables the media_hotkeys_update_settings command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the mobile_native_begin_call command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-mobile-native-begin-call",
+          "markdownDescription": "Enables the mobile_native_begin_call command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the mobile_native_end_call command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-mobile-native-end-call",
+          "markdownDescription": "Enables the mobile_native_end_call command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the mobile_native_get_state command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-mobile-native-get-state",
+          "markdownDescription": "Enables the mobile_native_get_state command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the mobile_native_open_settings command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-mobile-native-open-settings",
+          "markdownDescription": "Enables the mobile_native_open_settings command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the mobile_native_request_permission command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-mobile-native-request-permission",
+          "markdownDescription": "Enables the mobile_native_request_permission command without any pre-configured scope."
         },
         {
           "description": "Enables the notifications_supported command without any pre-configured scope.",
@@ -1467,6 +1503,12 @@
           "markdownDescription": "Denies the audio_set_call_active command without any pre-configured scope."
         },
         {
+          "description": "Denies the audio_set_deafen_keeps_satellites command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-audio-set-deafen-keeps-satellites",
+          "markdownDescription": "Denies the audio_set_deafen_keeps_satellites command without any pre-configured scope."
+        },
+        {
           "description": "Denies the audio_set_local_channel_gain command without any pre-configured scope.",
           "type": "string",
           "const": "deny-audio-set-local-channel-gain",
@@ -1657,6 +1699,36 @@
           "type": "string",
           "const": "deny-media-hotkeys-update-settings",
           "markdownDescription": "Denies the media_hotkeys_update_settings command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the mobile_native_begin_call command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-mobile-native-begin-call",
+          "markdownDescription": "Denies the mobile_native_begin_call command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the mobile_native_end_call command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-mobile-native-end-call",
+          "markdownDescription": "Denies the mobile_native_end_call command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the mobile_native_get_state command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-mobile-native-get-state",
+          "markdownDescription": "Denies the mobile_native_get_state command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the mobile_native_open_settings command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-mobile-native-open-settings",
+          "markdownDescription": "Denies the mobile_native_open_settings command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the mobile_native_request_permission command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-mobile-native-request-permission",
+          "markdownDescription": "Denies the mobile_native_request_permission command without any pre-configured scope."
         },
         {
           "description": "Denies the notifications_supported command without any pre-configured scope.",
@@ -4171,6 +4243,282 @@
           "type": "string",
           "const": "dialog:deny-save",
           "markdownDescription": "Denies the save command without any pre-configured scope."
+        },
+        {
+          "description": "No features are enabled by default, as we believe\nthe shortcuts can be inherently dangerous and it is\napplication specific if specific shortcuts should be\nregistered or unregistered.\n",
+          "type": "string",
+          "const": "global-shortcut:default",
+          "markdownDescription": "No features are enabled by default, as we believe\nthe shortcuts can be inherently dangerous and it is\napplication specific if specific shortcuts should be\nregistered or unregistered.\n"
+        },
+        {
+          "description": "Enables the is_registered command without any pre-configured scope.",
+          "type": "string",
+          "const": "global-shortcut:allow-is-registered",
+          "markdownDescription": "Enables the is_registered command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the register command without any pre-configured scope.",
+          "type": "string",
+          "const": "global-shortcut:allow-register",
+          "markdownDescription": "Enables the register command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the register_all command without any pre-configured scope.",
+          "type": "string",
+          "const": "global-shortcut:allow-register-all",
+          "markdownDescription": "Enables the register_all command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the unregister command without any pre-configured scope.",
+          "type": "string",
+          "const": "global-shortcut:allow-unregister",
+          "markdownDescription": "Enables the unregister command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the unregister_all command without any pre-configured scope.",
+          "type": "string",
+          "const": "global-shortcut:allow-unregister-all",
+          "markdownDescription": "Enables the unregister_all command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the is_registered command without any pre-configured scope.",
+          "type": "string",
+          "const": "global-shortcut:deny-is-registered",
+          "markdownDescription": "Denies the is_registered command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the register command without any pre-configured scope.",
+          "type": "string",
+          "const": "global-shortcut:deny-register",
+          "markdownDescription": "Denies the register command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the register_all command without any pre-configured scope.",
+          "type": "string",
+          "const": "global-shortcut:deny-register-all",
+          "markdownDescription": "Denies the register_all command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the unregister command without any pre-configured scope.",
+          "type": "string",
+          "const": "global-shortcut:deny-unregister",
+          "markdownDescription": "Denies the unregister command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the unregister_all command without any pre-configured scope.",
+          "type": "string",
+          "const": "global-shortcut:deny-unregister-all",
+          "markdownDescription": "Denies the unregister_all command without any pre-configured scope."
+        },
+        {
+          "description": "This permission set configures which\nnotification features are by default exposed.\n\n#### Granted Permissions\n\nIt allows all notification related features.\n\n\n#### This default permission set includes:\n\n- `allow-is-permission-granted`\n- `allow-request-permission`\n- `allow-notify`\n- `allow-register-action-types`\n- `allow-register-listener`\n- `allow-remove-listener`\n- `allow-cancel`\n- `allow-get-pending`\n- `allow-remove-active`\n- `allow-get-active`\n- `allow-check-permissions`\n- `allow-show`\n- `allow-batch`\n- `allow-list-channels`\n- `allow-delete-channel`\n- `allow-create-channel`\n- `allow-permission-state`",
+          "type": "string",
+          "const": "notification:default",
+          "markdownDescription": "This permission set configures which\nnotification features are by default exposed.\n\n#### Granted Permissions\n\nIt allows all notification related features.\n\n\n#### This default permission set includes:\n\n- `allow-is-permission-granted`\n- `allow-request-permission`\n- `allow-notify`\n- `allow-register-action-types`\n- `allow-register-listener`\n- `allow-remove-listener`\n- `allow-cancel`\n- `allow-get-pending`\n- `allow-remove-active`\n- `allow-get-active`\n- `allow-check-permissions`\n- `allow-show`\n- `allow-batch`\n- `allow-list-channels`\n- `allow-delete-channel`\n- `allow-create-channel`\n- `allow-permission-state`"
+        },
+        {
+          "description": "Enables the batch command without any pre-configured scope.",
+          "type": "string",
+          "const": "notification:allow-batch",
+          "markdownDescription": "Enables the batch command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the cancel command without any pre-configured scope.",
+          "type": "string",
+          "const": "notification:allow-cancel",
+          "markdownDescription": "Enables the cancel command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the check_permissions command without any pre-configured scope.",
+          "type": "string",
+          "const": "notification:allow-check-permissions",
+          "markdownDescription": "Enables the check_permissions command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the create_channel command without any pre-configured scope.",
+          "type": "string",
+          "const": "notification:allow-create-channel",
+          "markdownDescription": "Enables the create_channel command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the delete_channel command without any pre-configured scope.",
+          "type": "string",
+          "const": "notification:allow-delete-channel",
+          "markdownDescription": "Enables the delete_channel command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the get_active command without any pre-configured scope.",
+          "type": "string",
+          "const": "notification:allow-get-active",
+          "markdownDescription": "Enables the get_active command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the get_pending command without any pre-configured scope.",
+          "type": "string",
+          "const": "notification:allow-get-pending",
+          "markdownDescription": "Enables the get_pending command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the is_permission_granted command without any pre-configured scope.",
+          "type": "string",
+          "const": "notification:allow-is-permission-granted",
+          "markdownDescription": "Enables the is_permission_granted command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the list_channels command without any pre-configured scope.",
+          "type": "string",
+          "const": "notification:allow-list-channels",
+          "markdownDescription": "Enables the list_channels command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the notify command without any pre-configured scope.",
+          "type": "string",
+          "const": "notification:allow-notify",
+          "markdownDescription": "Enables the notify command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the permission_state command without any pre-configured scope.",
+          "type": "string",
+          "const": "notification:allow-permission-state",
+          "markdownDescription": "Enables the permission_state command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the register_action_types command without any pre-configured scope.",
+          "type": "string",
+          "const": "notification:allow-register-action-types",
+          "markdownDescription": "Enables the register_action_types command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the register_listener command without any pre-configured scope.",
+          "type": "string",
+          "const": "notification:allow-register-listener",
+          "markdownDescription": "Enables the register_listener command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the remove_active command without any pre-configured scope.",
+          "type": "string",
+          "const": "notification:allow-remove-active",
+          "markdownDescription": "Enables the remove_active command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the remove_listener command without any pre-configured scope.",
+          "type": "string",
+          "const": "notification:allow-remove-listener",
+          "markdownDescription": "Enables the remove_listener command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the request_permission command without any pre-configured scope.",
+          "type": "string",
+          "const": "notification:allow-request-permission",
+          "markdownDescription": "Enables the request_permission command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the show command without any pre-configured scope.",
+          "type": "string",
+          "const": "notification:allow-show",
+          "markdownDescription": "Enables the show command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the batch command without any pre-configured scope.",
+          "type": "string",
+          "const": "notification:deny-batch",
+          "markdownDescription": "Denies the batch command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the cancel command without any pre-configured scope.",
+          "type": "string",
+          "const": "notification:deny-cancel",
+          "markdownDescription": "Denies the cancel command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the check_permissions command without any pre-configured scope.",
+          "type": "string",
+          "const": "notification:deny-check-permissions",
+          "markdownDescription": "Denies the check_permissions command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the create_channel command without any pre-configured scope.",
+          "type": "string",
+          "const": "notification:deny-create-channel",
+          "markdownDescription": "Denies the create_channel command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the delete_channel command without any pre-configured scope.",
+          "type": "string",
+          "const": "notification:deny-delete-channel",
+          "markdownDescription": "Denies the delete_channel command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the get_active command without any pre-configured scope.",
+          "type": "string",
+          "const": "notification:deny-get-active",
+          "markdownDescription": "Denies the get_active command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the get_pending command without any pre-configured scope.",
+          "type": "string",
+          "const": "notification:deny-get-pending",
+          "markdownDescription": "Denies the get_pending command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the is_permission_granted command without any pre-configured scope.",
+          "type": "string",
+          "const": "notification:deny-is-permission-granted",
+          "markdownDescription": "Denies the is_permission_granted command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the list_channels command without any pre-configured scope.",
+          "type": "string",
+          "const": "notification:deny-list-channels",
+          "markdownDescription": "Denies the list_channels command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the notify command without any pre-configured scope.",
+          "type": "string",
+          "const": "notification:deny-notify",
+          "markdownDescription": "Denies the notify command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the permission_state command without any pre-configured scope.",
+          "type": "string",
+          "const": "notification:deny-permission-state",
+          "markdownDescription": "Denies the permission_state command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the register_action_types command without any pre-configured scope.",
+          "type": "string",
+          "const": "notification:deny-register-action-types",
+          "markdownDescription": "Denies the register_action_types command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the register_listener command without any pre-configured scope.",
+          "type": "string",
+          "const": "notification:deny-register-listener",
+          "markdownDescription": "Denies the register_listener command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the remove_active command without any pre-configured scope.",
+          "type": "string",
+          "const": "notification:deny-remove-active",
+          "markdownDescription": "Denies the remove_active command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the remove_listener command without any pre-configured scope.",
+          "type": "string",
+          "const": "notification:deny-remove-listener",
+          "markdownDescription": "Denies the remove_listener command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the request_permission command without any pre-configured scope.",
+          "type": "string",
+          "const": "notification:deny-request-permission",
+          "markdownDescription": "Denies the request_permission command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the show command without any pre-configured scope.",
+          "type": "string",
+          "const": "notification:deny-show",
+          "markdownDescription": "Denies the show command without any pre-configured scope."
         },
         {
           "description": "This permission set allows opening `mailto:`, `tel:`, `https://` and `http://` urls using their default application\nas well as reveal file in directories using default file explorer\n#### This default permission set includes:\n\n- `allow-open-url`\n- `allow-reveal-item-in-dir`\n- `allow-default-urls`",

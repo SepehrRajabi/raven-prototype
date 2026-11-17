@@ -1,7 +1,7 @@
 import { closestCenter, DndContext, KeyboardSensor, PointerSensor, useSensor, useSensors } from "@dnd-kit/core";
 import { horizontalListSortingStrategy, SortableContext, sortableKeyboardCoordinates, useSortable } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
-import { ArrowLeft, ArrowRight, Headphones, Mic, MonitorUp, Video } from "lucide-react";
+import { ArrowLeft, ArrowRight, Hand, Headphones, Mic, MonitorUp, Video } from "lucide-react";
 import type { ReactNode } from "react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
@@ -17,8 +17,10 @@ import {
   restrictToRow,
   useConfirmLeave,
   useDockOrder,
+  useShowHand,
   writeConfirmLeave,
   writeDockOrder,
+  writeShowHand,
   type DockControlId,
 } from "./dockLayout";
 
@@ -27,6 +29,7 @@ const ICONS: Record<DockControlId, ReactNode> = {
   camera: <Video />,
   screen: <MonitorUp />,
   hear: <Headphones />,
+  hand: <Hand />,
 };
 
 /**
@@ -35,6 +38,7 @@ const ICONS: Record<DockControlId, ReactNode> = {
  */
 export function DockOrderSection() {
   const order = useDockOrder();
+  const showHand = useShowHand();
   const sensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 4 } }),
     useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates }),
@@ -66,7 +70,7 @@ export function DockOrderSection() {
             }}
           >
             <SortableContext items={order} strategy={horizontalListSortingStrategy}>
-              <div className="mt-3 grid grid-cols-4 gap-2">
+              <div className="mt-3 grid grid-cols-5 gap-2">
                 {order.map((id, index) => (
                   <ArrangeTile
                     key={id}
@@ -80,6 +84,12 @@ export function DockOrderSection() {
             </SortableContext>
           </DndContext>
         </div>
+        <SettingsToggleRow
+          label="Show “I’d like to speak”"
+          description="A button in calls that lets everyone know you’d like a turn. Its shortcut works even when the button is hidden."
+          checked={showHand}
+          onChange={writeShowHand}
+        />
       </SettingsRows>
     </SettingsSection>
   );

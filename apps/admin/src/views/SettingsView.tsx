@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import type { AdminApi } from "../api";
 import type { AccountSettings, CapabilityDefault, CapabilityName } from "../types";
-import { Button, Input, List, Loading, Notice, PageHeader, Row, Section, Select } from "../components/ui";
+import { Button, Field, Input, List, Loading, Notice, PageHeader, Row, Section, Select } from "../components/ui";
 import { CAPABILITY_LIMITS, capabilityText } from "../lib/format";
 import { IMAGE_TYPES, imageProblem } from "../lib/image";
 import { errorMessage, useLoad } from "../lib/useLoad";
@@ -105,6 +105,7 @@ export function SettingsView({ api }: { api: AdminApi }) {
           <Loading />
         ) : null}
       </Section>
+      <ServerName api={api} />
       <ServerImage api={api} />
     </>
   );
@@ -159,6 +160,54 @@ function WhoCanJoin({ api }: { api: AdminApi }) {
             </Row>
           ))}
         </List>
+      ) : loaded.loading ? (
+        <Loading />
+      ) : null}
+    </Section>
+  );
+}
+
+/** The name the apps show at the top of the sidebar, beside the server image. */
+function ServerName({ api }: { api: AdminApi }) {
+  const loaded = useLoad(() => api.serverName(), "server-name");
+  const [draft, setDraft] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const value = draft ?? loaded.data?.name ?? "";
+  const changed = loaded.data != null && value.trim() !== loaded.data.name;
+  const save = async () => {
+    setBusy(true);
+    setError("");
+    try {
+      loaded.set(await api.setServerName(value));
+      setDraft(null);
+    } catch (cause) {
+      setError(errorMessage(cause));
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <Section title="Server name" description="Shown at the top of the sidebar in the Raven app. People see a new name the next time Raven connects to the server.">
+      {loaded.error ? <Notice>{loaded.error}</Notice> : null}
+      {error ? <div className="mb-3"><Notice>{error}</Notice></div> : null}
+      {loaded.data ? (
+        <form
+          className="flex items-end gap-3"
+          onSubmit={(event) => {
+            event.preventDefault();
+            if (changed && !busy) void save();
+          }}
+        >
+          <div className="min-w-0 flex-1">
+            <Field label="Name" hint={`Leave it empty to use “${loaded.data.defaultName}”. Up to 64 characters.`}>
+              {(id) => <Input id={id} value={value} maxLength={64} placeholder={loaded.data?.defaultName} disabled={busy} onChange={(event) => setDraft(event.target.value)} />}
+            </Field>
+          </div>
+          <Button type="submit" variant="primary" size="sm" disabled={!changed || busy} className="mb-6">
+            {busy ? "Saving…" : "Save"}
+          </Button>
+        </form>
       ) : loaded.loading ? (
         <Loading />
       ) : null}

@@ -1,10 +1,10 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useCallback, useMemo, useState, type ReactNode } from "react";
 import { capabilitiesOf } from "@/lib/permissions";
 import { Avatar } from "@/components/ui/avatar";
 import { Tooltip } from "@/components/ui/tooltip";
 import { api, type LauncherNest } from "@/lib/api";
 import { cn } from "@/lib/utils";
-import { ChevronDown, ChevronRight, MapPin, PanelLeftClose, PanelLeftOpen, Plus, Users } from "lucide-react";
+import { ChevronDown, ChevronRight, House, MapPin, PanelLeftClose, PanelLeftOpen, Plus, Users } from "lucide-react";
 import { ConversationAvatar, SavedAvatar, UnreadDot } from "@/components/chat/ConversationRow";
 import type { ChatStore } from "@/lib/chat/store";
 import { LiveDot, NestGlyph, PersonAvatar, SectionLabel } from "./atoms";
@@ -12,9 +12,10 @@ import { PendingList } from "./Inbox";
 import { OFFLINE_RANK, personStatus, reachRank } from "./people";
 import { rowUnread } from "./friendsAndGroups";
 import { orderLiveNests } from "./liveCards";
-import { SidebarFriendsAndGroups, TreeTextNests } from "./SidebarChat";
+import { SidebarFriendsAndGroups } from "./SidebarChat";
 import { SidebarLive } from "./SidebarLive";
-import { lensForView, readLens, storeLens, viewSignature, type SidebarLens } from "./sidebarLens";
+import { TreeNests } from "./SidebarTreeNests";
+import { lensForView, readLens, storeLens, type SidebarLens } from "./sidebarLens";
 import { PRESENCE, type RavenShellData, type RavenView } from "./state";
 import { useChatSelector, useFriendsAndGroups, useMessagesUnread, useOpenPerson, useOpenSaved, useRavenConversation, useTreeChatSummaries } from "./useChat";
 import type { RavenMediaAdapterState } from "./useRavenMediaAdapter";
@@ -66,34 +67,18 @@ export function Sidebar({
     activeChatId,
   );
   const activeChatKind = useChatSelector(chat, (state) => (activeChatId ? state.conversations[activeChatId]?.summary.kind ?? "" : ""), "", activeChatId);
+  const activeChatName = useChatSelector(chat, (state) => (activeChatId ? state.conversations[activeChatId]?.summary.name ?? "" : ""), "", activeChatId);
   const [collapsedTrees, setCollapsedTrees] = useState<Set<string>>(() => readIdSet(COLLAPSED_TREES_KEY));
   const [createTreeOpen, setCreateTreeOpen] = useState(false);
 
-  // The lens is remembered per device, and follows the open view when that changes.
+  // The lens is remembered per device and changes only when the person changes it. Opening
+  // a view that is listed under the other lens leaves the lens alone and shows where it is.
   const [lens, setLensState] = useState<SidebarLens>(readLens);
-  const applyLens = useCallback((next: SidebarLens) => {
+  const setLens = useCallback((next: SidebarLens) => {
     storeLens(next);
     setLensState(next);
   }, []);
-  // Set when the person flips the lens, cleared when they open another view.
-  const flippedByHand = useRef(false);
-  const setLens = useCallback((next: SidebarLens) => {
-    flippedByHand.current = true;
-    applyLens(next);
-  }, [applyLens]);
-  const followed = lensForView(view, activeChatKind);
-  const viewChange = viewSignature(view, activeChatKind);
-  const viewOnly = viewSignature(view);
-  const lastViewOnly = useRef(viewOnly);
-  useEffect(() => {
-    // A chat's kind can arrive after it opened; by then a flip by hand wins.
-    const sameView = lastViewOnly.current === viewOnly;
-    lastViewOnly.current = viewOnly;
-    if (!sameView) flippedByHand.current = false;
-    if (followed && !(sameView && flippedByHand.current)) applyLens(followed);
-    // Only a change of view flips the lens, never the person looking at it.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [viewChange]);
+  const viewLens = lensForView(view, activeChatKind);
   const placesUnread = useMemo(() => [...treeChat.values()].some((summary) => summary.unread), [treeChat]);
   const lensUnread: Record<SidebarLens, boolean> = { places: placesUnread, people: messagesUnread };
   const otherLens: SidebarLens = lens === "places" ? "people" : "places";
@@ -252,20 +237,22 @@ export function Sidebar({
   return (
     <nav aria-label="Raven" className="flex min-h-0 flex-col">
       <div className="flex shrink-0 items-center gap-1 px-2 pb-1 pt-1">
-        <button
-          type="button"
-          onClick={() => onNavigate({ kind: "home" })}
-          aria-current={view.kind === "home" ? "page" : undefined}
-          aria-label={`Home, ${serverName}`}
-          title={data.serverProperties.description || serverName}
-          className={cn(
-            "flex h-9 min-w-0 flex-1 items-center gap-2.5 rounded-control px-2 text-left transition-colors",
-            view.kind === "home" ? "bg-secondary" : "hover:bg-secondary/60",
-          )}
-        >
-          <Avatar name={serverName} src={serverAvatar} className="h-6 w-6 rounded-chip bg-foreground text-background" />
-          <span className="min-w-0 flex-1 truncate text-body font-medium">{serverName}</span>
-        </button>
+        <Tooltip label="Home" side="bottom">
+          <button
+            type="button"
+            onClick={() => onNavigate({ kind: "home" })}
+            aria-current={view.kind === "home" ? "page" : undefined}
+            aria-label={`Home, ${serverName}`}
+            className={cn(
+              "flex h-9 min-w-0 flex-1 items-center gap-2.5 rounded-control px-2 text-left transition-colors",
+              view.kind === "home" ? "bg-secondary" : "hover:bg-secondary/60",
+            )}
+          >
+            <Avatar name={serverName} src={serverAvatar} className="h-6 w-6 rounded-chip bg-foreground text-background" />
+            <span className="min-w-0 flex-1 truncate text-body font-medium">{serverName}</span>
+            <House aria-hidden className="h-3.5 w-3.5 shrink-0 text-subtle" />
+          </button>
+        </Tooltip>
         <Tooltip label="Collapse sidebar" side="bottom">
           <button
             type="button"
@@ -290,33 +277,21 @@ export function Sidebar({
 
         <LensSwitch labels={{ places: data.labels.treePlural, people: "People" }} lens={lens} unread={lensUnread} onChange={setLens} />
 
+        {viewLens && viewLens !== lens ? (
+          <HereRow here={hereCue(view, data, { chatName: activeChatName, chatTreeId: openTextNestTree })} onClick={() => setLens(viewLens)} />
+        ) : null}
+
         {lens === "places" ? (
           <section>
-            <SectionLabel
-              className="px-2"
-              action={!capabilitiesOf(data.user).createSpaces ? undefined : (
-                <Tooltip label={`New ${treeSingular.toLowerCase()}`} side="right">
-                  <button
-                    type="button"
-                    aria-label={`New ${treeSingular.toLowerCase()}`}
-                    onClick={() => setCreateTreeOpen(true)}
-                    className="flex h-6 w-6 items-center justify-center rounded-chip text-subtle transition-colors hover:bg-secondary hover:text-foreground"
-                  >
-                    <Plus className="h-3.5 w-3.5" />
-                  </button>
-                </Tooltip>
-              )}
-            >
-              {data.labels.treePlural}
-            </SectionLabel>
             {data.trees.length ? (
               <div className="space-y-px">
                 {data.trees.map((tree) => {
                   const live = liveByTree.get(tree.id) ?? [];
                   const text = treeChat.get(tree.id);
-                  // A tree opens to show the text nests with unread messages and the one that is
-                  // open. The rest are in its lobby; what is live is in the Live strip.
-                  const expandable = Boolean(chat && (text?.unread || openTextNestTree === tree.id));
+                  // A tree opens to show all its nests, voice and text, in its lobby's order. A voice
+                  // nest opens its threshold; nothing here joins.
+                  const details = data.treeDetails[tree.id];
+                  const expandable = Boolean(details?.activeNests.length || details?.inactiveNests.length || (chat && text?.count));
                   const open = expandable && !collapsedTrees.has(tree.id);
                   const active = (view.kind === "tree" || view.kind === "tree-settings") && view.id === tree.id;
                   return (
@@ -349,9 +324,9 @@ export function Sidebar({
                           {text?.unread && !open ? <UnreadDot /> : null}
                         </button>
                       </div>
-                      {open && chat ? (
+                      {open ? (
                         <div className="space-y-px">
-                          <TreeTextNests chat={chat} treeId={tree.id} view={view} events={data.treeDetails[tree.id]?.events} onNavigate={onNavigate} />
+                          <TreeNests chat={chat} data={data} treeId={tree.id} view={view} hereId={media.activeNestId} onNavigate={onNavigate} />
                         </div>
                       ) : null}
                     </div>
@@ -363,6 +338,16 @@ export function Sidebar({
                 Create a {treeSingular.toLowerCase()} for a group you trust, or search for a public one.
               </p>
             )}
+            {capabilitiesOf(data.user).createSpaces ? (
+              <button
+                type="button"
+                onClick={() => setCreateTreeOpen(true)}
+                className="mt-1 flex h-8 w-full items-center gap-2.5 rounded-control px-2 text-left text-small text-muted-foreground transition-colors hover:bg-secondary/60 hover:text-foreground"
+              >
+                <Plus className="h-4 w-4 shrink-0" />
+                New {treeSingular.toLowerCase()}
+              </button>
+            ) : null}
           </section>
         ) : (
           <SidebarFriendsAndGroups chat={chat} data={data} view={view} onNavigate={onNavigate} />
@@ -385,6 +370,45 @@ export function Sidebar({
       />
     </nav>
   );
+}
+
+/** The open view, when it is listed under the lens that is not showing. Opens that lens on request. */
+function HereRow({ here, onClick }: { here: { name: string; detail: string } | null; onClick: () => void }) {
+  if (!here) return null;
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      aria-current="page"
+      className="flex h-9 w-full items-center gap-2 rounded-control bg-secondary px-2 text-left"
+    >
+      <span className="min-w-0 flex-1 truncate text-small font-medium">{here.name}</span>
+      <span className="shrink-0 text-caption text-subtle">{here.detail}</span>
+    </button>
+  );
+}
+
+/** What to call the open view in the sidebar: its name, and where it sits. */
+function hereCue(view: RavenView, data: RavenShellData, chat: { chatName: string; chatTreeId: string }): { name: string; detail: string } | null {
+  const treeName = (id?: string | null) => data.trees.find((tree) => tree.id === id)?.name;
+  switch (view.kind) {
+    case "tree":
+    case "tree-settings":
+      return { name: treeName(view.id) ?? data.labels.treeSingular, detail: "Open now" };
+    case "tree-preview":
+      return { name: view.result.tree.name, detail: "Open now" };
+    case "nest":
+    case "waiting": {
+      const nest = data.getNest(view.id);
+      return { name: nest?.name ?? data.labels.nestSingular, detail: treeName(nest?.treeId) ?? "Open now" };
+    }
+    case "user":
+      return { name: data.getPerson(view.id)?.name ?? view.person?.name ?? "Profile", detail: "Open now" };
+    case "chat":
+      return { name: chat.chatName || "Conversation", detail: treeName(chat.chatTreeId) ?? "Open now" };
+    default:
+      return null;
+  }
 }
 
 /** Trees (or Spaces, in the user's words) | People. The lens that is not showing gets a dot when it holds something unread. */

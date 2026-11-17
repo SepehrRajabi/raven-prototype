@@ -100,7 +100,7 @@ export function MainView({
       );
     }
     case "mixer":
-      return <MixerView media={media} onClose={onBack} />;
+      return <MixerView media={media} onClose={onBack} onNavigate={onNavigate} />;
     case "licences":
       return <LicencesView onBack={onBack} />;
   }
@@ -123,7 +123,7 @@ function MissingView({ what, onNavigate }: { what: string; onNavigate: (view: Ra
  * The mixer is the deep basement: every source, processor and level. It opens
  * in the main surface so the bottom bar stays in reach while you adjust it.
  */
-function MixerView({ media, onClose }: { media: RavenMediaAdapterState; onClose: () => void }) {
+function MixerView({ media, onClose, onNavigate }: { media: RavenMediaAdapterState; onClose: () => void; onNavigate: (view: RavenView) => void }) {
   // Outside a call nothing else keeps local capture open; ask for it while the meters
   // are on screen.
   useEffect(() => {
@@ -136,7 +136,12 @@ function MixerView({ media, onClose }: { media: RavenMediaAdapterState; onClose:
       <ViewHeader
         title="Mixer"
         subtitle="Every sound you send and hear, with its level and processing."
-        actions={<Button variant="secondary" size="sm" onClick={onClose}>Done</Button>}
+        actions={
+          <>
+            <Button variant="ghost" size="sm" onClick={() => onNavigate({ kind: "settings", section: "audio-video" })}>Audio settings</Button>
+            <Button variant="secondary" size="sm" onClick={onClose}>Done</Button>
+          </>
+        }
       />
       <div className="min-h-0 flex-1 overflow-hidden p-5">
         <AudioMixerPanel deafen={{ deafened: media.localDeafened, onToggle: () => void media.toggleDeafen() }} />

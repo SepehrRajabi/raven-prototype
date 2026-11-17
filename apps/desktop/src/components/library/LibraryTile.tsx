@@ -35,6 +35,7 @@ export function LibraryTile({
   height,
   actions,
   selected,
+  flush,
   onActivate,
   onKeyDown,
 }: {
@@ -44,6 +45,8 @@ export function LibraryTile({
   actions: ItemActions;
   /** Shown as a tick, in the library page's multi-select. */
   selected?: boolean;
+  /** Media fills the whole tile, for gallery rows sized to the item's own shape. */
+  flush?: boolean;
   onActivate: (item: LibraryItem, event: MouseEvent<HTMLButtonElement> | KeyboardEvent<HTMLButtonElement>) => void;
   onKeyDown?: (event: KeyboardEvent<HTMLButtonElement>) => void;
 }) {
@@ -87,7 +90,7 @@ export function LibraryTile({
         )}
       >
         {ready || item.variants.length > 0 ? (
-          <LibraryMedia media={item} width={width - 8} height={height - 8} active={ready && (active || focused)} className="pointer-events-none" />
+          <LibraryMedia media={item} width={flush ? width : width - 8} height={flush ? height : height - 8} active={ready && (active || focused)} className="pointer-events-none" />
         ) : null}
         {item.status === "processing" || item.status === "uploading" ? (
           <span className="absolute inset-0 flex flex-col items-center justify-center gap-1 bg-black/55 text-caption text-white">

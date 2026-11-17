@@ -296,6 +296,12 @@ export function VoiceOverlaySettingsPanel({ treeLabel = "tree" }: { treeLabel?: 
             onChange={(checked) => void update({ overlayButtons: { ...settings.overlayButtons, away: checked } })}
           />
           <SettingsToggleRow
+            label="I’d like to speak button"
+            checked={settings.overlayButtons.hand}
+            disabled={!enabled || saving === "overlayButtons"}
+            onChange={(checked) => void update({ overlayButtons: { ...settings.overlayButtons, hand: checked } })}
+          />
+          <SettingsToggleRow
             label="Scroll on a person to change their volume"
             description="Changes only what you hear."
             checked={settings.scrollVolume}

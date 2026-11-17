@@ -5512,7 +5512,7 @@ dependencies = [
 
 [[package]]
 name = "raven-desktop"
-version = "0.1.11"
+version = "0.1.12"
 dependencies = [
  "ashpd",
  "base64 0.23.1",
@@ -5536,6 +5536,7 @@ dependencies = [
  "objc2-foundation",
  "png",
  "quinn",
+ "raven-mobile-native",
  "rtrb",
  "rustls",
  "screencapturekit",
@@ -5571,6 +5572,18 @@ dependencies = [
  "x11-dl",
  "yamux",
  "zip 9.5.1",
+]
+
+[[package]]
+name = "raven-mobile-native"
+version = "0.1.0"
+dependencies = [
+ "jni 0.21.1",
+ "livekit",
+ "serde",
+ "tauri",
+ "tauri-plugin",
+ "webrtc-sys-build",
 ]
 
 [[package]]

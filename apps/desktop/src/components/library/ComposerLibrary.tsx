@@ -72,6 +72,29 @@ export function ComposerLibraryButton({
   const [version, setVersion] = useState(0);
   const addKind = useRef<LibraryKind>("gif");
   const files = useRef<HTMLInputElement>(null);
+  const trigger = useRef<HTMLButtonElement>(null);
+  // The larger view covers the conversation above the message box; null is the quick picker.
+  const [expanded, setExpanded] = useState<{ width: number; height: number; offset: number } | null>(null);
+  const [wantExpanded, setWantExpanded] = useState(false);
+
+  useEffect(() => {
+    if (!open || !wantExpanded) {
+      setExpanded(null);
+      return;
+    }
+    const measure = () => {
+      const button = trigger.current;
+      const pane = button?.closest("[data-chat-pane]");
+      if (!button || !pane) return setExpanded(null);
+      const area = pane.getBoundingClientRect();
+      const own = button.getBoundingClientRect();
+      // Aligned to the button's end, then shifted so the right edge meets the pane's inset.
+      setExpanded({ width: Math.max(480, area.width - 24), height: Math.max(520, own.top - area.top - 16), offset: own.right - (area.right - 12) });
+    };
+    measure();
+    window.addEventListener("resize", measure);
+    return () => window.removeEventListener("resize", measure);
+  }, [open, wantExpanded]);
 
   const add = async (sources: Array<{ path: string } | File>) => {
     const staged = await stageAll(sources);
@@ -117,10 +140,16 @@ export function ComposerLibraryButton({
 
   return (
     <>
-      <Popover open={open} onOpenChange={setOpen}>
+      <Popover
+        open={open}
+        onOpenChange={(value) => {
+          setOpen(value);
+          if (value) setWantExpanded(false);
+        }}
+      >
         <Tooltip label="GIFs and stickers">
           <PopoverTrigger asChild>
-            <Button size="icon" variant="ghost" title="" aria-label="GIFs and stickers">
+            <Button ref={trigger} size="icon" variant="ghost" title="" aria-label="GIFs and stickers">
               <Sticker className="h-4 w-4" />
             </Button>
           </PopoverTrigger>
@@ -129,12 +158,16 @@ export function ComposerLibraryButton({
           side="top"
           align="end"
           className="w-auto p-0"
+          alignOffset={expanded?.offset ?? 0}
+          style={expanded ? { width: expanded.width, height: expanded.height } : undefined}
           onCloseAutoFocus={(event) => {
             event.preventDefault();
             onClosed();
           }}
         >
           <LibraryPicker
+            expanded={expanded !== null}
+            onExpandedChange={setWantExpanded}
             conversationId={conversationId}
             userId={context.userId}
             inSpace={context.inSpace}

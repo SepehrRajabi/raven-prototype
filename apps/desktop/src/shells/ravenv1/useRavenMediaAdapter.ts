@@ -59,6 +59,8 @@ import {
   localVideoStatus,
   type LocalVideoStatus,
   microphonesToMuteBeforeJoin,
+  sourcesToMuteOnDeafen,
+  sourcesToRestoreAfterDeafen,
 } from "./mediaState";
 import { normalizeSelectedDeviceId, selectedDeviceIdForSource } from "@/lib/mediaDevicePreference";
 import { DeviceSwitchWatcher, devicesInUse } from "@/lib/deviceSwitch";
@@ -66,8 +68,10 @@ import { toast } from "@/components/ui/toast";
 import { studioJustFellBack, studioTooSlowNotice } from "@/lib/noiseSuppression";
 import { NestEntryCancelled } from "./nestEntry";
 import { presenceForActiveNest } from "./state";
-import { callStateCatchUp, callStateSupported, participantCallState } from "@/lib/callState";
+import { callStateCatchUp, callStateSupported, participantCallState, raisedHandSupported } from "@/lib/callState";
+import { hadTurn, NO_SPEECH, SPEECH_TICK_MS, trackSpeech } from "@/lib/raisedHand";
 import { rememberActiveNest } from "@/lib/crashRecovery";
+import { desktopCallHost, type CallHost } from "@/lib/callHost";
 
 export type SelfMediaPreviewMode = SelfPreviewMode;
 
@@ -171,7 +175,15 @@ export interface RavenMediaAdapterState {
   callVote: CallVoteState;
   /** False against a server that predates the shared call state. */
   awaySupported: boolean;
+  /** "I'd like to speak" is up. It lowers itself once you have spoken for a few seconds. */
+  localHand: boolean;
+  /** False against a server that predates raised hands. */
+  handSupported: boolean;
   deafenMode: DeafenMode;
+  /** While deafened, others' shared system and app audio keeps playing. */
+  deafenHearsSatellites: boolean;
+  /** While deafened, your own shared system and app audio keeps playing for others. */
+  deafenKeepsMySatellites: boolean;
   deafenSupported: boolean;
   outputMuteSupported: boolean;
   /** The user has picked something to share. Outside a call nothing is captured or sent. */
@@ -231,7 +243,10 @@ export interface RavenMediaAdapterState {
   toggleMic: () => Promise<void>;
   toggleCamera: () => Promise<void>;
   toggleDeafen: () => Promise<void>;
+  setDeafenHearsSatellites: (hear: boolean) => Promise<void>;
+  setDeafenKeepsMySatellites: (keep: boolean) => void;
   setAway: (away: boolean) => Promise<void>;
+  setHand: (hand: boolean) => Promise<void>;
   startScreenShare: () => Promise<void>;
   stopScreenShare: () => Promise<void>;
   refreshMediaDevices: () => Promise<void>;
@@ -279,8 +294,11 @@ export function useRavenMediaAdapter(
     presenceState?: UserPresenceState;
     presenceReachability?: UserReachability;
     localUserId?: string;
+    /** The platform's share of a call, chosen by the shell. Desktop leaves it to the engines. */
+    callHost?: CallHost;
   } = {},
 ): RavenMediaAdapterState {
+  const callHost = options.callHost ?? desktopCallHost;
   const [phase, setPhase] = useState<MediaAdapterPhase>("idle");
   const [activeNestId, setActiveNestId] = useState<string | null>(null);
   const [error, setError] = useState("");
@@ -306,6 +324,8 @@ export function useRavenMediaAdapter(
   const [selectedOutputPreference, setSelectedOutputPreference] = useState<string | null>(initialSettings.selectedOutput ?? null);
   const deviceSwitchRef = useRef(new DeviceSwitchWatcher());
   const [deafenMode, setDeafenModeState] = useState<DeafenMode>(initialSettings.deafenMode ?? "instant");
+  const [deafenHearsSatellites, setDeafenHearsSatellitesState] = useState(initialSettings.deafenHearsSatellites ?? false);
+  const [deafenKeepsMySatellites, setDeafenKeepsMySatellitesState] = useState(initialSettings.deafenKeepsMySatellites ?? true);
   const [networkActivitySettings, setNetworkActivitySettings] = useState<NetworkActivitySettings>(
     initialSettings.networkActivity ?? DEFAULT_NETWORK_ACTIVITY_SETTINGS,
   );
@@ -314,13 +334,18 @@ export function useRavenMediaAdapter(
   const [away, setAwayState] = useState(false);
   const [awaySupported, setAwaySupported] = useState(false);
   const awayRef = useRef(false);
+  const [hand, setHandState] = useState(false);
+  const [handSupported, setHandSupported] = useState(false);
+  const handRef = useRef(false);
   /** The deafened value the server last confirmed for this participation. */
   const deafenSharedRef = useRef(false);
   const localUserIdRef = useRef(options.localUserId);
   localUserIdRef.current = options.localUserId;
   const [reconnecting, setReconnecting] = useState(false);
-  const deafenRef = useRef({ deafened: false, mode: deafenMode });
-  deafenRef.current = { deafened, mode: deafenMode };
+  const deafenRef = useRef({ deafened: false, mode: deafenMode, hearsSatellites: deafenHearsSatellites });
+  deafenRef.current = { deafened, mode: deafenMode, hearsSatellites: deafenHearsSatellites };
+  /** The local sources your own deafen muted, unmuted again on undeafen. Mutes live in the engine, so this outlives a reconnect. */
+  const deafenMutedSourcesRef = useRef<string[]>([]);
   const reconnectLoopRef = useRef<Promise<void> | null>(null);
   const mediaLossRef = useRef(false);
   const audioLostRef = useRef(false);
@@ -642,6 +667,8 @@ export function useRavenMediaAdapter(
    * reconnect loop itself only calls `connectMedia`, so the mic stays open across it.
    */
   const cleanupMediaOnly = useCallback(async () => {
+    // Release the host's call first, so no capture restarts during teardown.
+    await callHost.endCall().catch(() => undefined);
     const [audioResult, videoResult] = await Promise.allSettled([
       audioCommands.disconnectRoom(),
       videoCommands.disconnectRoom(),
@@ -650,7 +677,7 @@ export function useRavenMediaAdapter(
     const released = await audioCommands.setCallActive(false).catch(() => null);
     if (released) setAudioState(released);
     else if (audioResult.status === "fulfilled") setAudioState(audioResult.value);
-  }, []);
+  }, [callHost]);
 
   const muteLocalMicrophones = useCallback(async () => {
     let state = await audioCommands.getState();
@@ -684,8 +711,11 @@ export function useRavenMediaAdapter(
   const resetSharedCallState = useCallback(() => {
     awayRef.current = false;
     deafenSharedRef.current = false;
+    handRef.current = false;
     setAwayState(false);
     setAwaySupported(false);
+    setHandState(false);
+    setHandSupported(false);
   }, []);
 
   /**
@@ -698,9 +728,15 @@ export function useRavenMediaAdapter(
     const { session } = await api.joinSession(nestId);
     const supported = callStateSupported(session);
     setAwaySupported(supported);
+    const handsHere = raisedHandSupported(session);
+    setHandSupported(handsHere);
+    if (!handsHere && handRef.current) {
+      handRef.current = false;
+      setHandState(false);
+    }
     if (!supported) return;
     const server = participantCallState(session.participants, localUserIdRef.current ?? "");
-    const want = { away: awayRef.current, deafened: deafenRef.current.deafened };
+    const want = { away: awayRef.current, deafened: deafenRef.current.deafened, hand: handsHere ? handRef.current : server.hand };
     deafenSharedRef.current = want.deafened;
     const patch = callStateCatchUp(server, want);
     if (!patch) return;
@@ -768,10 +804,11 @@ export function useRavenMediaAdapter(
     activeNestRef.current = null;
     if (nestId) void api.disconnectFromNest(nestId).catch(() => undefined);
     void Promise.allSettled([
+      callHost.endCall(),
       audioCommands.disconnectRoom().then(() => audioCommands.setCallActive(false)),
       videoCommands.disconnectRoom(),
     ]);
-  }, []);
+  }, [callHost]);
 
   useEffect(() => {
     if (!activeNestId) return;
@@ -841,6 +878,7 @@ export function useRavenMediaAdapter(
       let nextAudioState = await audioCommands.connectRoom(rtcServerUrl || audioToken.url, audioToken.token);
       checkpoint();
       const deafen = deafenRef.current;
+      nextAudioState = await audioCommands.setDeafenKeepsSatellites(deafen.hearsSatellites);
       nextAudioState = await audioCommands.setRemoteAudioReceiving(!(deafen.deafened && deafen.mode === "bandwidthSaver"));
       nextAudioState = await audioCommands.setOutputMuted(deafen.deafened);
       setAudioState(nextAudioState);
@@ -926,6 +964,10 @@ export function useRavenMediaAdapter(
           await guard(applyVideoJoinDefaults());
           if (alwaysJoinMutedRef.current || options?.muted) await guard(muteLocalMicrophones());
 
+          // Only a user-initiated Nest entry opens the host's call. Reconnects reuse it
+          // and cannot revive a call the host ended.
+          await guard(callHost.beginCall());
+
           // Open local capture before connecting, so a microphone kept from an earlier
           // call is already running when its track is published. A device that fails to
           // open is reported on its strip and retried; it must not fail the join.
@@ -977,7 +1019,7 @@ export function useRavenMediaAdapter(
       work.catch(() => undefined);
       return Promise.race([work, aborted]);
     },
-    [applyVideoJoinDefaults, cleanupMediaOnly, connectMedia, leaveMediaSession, muteLocalMicrophones, nestLabel, onStateChanged, refreshMediaDevices, refreshNativeState, resetSharedCallState, setNonFatalError],
+    [applyVideoJoinDefaults, callHost, cleanupMediaOnly, connectMedia, leaveMediaSession, muteLocalMicrophones, nestLabel, onStateChanged, refreshMediaDevices, refreshNativeState, resetSharedCallState, setNonFatalError],
   );
 
   const cancelMediaJoin = useCallback(() => {
@@ -987,6 +1029,17 @@ export function useRavenMediaAdapter(
     // The teardown continues in the background; the call is already not "joining".
     setPhase((current) => (current === "joining" ? "idle" : current));
   }, []);
+
+  // The host can end the call itself (MobileNative going to the background), and a
+  // granted permission can reveal devices such as cameras.
+  useEffect(() => callHost.subscribe({
+    onEnded: () => {
+      cancelMediaJoin();
+      setReconnecting(false);
+      if (activeNestRef.current) void leaveMediaSession();
+    },
+    onChanged: () => void refreshMediaDevices(),
+  }), [callHost, cancelMediaJoin, leaveMediaSession, refreshMediaDevices]);
 
   // --- Session supervisor --------------------------------------------------------------
   // LiveKit retries a dropped connection by itself for a while. When it gives up, or the
@@ -1103,13 +1156,27 @@ export function useRavenMediaAdapter(
    * retained from an earlier session keeps whatever state it already had.
    */
   const prepareMicrophone = useCallback(async () => {
-    if (!audioCapabilities?.supportsMicrophone) return;
+    if (!audioCapabilities?.supportsMicrophone || !callHost.capturePermitted("microphone")) return;
     const mic = await ensureDefaultMic();
     if (mic.publishedTrack) return;
     if (!mic.channelStrip.mute.muted) await audioCommands.setLocalChannelMute(mic.id, true);
     setAudioState(await audioCommands.publishAudioSource(mic.id));
-  }, [audioCapabilities?.supportsMicrophone, ensureDefaultMic]);
+  }, [audioCapabilities?.supportsMicrophone, callHost, ensureDefaultMic]);
   prepareMicrophoneRef.current = prepareMicrophone;
+
+  // Prepare the signal before entering (design §6.3): the microphone source exists from
+  // the start, carrying the chosen device and remembered processing, so the dock, the
+  // Mixer and the switches show it outside a call. Nothing is captured or published until
+  // a call or the Mixer asks for it, and joining finds the source already configured.
+  const micReadyRef = useRef(false);
+  const supportsMicrophone = audioCapabilities?.supportsMicrophone === true;
+  useEffect(() => {
+    if (!supportsMicrophone || micReadyRef.current) return;
+    micReadyRef.current = true;
+    void ensureDefaultMic().catch(() => {
+      micReadyRef.current = false;
+    });
+  }, [ensureDefaultMic, supportsMicrophone]);
 
   const publishMic = useCallback(async () => {
     setError("");
@@ -1118,6 +1185,10 @@ export function useRavenMediaAdapter(
       return;
     }
     try {
+      if (!(await callHost.requestCapture("microphone"))) {
+        setNonFatalError("Raven does not have microphone permission.", "permission_denied", "Allow microphone access in app permissions, or continue listening.");
+        return;
+      }
       const primaryMic = await ensureDefaultMic();
       const sources = micSources.length ? [primaryMic, ...micSources.slice(1)] : [primaryMic];
       let state: AudioMixerState | null = null;
@@ -1129,7 +1200,7 @@ export function useRavenMediaAdapter(
     } catch (err) {
       setNonFatalError(classifyMediaError(err, "Microphone could not be published").message, classifyMediaError(err).kind, "Check microphone permission or pick another input device.");
     }
-  }, [audioCapabilities?.supportsMicrophone, ensureDefaultMic, micSources, setNonFatalError]);
+  }, [audioCapabilities?.supportsMicrophone, callHost, ensureDefaultMic, micSources, setNonFatalError]);
 
   const unpublishMic = useCallback(async () => {
     setError("");
@@ -1163,17 +1234,9 @@ export function useRavenMediaAdapter(
   const serverMuted = audioState?.session.publishRevoked === true;
   const serverDeafened = audioState?.session.subscribeRevoked === true;
 
-  const toggleMic = useCallback(async () => {
-    if (serverMuted) return;
-    // Heard at once, as the answer to the click or hotkey. Only in a call: the engine
-    // drops it when no call is playing.
-    void audioCommands.playSoundCue(localMicOn ? "mute" : "unmute").catch(() => undefined);
-    if (localMicOn) {
-      await muteMic();
-    } else {
-      await publishMic();
-    }
-  }, [localMicOn, muteMic, publishMic, serverMuted]);
+  // Defined below, after deafen, which turning the mic on can undo.
+  const toggleMicRef = useRef<() => Promise<void>>(async () => undefined);
+  const toggleMic = useCallback(() => toggleMicRef.current(), []);
 
   const setMicDevice = useCallback(async (deviceId: string | null) => {
     setError("");
@@ -1191,6 +1254,19 @@ export function useRavenMediaAdapter(
     }
   }, [ensureDefaultMic, saveMediaSettings, setNonFatalError]);
 
+  /** Camera permission from the host. False means denied or failed, already reported. */
+  const requestCameraAccess = useCallback(async () => {
+    try {
+      const granted = await callHost.requestCapture("camera");
+      if (!granted) setNonFatalError("Raven does not have camera permission.", "permission_denied", "Allow camera access in app permissions, or continue without video.");
+      return granted;
+    } catch (err) {
+      const classified = classifyMediaError(err, "Camera permission could not be checked");
+      setNonFatalError(classified.message, classified.kind, "Check camera permission in app permissions.");
+      return false;
+    }
+  }, [callHost, setNonFatalError]);
+
   const startCamera = useCallback(async (camera: CameraDevice, profile: VideoQualityProfile = DEFAULT_VIDEO_PROFILE) => {
     setError("");
     setPreferredCameraId(camera.id);
@@ -1200,13 +1276,14 @@ export function useRavenMediaAdapter(
       return;
     }
     try {
+      if (!(await requestCameraAccess())) return;
       if (cameraSource) await videoCommands.stopSource(cameraSource.id);
       setVideoState(await videoCommands.startCamera(camera.id, camera.name || "Camera", profile));
     } catch (err) {
       const classified = classifyMediaError(err, "Camera could not be started");
       setNonFatalError(classified.message, classified.kind, "Check camera permission or choose another camera.");
     }
-  }, [cameraSource, setNonFatalError, videoCapabilities?.supportsCamera]);
+  }, [cameraSource, setNonFatalError, requestCameraAccess, videoCapabilities?.supportsCamera]);
 
   const setCameraDevice = useCallback(async (deviceId: string | null) => {
     setError("");
@@ -1254,6 +1331,8 @@ export function useRavenMediaAdapter(
       await stopCamera();
       return;
     }
+    // Ask before enumerating: MobileNative's CameraX may list no devices until granted.
+    if (!(await requestCameraAccess())) return;
     const listedCameras = cameras.length ? cameras : await videoCommands.listCameras();
     const camera = listedCameras.find((candidate) => candidate.id === preferredCameraId) ?? listedCameras[0];
     if (!camera) {
@@ -1261,7 +1340,7 @@ export function useRavenMediaAdapter(
       return;
     }
     await startCamera(camera, preferredCameraProfile);
-  }, [cameras, localCameraEnabled, preferredCameraId, preferredCameraProfile, setNonFatalError, startCamera, stopCamera]);
+  }, [cameras, localCameraEnabled, preferredCameraId, preferredCameraProfile, setNonFatalError, requestCameraAccess, startCamera, stopCamera]);
 
   const setRemoteAudioReceiving = useCallback(async (enabled: boolean) => {
     try {
@@ -1285,6 +1364,27 @@ export function useRavenMediaAdapter(
     await setRemoteAudioReceiving(!(nextDeafened && mode === "bandwidthSaver"));
   }, [setRemoteAudioReceiving]);
 
+  /** Your own deafen mutes your mic, and your shared audio unless you keep sharing it. */
+  const muteForDeafen = useCallback(async () => {
+    let state = await audioCommands.getState();
+    const muted = sourcesToMuteOnDeafen(state.localSources, deafenKeepsMySatellites);
+    for (const sourceId of muted) state = await audioCommands.setLocalChannelMute(sourceId, true);
+    deafenMutedSourcesRef.current = muted;
+    setAudioState(state);
+  }, [deafenKeepsMySatellites]);
+
+  /** Undeafening puts back what the deafen muted, and nothing you muted yourself. */
+  const restoreAfterDeafen = useCallback(async () => {
+    const mutedByDeafen = deafenMutedSourcesRef.current;
+    deafenMutedSourcesRef.current = [];
+    if (!mutedByDeafen.length) return;
+    let state = await audioCommands.getState();
+    for (const sourceId of sourcesToRestoreAfterDeafen(state.localSources, mutedByDeafen, state.session.publishRevoked)) {
+      state = await audioCommands.setLocalChannelMute(sourceId, false);
+    }
+    setAudioState(state);
+  }, []);
+
   const toggleDeafen = useCallback(async () => {
     if (serverDeafened) return;
     const nextDeafened = !deafened;
@@ -1300,8 +1400,48 @@ export function useRavenMediaAdapter(
         "unsupported",
         "Try again, or leave and rejoin media.",
       );
+      return;
     }
-  }, [applyDeafenStrategy, deafenMode, deafened, setNonFatalError]);
+    try {
+      if (nextDeafened) await muteForDeafen();
+      else await restoreAfterDeafen();
+    } catch (err) {
+      setNonFatalError(
+        messageFromError(err, nextDeafened ? "Your microphone could not be muted" : "Your microphone could not be turned back on"),
+        "publish_failure",
+        nextDeafened ? "Mute your microphone yourself." : "Turn your microphone on yourself.",
+      );
+    }
+  }, [applyDeafenStrategy, deafenMode, deafened, muteForDeafen, restoreAfterDeafen, setNonFatalError]);
+
+  // Turning the mic on while deafened undeafens too: you asked to be heard, so you hear.
+  toggleMicRef.current = async () => {
+    if (serverMuted) return;
+    // Heard at once, as the answer to the click or hotkey. Only in a call: the engine
+    // drops it when no call is playing.
+    void audioCommands.playSoundCue(localMicOn ? "mute" : "unmute").catch(() => undefined);
+    if (localMicOn) {
+      await muteMic();
+      return;
+    }
+    if (deafened && !serverDeafened) await toggleDeafen();
+    await publishMic();
+  };
+
+  const setDeafenHearsSatellites = useCallback(async (hear: boolean) => {
+    setDeafenHearsSatellitesState(hear);
+    saveMediaSettings({ deafenHearsSatellites: hear });
+    try {
+      setAudioState(await audioCommands.setDeafenKeepsSatellites(hear));
+    } catch (err) {
+      setNonFatalError(messageFromError(err, "Shared audio could not be changed"), "unsupported", "Try again, or leave and rejoin media.");
+    }
+  }, [saveMediaSettings, setNonFatalError]);
+
+  const setDeafenKeepsMySatellites = useCallback((keep: boolean) => {
+    setDeafenKeepsMySatellitesState(keep);
+    saveMediaSettings({ deafenKeepsMySatellites: keep });
+  }, [saveMediaSettings]);
 
   // Others only need to know that you can't hear them. Quick toggles collapse to the
   // last value, and a failed send is not worth interrupting the user for.
@@ -1322,6 +1462,11 @@ export function useRavenMediaAdapter(
     if (!nestId || !awaySupported || awayRef.current === next) return;
     awayRef.current = next;
     setAwayState(next);
+    // The server lowers a hand when you step away; do the same here so it answers at once.
+    if (next && handRef.current) {
+      handRef.current = false;
+      setHandState(false);
+    }
     try {
       await api.setCallState(nestId, { away: next });
     } catch (err) {
@@ -1339,6 +1484,29 @@ export function useRavenMediaAdapter(
     }
   }, [awaySupported, nestLabel, setNonFatalError]);
 
+  const setHand = useCallback(async (next: boolean) => {
+    const nestId = activeNestRef.current;
+    if (!nestId || !handSupported || handRef.current === next) return;
+    if (next && awayRef.current) void setAway(false);
+    handRef.current = next;
+    setHandState(next);
+    try {
+      await api.setCallState(nestId, { hand: next });
+    } catch (err) {
+      if (handRef.current === next && activeNestRef.current === nestId) {
+        handRef.current = !next;
+        setHandState(!next);
+      }
+      setNonFatalError(
+        messageFromError(err, "Your hand could not be shared"),
+        "rtc_failure",
+        next
+          ? `Others in the ${nestLabel} can't see that you'd like to speak. Try again.`
+          : `Others in the ${nestLabel} may still see your hand up. Try again.`,
+      );
+    }
+  }, [handSupported, nestLabel, setAway, setNonFatalError]);
+
   // Back in a bit clears itself when you come back: unmuting, or talking with the mic on.
   const localSpeaking = Boolean(options.localUserId && speakingActivity[options.localUserId]?.speaking);
   const micWasEnabledRef = useRef(localMicEnabled);
@@ -1347,6 +1515,21 @@ export function useRavenMediaAdapter(
     micWasEnabledRef.current = localMicEnabled;
     if (awayRef.current && localMicEnabled && (unmuted || localSpeaking)) void setAway(false);
   }, [localMicEnabled, localSpeaking, setAway]);
+
+  // A raised hand lowers itself once you have had your turn: a few seconds of your own
+  // speech with the mic live. Speech while muted or server-muted is not heard, so it
+  // does not count.
+  const localSpeakingRef = useRef(localSpeaking);
+  localSpeakingRef.current = localSpeaking;
+  useEffect(() => {
+    if (!hand || !localMicEnabled || serverMuted) return;
+    let run = NO_SPEECH;
+    const timer = window.setInterval(() => {
+      run = trackSpeech(run, localSpeakingRef.current, Date.now());
+      if (hadTurn(run)) void setHand(false);
+    }, SPEECH_TICK_MS);
+    return () => window.clearInterval(timer);
+  }, [hand, localMicEnabled, serverMuted, setHand]);
 
   const setOutputDevice = useCallback(async (deviceId: string | null) => {
     setError("");
@@ -1568,9 +1751,13 @@ export function useRavenMediaAdapter(
     localServerMuted: serverMuted,
     localServerDeafened: serverDeafened,
     localAway: away,
+    localHand: hand,
+    handSupported,
     callVote,
     awaySupported,
     deafenMode,
+    deafenHearsSatellites,
+    deafenKeepsMySatellites,
     deafenSupported: true,
     outputMuteSupported: false,
     screenSharing,
@@ -1618,7 +1805,10 @@ export function useRavenMediaAdapter(
     toggleMic,
     toggleCamera,
     toggleDeafen,
+    setDeafenHearsSatellites,
+    setDeafenKeepsMySatellites,
     setAway,
+    setHand,
     startScreenShare,
     stopScreenShare,
     refreshMediaDevices,
@@ -1718,6 +1908,8 @@ type MediaSettings = {
   echoCancellation?: boolean;
   autoGainControl?: boolean;
   deafenMode?: DeafenMode;
+  deafenHearsSatellites?: boolean;
+  deafenKeepsMySatellites?: boolean;
   networkActivity?: NetworkActivitySettings;
   soundCues?: SoundCueSettings;
   selfMediaPreviewMode?: SelfMediaPreviewMode;
@@ -1737,6 +1929,8 @@ export function readMediaSettings(): MediaSettings {
       echoCancellation: typeof parsed.echoCancellation === "boolean" ? parsed.echoCancellation : undefined,
       autoGainControl: typeof parsed.autoGainControl === "boolean" ? parsed.autoGainControl : undefined,
       deafenMode: isDeafenMode(parsed.deafenMode) ? parsed.deafenMode : "instant",
+      deafenHearsSatellites: typeof parsed.deafenHearsSatellites === "boolean" ? parsed.deafenHearsSatellites : undefined,
+      deafenKeepsMySatellites: typeof parsed.deafenKeepsMySatellites === "boolean" ? parsed.deafenKeepsMySatellites : undefined,
       networkActivity: normalizeNetworkActivitySettings(parsed.networkActivity),
       soundCues: normalizeSoundCueSettings(parsed.soundCues),
       selfMediaPreviewMode: isSelfMediaPreviewMode(parsed.selfMediaPreviewMode) ? parsed.selfMediaPreviewMode : "local",

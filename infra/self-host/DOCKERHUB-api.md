@@ -35,7 +35,7 @@ docker compose run --rm api user create --username alice --password '...' --role
 | `LIVEKIT_URL`, `LIVEKIT_API_KEY`, `LIVEKIT_API_SECRET` | Public LiveKit address and key pair |
 | `RAVEN_MEDIA_DIR` | Directory for profile and chat images (mount a volume; compose uses `/var/lib/raven/media`) |
 | `RAVEN_MINIMUM_CLIENT_VERSION` | Older desktop clients are asked to update |
-| `RAVEN_SERVER_NAME`, `RAVEN_SERVER_DESCRIPTION` | Shown on the sign-in screen |
+| `RAVEN_SERVER_NAME`, `RAVEN_SERVER_DESCRIPTION` | Shown on the sign-in screen and at the top of the sidebar. A name set in the admin dashboard takes precedence over `RAVEN_SERVER_NAME`. |
 | `RAVEN_TRUSTED_PROXIES` | Proxy addresses (CIDR list) whose `X-Forwarded-For` is believed |
 | `RAVEN_LINK_PREVIEWS` | `on` lets the server read the pages people link to in chat, for link previews (public addresses only). Off by default |
 | `RAVEN_API_ADDR` | Listen address, default `0.0.0.0:6977` in compose |

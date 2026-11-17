@@ -14,6 +14,12 @@
 
 /// Every command `lib.rs` registers.
 pub const APP_COMMANDS: &[&str] = &[
+    // Android only (MobileNative); registered under #[cfg(mobile)].
+    "mobile_native_get_state",
+    "mobile_native_begin_call",
+    "mobile_native_end_call",
+    "mobile_native_request_permission",
+    "mobile_native_open_settings",
     "secret_get",
     "secret_set",
     "secret_delete",
@@ -44,6 +50,7 @@ pub const APP_COMMANDS: &[&str] = &[
     "audio_set_sound_cue_settings",
     "audio_test_output_device",
     "audio_set_remote_audio_receiving",
+    "audio_set_deafen_keeps_satellites",
     "audio_list_app_audio_sources",
     "audio_list_presets",
     "audio_apply_preset_to_local_channel",
@@ -158,6 +165,8 @@ pub const APP_COMMANDS: &[&str] = &[
 /// open a Workshop path or read a file the page names. Refused natively from every window
 /// but `main`, whatever the capability files say.
 pub const MAIN_ONLY: &[&str] = &[
+    "mobile_native_begin_call",
+    "mobile_native_request_permission",
     "secret_get",
     "secret_set",
     "secret_delete",

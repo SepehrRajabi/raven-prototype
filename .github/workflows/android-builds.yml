@@ -1,0 +1,175 @@
+# The Android app (MobileNative), arm64 only:
+#
+#   Raven_X.Y.Z_arm64.apk   Android 8.0 (API 26) and later
+#
+# It is built from the same frontend and Rust crate as the desktop app, through the local
+# plugin in apps/desktop/src-tauri/plugins/raven-mobile-native (docs/development.md, Android).
+# Toolchain: JDK 17, SDK platform 36, build tools 35.0.0, NDK 27.2.12479018.
+#
+# Release tags (v*) are signed with Raven's Android release key when the repository has it
+# (ANDROID_RELEASE_KEYSTORE, base64 of the .jks, and ANDROID_RELEASE_KEYSTORE_PASSWORD; the
+# key's alias is "raven"). Android installs an update only over an app signed with the same
+# key, so that key must never change. Every other run is signed with a throwaway debug key,
+# only to check that signing works; those APKs are not for people.
+#
+# A pushed v* tag that matches the app's version publishes the APK on its GitHub release,
+# creating the release if release.ps1 hasn't yet (infra/release/attach-to-github-release.sh).
+# Running this workflow by hand on the tag with "attach to release" ticked does the same,
+# for a run that failed.
+name: Android builds
+
+on:
+  push:
+    branches: ["**"]
+    tags: ["v*"]
+    paths:
+      - ".github/workflows/android-builds.yml"
+      - "apps/desktop/src/**"
+      - "apps/desktop/src-tauri/**"
+      - "apps/desktop/scripts/mobile-native.ts"
+      - "apps/desktop/package.json"
+      - "apps/desktop/bun.lock"
+  pull_request:
+    paths:
+      - ".github/workflows/android-builds.yml"
+      - "apps/desktop/src/**"
+      - "apps/desktop/src-tauri/**"
+      - "apps/desktop/scripts/mobile-native.ts"
+      - "apps/desktop/package.json"
+      - "apps/desktop/bun.lock"
+  workflow_dispatch:
+    inputs:
+      attach_to_release:
+        description: "Attach the APK to the GitHub release of this tag (run on a v* tag)"
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: android-builds-${{ github.ref }}
+  cancel-in-progress: ${{ !startsWith(github.ref, 'refs/tags/') }}
+
+env:
+  # The server a fresh install signs in to, as in release.ps1. Release builds need https.
+  RAVEN_MOBILE_NATIVE_API_URL: ${{ vars.RAVEN_API_URL || 'https://mimir.rvn.bluehour.cloud' }}
+  NDK_VERSION: "27.2.12479018"
+  BUILD_TOOLS: "35.0.0"
+
+jobs:
+  build:
+    name: Build arm64
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v5
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+      - name: Install the Android SDK parts
+        run: |
+          set -euo pipefail
+          sdkmanager="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
+          yes | "$sdkmanager" --licenses > /dev/null || true
+          "$sdkmanager" --install "platforms;android-36" "build-tools;$BUILD_TOOLS" "ndk;$NDK_VERSION" "platform-tools" > /dev/null
+          echo "NDK_HOME=$ANDROID_HOME/ndk/$NDK_VERSION" >> "$GITHUB_ENV"
+      - name: Install Rust
+        run: |
+          rustup toolchain install stable --profile minimal --target aarch64-linux-android
+          rustup default stable
+      # Same cache as the desktop builds, one for this target. Pull requests read it but
+      # don't save to it.
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: apps/desktop/src-tauri -> target
+          key: aarch64-linux-android
+          save-if: ${{ github.event_name != 'pull_request' }}
+      - name: Build
+        working-directory: apps/desktop
+        run: |
+          bun install --frozen-lockfile
+          bun run mobile-native:init
+          bun run mobile-native:build --apk
+      # Only release tags get the key, so a branch or pull request run never sees it.
+      - name: Sign
+        env:
+          KEYSTORE: ${{ startsWith(github.ref, 'refs/tags/v') && secrets.ANDROID_RELEASE_KEYSTORE || '' }}
+          KEYSTORE_PASSWORD: ${{ startsWith(github.ref, 'refs/tags/v') && secrets.ANDROID_RELEASE_KEYSTORE_PASSWORD || '' }}
+        run: |
+          set -euo pipefail
+          tools="$ANDROID_HOME/build-tools/$BUILD_TOOLS"
+          version=$(jq -r .version apps/desktop/src-tauri/tauri.conf.json)
+          unsigned=$(find apps/desktop/src-tauri/gen/android/app/build/outputs/apk -name '*-release-unsigned.apk' | head -n 1)
+          if [ -z "$unsigned" ]; then
+            echo "No unsigned release APK was built." >&2
+            exit 1
+          fi
+          keystore="$RUNNER_TEMP/raven.jks"
+          if [ -n "$KEYSTORE" ]; then
+            printf '%s' "$KEYSTORE" | base64 --decode > "$keystore"
+            password="$KEYSTORE_PASSWORD"
+            echo "RAVEN_SIGNED_BY=release" >> "$GITHUB_ENV"
+          else
+            password=$(openssl rand -hex 24)
+            keytool -genkeypair -keystore "$keystore" -storepass "$password" -alias raven \
+              -keyalg RSA -keysize 3072 -validity 1 -dname "CN=Raven CI throwaway" > /dev/null
+            echo "RAVEN_SIGNED_BY=throwaway" >> "$GITHUB_ENV"
+          fi
+          out="$RUNNER_TEMP/apk"
+          mkdir -p "$out"
+          "$tools/zipalign" -f -p 4 "$unsigned" "$RUNNER_TEMP/aligned.apk"
+          RAVEN_KEYSTORE_PASSWORD="$password" "$tools/apksigner" sign --ks "$keystore" --ks-key-alias raven \
+            --ks-pass env:RAVEN_KEYSTORE_PASSWORD --out "$out/Raven_${version}_arm64.apk" "$RUNNER_TEMP/aligned.apk"
+          rm -f "$keystore"
+          echo "APK_DIR=$out" >> "$GITHUB_ENV"
+      - name: Check the APK
+        run: |
+          set -euo pipefail
+          tools="$ANDROID_HOME/build-tools/$BUILD_TOOLS"
+          apk=$(ls "$APK_DIR"/*.apk)
+          "$tools/apksigner" verify --verbose --print-certs "$apk" | grep -E "Verified using|Signer #1 certificate DN"
+          badging=$("$tools/aapt2" dump badging "$apk")
+          echo "$badging" | grep -E "^package:|^sdkVersion:|^native-code:"
+          echo "$badging" | grep -q "^package: name='app.raven.mobile'" || { echo "Wrong application id." >&2; exit 1; }
+          echo "$badging" | grep -q "^native-code: 'arm64-v8a'" || { echo "Expected arm64-v8a native code only." >&2; exit 1; }
+          # A tag build must carry the release key, or nobody could update to the next one.
+          if [ "${GITHUB_REF_TYPE}" = tag ] && [ "$RAVEN_SIGNED_BY" != release ]; then
+            echo "A release tag was signed with a throwaway key; set ANDROID_RELEASE_KEYSTORE." >&2
+            exit 1
+          fi
+          echo "Signed with the $RAVEN_SIGNED_BY key."
+      - uses: actions/upload-artifact@v4
+        with:
+          name: android-arm64
+          path: ${{ env.APK_DIR }}/*.apk
+          if-no-files-found: error
+
+  attach:
+    name: Publish on the GitHub release
+    if: github.ref_type == 'tag' && (github.event_name == 'push' || inputs.attach_to_release)
+    needs: build
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          sparse-checkout: |
+            apps/desktop/src-tauri/tauri.conf.json
+            docs/release-notes
+            infra/release
+          sparse-checkout-cone-mode: false
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: android-*
+          path: ${{ runner.temp }}/builds
+          merge-multiple: true
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: infra/release/attach-to-github-release.sh SHA256SUMS-android "$RUNNER_TEMP/builds"

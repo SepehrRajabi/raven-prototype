@@ -15,6 +15,9 @@ import { EMPTY_SATELLITES, type AudioSatellites, type SatelliteActions } from ".
 import { SatelliteCluster } from "./SatelliteCluster";
 import { pipKey, pipTargetForTile, type PipTarget } from "@/lib/pictureInPicture";
 import { MediaTile, type MediaFit } from "./MediaTile";
+import { HandMark } from "./HandMark";
+import { SelfMark } from "./SelfMark";
+import { othersSpeaking, useYourTurn } from "@/lib/raisedHand";
 import { ServerVoiceMark, VoiceModerationMenu, type VoiceModeration } from "./VoiceModeration";
 import { CallVotePill } from "./CallVotePill";
 import type { LocalCallVote } from "@/lib/callVote";
@@ -32,6 +35,8 @@ type StageTile = NativeMediaTile & { watching: boolean };
 const NO_PICTURE_IN_PICTURE: ReadonlySet<string> = new Set();
 type StageNotice = { text: string; watch?: StageTile };
 type SatelliteProps = { satellites: AudioSatellites; actions: SatelliteActions; armed: boolean };
+/** How many hands are up, and whether the quiet gap is yours (see `useYourTurn`). */
+type Hands = { raisedCount: number; yourTurn: boolean };
 type StageCallVote = { vote: LocalCallVote | null; start: (targetUserId: string) => Promise<void>; castBallot: (yes: boolean) => Promise<void> };
 /** Who a vote can be started about right now, if anyone. Absent means nobody. */
 type VoteToRemove = (person: NativeMediaTile) => (() => void) | undefined;
@@ -76,6 +81,7 @@ export function LiveMediaStage({
   voiceModeration,
   callVote,
   localUserId,
+  localDisplayName = "",
   pictureInPictureKeys = NO_PICTURE_IN_PICTURE,
   onOpenPictureInPicture,
   onClosePictureInPicture,
@@ -111,6 +117,8 @@ export function LiveMediaStage({
   callStates?: ReadonlyMap<string, ParticipantCallState> | null;
   callVote?: StageCallVote;
   localUserId?: string;
+  /** Your name in this place, shown until the engine lists you. */
+  localDisplayName?: string;
   /** Videos in their own window (`pipKey`). */
   pictureInPictureKeys?: ReadonlySet<string>;
   onOpenPictureInPicture?: (target: PipTarget) => void;
@@ -138,6 +146,7 @@ export function LiveMediaStage({
     videoStreamEndpoint,
     selfMediaPreviewMode,
     speakingActivity,
+    localDisplayName,
   );
   const viewerConnected = connected && Boolean(videoState?.viewerConnected);
   const presentationProfile = videoState?.presentation.profile ?? "balanced";
@@ -155,7 +164,7 @@ export function LiveMediaStage({
     const present = isConnecting(nativeTile.participantId, nativeTile.isLocal, connectedPeerIds)
       ? { ...nativeTile, connecting: true }
       : nativeTile;
-    const tile = callState ? { ...present, away: callState.away, deafened: callState.deafened, serverMuted: callState.serverMuted, serverDeafened: callState.serverDeafened } : present;
+    const tile = callState ? { ...present, away: callState.away, deafened: callState.deafened, serverMuted: callState.serverMuted, serverDeafened: callState.serverDeafened, handOrder: callState.handOrder } : present;
     if (tile.isLocal) {
       // Your own share is a card unless you ask for a preview. Without an <img> nothing
       // subscribes to its frames, so no JPEGs are made for it.
@@ -166,6 +175,10 @@ export function LiveMediaStage({
   }), [callStates, connectedPeerIds, nativeTiles, ownPreview, pendingFor]);
 
   const { visual, cards, voice } = useMemo(() => partitionStageTiles(tiles), [tiles]);
+  const raisedCount = tiles.filter((tile) => tile.source === "camera" && (tile.handOrder ?? 0) > 0).length;
+  const firstInLine = tiles.some((tile) => tile.isLocal && tile.source === "camera" && tile.handOrder === 1);
+  const yourTurn = useYourTurn(firstInLine, othersSpeaking(speakingActivity, localUserId));
+  const hands: Hands = { raisedCount, yourTurn };
   // Arrivals and departures move only once the room has settled: nobody pops in when you
   // join or when the connection comes back, and leaving yourself is not everyone leaving.
   const motionArmed = useMotionArmed(viewerConnected && phase === "connected", SETTLE_MS);
@@ -312,6 +325,8 @@ export function LiveMediaStage({
       reconnecting={reconnecting}
       fit={fitModes[tile.key] ?? (tile.source === "screenshare" ? "fit" : "fill")}
       receiving={tile.receiving}
+      handsUp={raisedCount}
+      yourTurn={tile.isLocal && yourTurn}
       presentationProfile={presentationProfile}
       onTogglePin={() => togglePin(tile)}
       onFitChange={(fit) => setFitModes((current) => ({ ...current, [tile.key]: fit }))}
@@ -396,7 +411,7 @@ export function LiveMediaStage({
                 {phase === "leaving" ? "Leaving…" : "Getting the room ready…"}
               </div>
             ) : !visual.length ? (
-              <VoiceRoom people={motion.voice} sharers={sharers} onWatch={watchShare} satellites={satelliteProps} moderation={voiceModeration} voteToRemove={voteToRemove} />
+              <VoiceRoom people={motion.voice} sharers={sharers} onWatch={watchShare} satellites={satelliteProps} moderation={voiceModeration} voteToRemove={voteToRemove} hands={hands} />
             ) : focusTiles.length ? (
               <div className={cn("relative flex h-full min-h-0 gap-2", narrowFocus && "flex-col")}>
                 <div
@@ -448,7 +463,7 @@ export function LiveMediaStage({
             ))}
           </div>
         ) : null}
-        {visual.length && motion.voice.length ? <VoiceStrip people={motion.voice} sharers={sharers} onWatch={watchShare} satellites={satelliteProps} moderation={voiceModeration} voteToRemove={voteToRemove} /> : null}
+        {visual.length && motion.voice.length ? <VoiceStrip people={motion.voice} sharers={sharers} onWatch={watchShare} satellites={satelliteProps} moderation={voiceModeration} voteToRemove={voteToRemove} hands={hands} /> : null}
       </div>
 
       {notice ? (
@@ -603,7 +618,7 @@ function SharingMark({ person, share, onWatch, className }: { person: NativeMedi
 }
 
 /** Everyone is here by voice: show people, give them room, ring whoever speaks. */
-function VoiceRoom({ people, sharers, onWatch, satellites, moderation, voteToRemove }: { people: MotionEntry<StageTile>[]; sharers: Map<string, StageTile>; onWatch: (share: StageTile) => void; satellites: SatelliteProps; moderation?: VoiceModeration; voteToRemove: VoteToRemove }) {
+function VoiceRoom({ people, sharers, onWatch, satellites, moderation, voteToRemove, hands }: { people: MotionEntry<StageTile>[]; sharers: Map<string, StageTile>; onWatch: (share: StageTile) => void; satellites: SatelliteProps; moderation?: VoiceModeration; voteToRemove: VoteToRemove; hands: Hands }) {
   const size = people.length <= 4 ? "h-24 w-24 text-display" : people.length <= 9 ? "h-20 w-20 text-title" : "h-16 w-16 text-body";
   return (
     <div className="flex h-full flex-wrap content-center items-start justify-center gap-x-8 gap-y-8 overflow-y-auto p-6">
@@ -613,7 +628,7 @@ function VoiceRoom({ people, sharers, onWatch, satellites, moderation, voteToRem
         return (
           <div
             key={person.key}
-            className={cn("group/person flex w-32 flex-col items-center text-center", motionClass(phase, "animate-pop-in"))}
+            className={cn("group/person relative flex w-32 flex-col items-center text-center", motionClass(phase, "animate-pop-in"))}
             aria-hidden={phase === "leave" || undefined}
           >
             <span className="relative">
@@ -625,6 +640,14 @@ function VoiceRoom({ people, sharers, onWatch, satellites, moderation, voteToRem
                 <Avatar name={person.displayName} src={api.userAvatarUrl(person.participantId)} className={size} />
               </span>
               {share ? <SharingMark person={person} share={share} onWatch={onWatch} className="absolute -bottom-0.5 -left-0.5 h-6 w-6 rounded-full bg-card" /> : null}
+              {phase !== "leave" ? (
+                <HandMark
+                  order={person.handOrder ?? 0}
+                  raisedCount={hands.raisedCount}
+                  yourTurn={person.isLocal && hands.yourTurn}
+                  className="absolute -left-0.5 -top-0.5 h-6 min-w-6 px-1"
+                />
+              ) : null}
               {phase !== "leave" ? <VoiceModerationMenu person={person} moderation={moderation} onVoteToRemove={onVoteToRemove} className="absolute -right-0.5 -top-0.5 h-6 w-6 bg-card" /> : null}
               {(person.serverMuted || person.serverDeafened) && !person.connecting ? (
                 <ServerVoiceMark person={person} className="absolute -bottom-0.5 -right-0.5 h-6 w-6" />
@@ -647,10 +670,15 @@ function VoiceRoom({ people, sharers, onWatch, satellites, moderation, voteToRem
               />
             </span>
             <span className="mt-3 flex max-w-full items-center justify-center gap-1.5">
-              <span className={cn("min-w-0 truncate text-small font-medium", person.connecting && "text-muted-foreground")}>{person.isLocal ? "You" : person.displayName}</span>
+              <span className={cn("min-w-0 truncate text-small font-medium", person.connecting && "text-muted-foreground")}>{person.displayName}</span>
+              {person.isLocal ? <SelfMark /> : null}
               <WatchingMark targets={person.watchedShares} />
             </span>
             {person.connecting ? <ConnectingCaption /> : <ConnectionCaption person={person} />}
+            {/* Out of the flow, so the faces do not shift when it comes and goes. */}
+            {person.isLocal && hands.yourTurn && person.handOrder === 1 ? (
+              <span className="absolute inset-x-0 top-full mt-0.5 animate-fade-in text-caption text-foreground">Your turn</span>
+            ) : null}
             {person.away && !person.connecting ? <AwayCaption /> : null}
           </div>
         );
@@ -660,7 +688,7 @@ function VoiceRoom({ people, sharers, onWatch, satellites, moderation, voteToRem
 }
 
 /** Voice-only people while video is on the stage. */
-function VoiceStrip({ people, sharers, onWatch, satellites, moderation, voteToRemove }: { people: MotionEntry<StageTile>[]; sharers: Map<string, StageTile>; onWatch: (share: StageTile) => void; satellites: SatelliteProps; moderation?: VoiceModeration; voteToRemove: VoteToRemove }) {
+function VoiceStrip({ people, sharers, onWatch, satellites, moderation, voteToRemove, hands }: { people: MotionEntry<StageTile>[]; sharers: Map<string, StageTile>; onWatch: (share: StageTile) => void; satellites: SatelliteProps; moderation?: VoiceModeration; voteToRemove: VoteToRemove; hands: Hands }) {
   return (
     <div className="flex h-10 shrink-0 items-center gap-1.5 overflow-x-auto" aria-label="Here by voice">
       {people.map(({ item: person, phase }) => {
@@ -679,7 +707,9 @@ function VoiceStrip({ people, sharers, onWatch, satellites, moderation, voteToRe
             >
               <Avatar name={person.displayName} src={api.userAvatarUrl(person.participantId)} className="h-7 w-7" />
             </span>
-            <span className={cn("max-w-[140px] truncate text-small", person.connecting && "text-muted-foreground")}>{person.isLocal ? "You" : person.displayName}</span>
+            <span className={cn("max-w-[140px] truncate text-small", person.connecting && "text-muted-foreground")}>{person.displayName}</span>
+            {person.isLocal ? <SelfMark /> : null}
+            {phase !== "leave" ? <HandMark order={person.handOrder ?? 0} raisedCount={hands.raisedCount} yourTurn={person.isLocal && hands.yourTurn} className="h-6 min-w-6 px-1" /> : null}
             <WatchingMark targets={person.watchedShares} />
             {person.away && !person.connecting ? <span className="shrink-0 text-caption text-muted-foreground">Back in a bit</span> : null}
             {share ? <SharingMark person={person} share={share} onWatch={onWatch} className="-mr-1.5 h-6 w-6 shrink-0 rounded-full" /> : null}

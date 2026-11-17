@@ -14,6 +14,7 @@ import { avatarVersion, noteAvatarRoute } from "@/lib/avatarVersions";
 import { parseCallVote, type CallVote } from "@/lib/callVote";
 import { normalizeApiServerUrl, uniqueServerUrls } from "@/lib/apiServerUrl";
 import type { WorkshopConfig, WorkshopPlaceKind, WorkshopProtocol, WorkshopShare } from "@/lib/workshopState";
+import { isAndroid } from "@/mobileNative/platform";
 
 const DEFAULT_API_BASE_URL = normalizeApiServerUrl(import.meta.env.VITE_RAVEN_API_URL ?? "http://127.0.0.1:6977");
 const API_SERVER_URL_KEY = "raven.apiServerUrl";
@@ -223,11 +224,14 @@ export interface ParticipantSummary {
   /** Set by a moderator, and the person can't undo them. Absent on an older server. */
   serverMuted?: boolean;
   serverDeafened?: boolean;
+  /** "I'd like to speak": 0 when down, else the place in line (1 is first). Absent on an older server. */
+  handOrder?: number;
 }
 
 export interface CallStatePatch {
   away?: boolean;
   deafened?: boolean;
+  hand?: boolean;
 }
 
 export interface SessionSummary {
@@ -854,8 +858,7 @@ export class ApiClient {
   async signOutSaved(account: Pick<SavedAccount, "serverUrl" | "sessionId">) {
     try {
       const headers = new Headers({ Accept: "application/json", "X-Session-ID": account.sessionId });
-      headers.set("X-Raven-OS", desktopOS());
-      headers.set("X-Raven-Device", "Raven Desktop");
+      setClientDeviceHeaders(headers);
       addClientCompatibilityHeaders(headers);
       await fetch(`${account.serverUrl}/v1/auth/logout`, { method: "POST", headers });
     } catch {
@@ -999,8 +1002,7 @@ export class ApiClient {
     const consumeStream = async () => {
       const headers = new Headers({ Accept: "text/event-stream" });
       if (this.sessionId) headers.set("X-Session-ID", this.sessionId);
-      headers.set("X-Raven-OS", desktopOS());
-      headers.set("X-Raven-Device", "Raven Desktop");
+      setClientDeviceHeaders(headers);
       addClientCompatibilityHeaders(headers);
       const response = await fetch(this.url("/v1/nest-events"), { headers, signal: controller.signal });
       if (response.status === 401) {
@@ -1588,8 +1590,7 @@ export class ApiClient {
     headers.set("Accept", "application/json");
     if (init.body && !headers.has("Content-Type") && typeof init.body === "string") headers.set("Content-Type", "application/json");
     if (auth && this.sessionId) headers.set("X-Session-ID", this.sessionId);
-    headers.set("X-Raven-OS", desktopOS());
-    headers.set("X-Raven-Device", "Raven Desktop");
+    setClientDeviceHeaders(headers);
     addClientCompatibilityHeaders(headers);
 
     const response = await fetch(this.url(path), { ...requestInit, headers });
@@ -1657,6 +1658,12 @@ function isCompatibilityGatedPath(path: string) {
     "/v1/nest-events",
     "/v1/chat",
   ].some((prefix) => path === prefix || path.startsWith(`${prefix}/`) || path.startsWith(`${prefix}?`));
+}
+
+/** Names this client in the account's session list. */
+function setClientDeviceHeaders(headers: Headers) {
+  headers.set("X-Raven-OS", isAndroid ? "Android" : desktopOS());
+  headers.set("X-Raven-Device", isAndroid ? "Raven Android" : "Raven Desktop");
 }
 
 function desktopOS() {

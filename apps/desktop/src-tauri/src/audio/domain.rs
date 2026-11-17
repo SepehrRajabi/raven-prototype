@@ -1079,6 +1079,9 @@ pub struct AudioSessionHealth {
     pub output_fallback: bool,
     /// Master output mute (deafen).
     pub output_muted: bool,
+    /// While deafened, others' shared system and app audio (satellites) keeps playing and,
+    /// in Bandwidth saver, stays subscribed. Voices are silent either way.
+    pub deafen_keeps_satellites: bool,
     /// The one volume for everything Raven plays, in dB (0 is unchanged). Applied on the
     /// output bus after deafen; it never moves a strip fader or Auto-level.
     pub output_volume_db: f32,

@@ -10,6 +10,8 @@ import {
   localSharePause,
   localVideoStatus,
   microphonesToMuteBeforeJoin,
+  sourcesToMuteOnDeafen,
+  sourcesToRestoreAfterDeafen,
 } from "./mediaState";
 
 const microphone = {
@@ -110,5 +112,33 @@ describe("joinMutedHoldsMic", () => {
     expect(joinMutedHoldsMic("nest", false, true)).toBe(false);
     expect(joinMutedHoldsMic(null, true, true)).toBe(false);
     expect(joinMutedHoldsMic(null, false, false)).toBe(false);
+  });
+});
+
+describe("deafen mutes your own audio", () => {
+  const source = (id: string, sourceType: AudioSourceState["sourceType"], muted: boolean) =>
+    ({ ...microphone, id, sourceType, channelStrip: { mute: { muted } } }) as AudioSourceState;
+  const mic = source("mic", "microphone", false);
+  const system = source("system", "systemAudio", false);
+  const mutedApp = source("app", "appAudio", true);
+
+  test("mutes the mic, and shared audio only when you stop sharing it", () => {
+    expect(sourcesToMuteOnDeafen([mic, system, mutedApp], true)).toEqual(["mic"]);
+    expect(sourcesToMuteOnDeafen([mic, system, mutedApp], false)).toEqual(["mic", "system"]);
+  });
+
+  test("an already muted mic is left out, so undeafening keeps it muted", () => {
+    expect(sourcesToMuteOnDeafen([source("mic", "microphone", true)], true)).toEqual([]);
+  });
+
+  test("undeafening unmutes only what the deafen muted", () => {
+    const afterDeafen = [source("mic", "microphone", true), source("system", "systemAudio", true), mutedApp];
+    expect(sourcesToRestoreAfterDeafen(afterDeafen, ["mic", "system"], false)).toEqual(["mic", "system"]);
+    expect(sourcesToRestoreAfterDeafen([source("mic", "microphone", false)], ["mic"], false)).toEqual([]);
+  });
+
+  test("a server mute keeps the mic muted on undeafen", () => {
+    const afterDeafen = [source("mic", "microphone", true), source("system", "systemAudio", true)];
+    expect(sourcesToRestoreAfterDeafen(afterDeafen, ["mic", "system"], true)).toEqual(["system"]);
   });
 });

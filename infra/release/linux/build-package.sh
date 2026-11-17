@@ -22,8 +22,7 @@ label=${3:-}
 root=$(cd "$(dirname "$0")/../../.." && pwd)
 here="$root/infra/release/linux"
 desktop="$root/apps/desktop"
-rust_toolchain=${RUST_TOOLCHAIN:-1.96.0}
-tauri_cli_version=${TAURI_CLI_VERSION:-2.11.2}
+tauri_cli_version=${TAURI_CLI_VERSION:-2.12.4}
 
 case "$format" in
   deb | rpm | pacman) ;;
@@ -43,12 +42,10 @@ test -n "$version" || { echo "could not read the version from tauri.conf.json" >
 export CARGO_HOME=${CARGO_HOME:-$HOME/.cargo}
 export RUSTUP_HOME=${RUSTUP_HOME:-$HOME/.rustup}
 export PATH="$CARGO_HOME/bin:$PATH"
-if ! command -v rustup >/dev/null; then
-  curl --proto '=https' --tlsv1.2 --fail --silent --show-error https://sh.rustup.rs |
-    sh -s -- -y --no-modify-path --profile minimal --default-toolchain none
-fi
-rustup toolchain install "$rust_toolchain" --profile minimal
-rustup default "$rust_toolchain"
+command -v cargo >/dev/null || {
+  echo "cargo is missing: run install-build-deps.sh first." >&2
+  exit 1
+}
 if ! cargo tauri --version 2>/dev/null | grep -qx "tauri-cli $tauri_cli_version"; then
   cargo install tauri-cli --version "$tauri_cli_version" --locked --force
 fi
