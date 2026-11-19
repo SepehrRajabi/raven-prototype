@@ -10,8 +10,6 @@ import { cn } from "@/lib/utils";
 import { useCachedUrl, useNearViewport } from "./attachmentHooks";
 import { openAddress } from "./MessageText";
 
-/** As wide as a single image in the list, so cards and pictures line up. */
-const CARD_WIDTH = 400;
 /** The tallest a picture across the card may be; taller ones are cropped to fit. */
 const WIDE_MAX_HEIGHT = 260;
 
@@ -78,8 +76,11 @@ export function LinkPreviewCard({
   const wide = isWidePicture(preview);
   const hasText = Boolean(preview.title || preview.description);
   const picture = preview.image ? <Picture conversationId={conversationId} messageId={messageId} preview={preview} wide={wide} /> : null;
+  // The card fills its bubble, so its edges line up with the message text; the bubble keeps
+  // it at least as wide as a single picture (MessageRow). Inline-size containment stops the
+  // page's own title and description from widening the bubble.
   return (
-    <div className="group/card relative mb-0.5 mt-1.5 overflow-hidden rounded-control bg-foreground/[0.06]" style={{ width: CARD_WIDTH, maxWidth: "100%" }}>
+    <div className="group/card relative mb-0.5 mt-1.5 overflow-hidden rounded-control bg-foreground/[0.06]" style={{ width: "100%", contain: "inline-size" }}>
       <a
         href={preview.url}
         title={preview.url}
