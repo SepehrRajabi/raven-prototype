@@ -39,6 +39,8 @@ import { InfoTooltip } from "./atoms";
 import { cn } from "@/lib/utils";
 import { SPEAKING_COLORS, useSpeakingColor, writeSpeakingColor } from "@/lib/speakingColor";
 import { THEME_COLORS, THEME_DEPTHS, THEME_STRENGTHS, useTheme, writeTheme, type ThemeColorId } from "@/lib/theme";
+import { useCustomThemes } from "@/lib/customThemes";
+import { CustomThemesSection, ThemeEditor } from "./CustomThemes";
 import { ConfirmLeaveSection, DockOrderSection } from "./DockSettings";
 import { useSettingsSearch } from "./SettingsSearchField";
 import { revealSettingsItem, SETTINGS_PAGE_LABELS, settingsSearchIndex, type UserSettingsSection } from "./settingsSearch";
@@ -332,9 +334,13 @@ function ProfileSettings({ data }: { data: RavenShellData }) {
 
 function AppearanceSettings({ data }: { data: RavenShellData }) {
   const [uiLabels, setUiLabels] = useAppliedPreference<UILabelPreference>(data.preferences.uiLabels, (value) => data.updatePreferences({ uiLabels: value }));
+  // The theme being edited: an id, null for a new one, undefined while the page shows.
+  const [editing, setEditing] = useState<string | null | undefined>(undefined);
+  if (editing !== undefined) return <ThemeEditor themeId={editing} onClose={() => setEditing(undefined)} />;
   return (
     <SettingsPage title="Appearance">
       <ThemeSection />
+      <CustomThemesSection onEdit={setEditing} />
       <SettingsSection title="Words" description="What Raven calls groups and the rooms inside them.">
         <SettingsRows>
           <SettingsChoice
@@ -443,13 +449,21 @@ const CUSTOM_SWATCH_SWEEP = `conic-gradient(${[0, 60, 120, 180, 240, 300, 360].m
 /** The colour of Raven's surfaces. Kept on this device. */
 function ThemeSection() {
   const theme = useTheme();
+  const customInUse = useCustomThemes().activeId !== null;
   const swatches = [
     ...THEME_SWATCHES,
     { id: "custom" as const, label: "Custom", background: theme.color === "custom" ? THEME_SWATCH(theme.customHue) : CUSTOM_SWATCH_SWEEP },
   ];
   const noColor = theme.color === "graphite";
   return (
-    <SettingsSection title="Theme" description="The colour of the window and its panels. People, speaking and warnings keep their own colours. It is kept on this device.">
+    <SettingsSection
+      title="Theme"
+      description={
+        customInUse
+          ? "Not in use while a custom theme is chosen below. Choose “Built-in theme” there to use it again."
+          : "The colour of the window and its panels. People, speaking and warnings keep their own colours. It is kept on this device."
+      }
+    >
       <SettingsRows>
         <SwatchRow label="Theme colour" swatches={swatches} selected={theme.color} onSelect={(color) => writeTheme({ color })} />
         {theme.color === "custom" ? (

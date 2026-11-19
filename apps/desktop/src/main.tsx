@@ -11,6 +11,7 @@ import { installGlobalErrorLogging, logUiError } from "@/lib/diagnostics";
 import { parseRoute } from "@/lib/route";
 import { installSpeakingColor } from "@/lib/speakingColor";
 import { installTheme } from "@/lib/theme";
+import { installCustomThemes } from "@/lib/customThemes";
 import { tauriSecretBackend } from "@/lib/sessionVault";
 import "@fontsource-variable/geist";
 import "@fontsource-variable/geist-mono";
@@ -22,6 +23,7 @@ const route = parseRoute();
 installGlobalErrorLogging();
 installSpeakingColor();
 installTheme();
+installCustomThemes();
 
 // The main window reads sign-in sessions from the OS credential store before anything is
 // fetched. The other windows hold no session.

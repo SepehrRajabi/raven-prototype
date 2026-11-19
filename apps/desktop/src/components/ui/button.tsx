@@ -7,10 +7,10 @@ const buttonVariants = cva(
   {
     variants: {
       variant: {
-        default: "bg-primary text-primary-foreground hover:bg-primary/90",
-        secondary: "bg-secondary text-secondary-foreground hover:bg-accent hover:text-accent-foreground",
+        default: "bg-button-primary text-button-primary-text hover:bg-button-primary-hover",
+        secondary: "bg-button-secondary text-button-secondary-text hover:bg-button-secondary-hover hover:text-button-secondary-hover-text",
         outline: "border border-input bg-transparent text-foreground hover:bg-secondary",
-        ghost: "text-muted-foreground hover:bg-secondary hover:text-foreground",
+        ghost: "text-muted-foreground hover:bg-button-ghost-hover hover:text-button-ghost-hover-text",
         destructive: "bg-destructive-fill text-destructive-foreground hover:bg-destructive-fill/90",
       },
       size: {
@@ -39,7 +39,8 @@ export const Button = React.forwardRef<HTMLButtonElement, ButtonProps>(
     const iconOnly = typeof size === "string" && size.startsWith("icon");
     const iconTitle = iconOnly && typeof props["aria-label"] === "string" ? props["aria-label"] : undefined;
     return (
-      <button ref={ref} type={type} title={title ?? iconTitle} className={cn(buttonVariants({ variant, size, className }))} {...props} />
+      // data-rv and data-variant are stable names a custom theme can select (docs/theming.md).
+      <button ref={ref} type={type} title={title ?? iconTitle} data-rv="button" data-variant={variant ?? "default"} className={cn(buttonVariants({ variant, size, className }))} {...props} />
     );
   },
 );

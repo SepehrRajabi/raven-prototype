@@ -63,6 +63,34 @@ export default {
           DEFAULT: "hsl(var(--popover))",
           foreground: "hsl(var(--popover-foreground))",
         },
+        // Part colours a custom theme can set (docs/theming.md). Each is unset by default and
+        // falls back to the look the classes above give, so without a theme nothing changes.
+        // They take any CSS colour, so Tailwind's opacity modifiers don't apply to them.
+        switch: {
+          on: "var(--switch-on, hsl(var(--foreground)))",
+          "on-thumb": "var(--switch-on-thumb, hsl(var(--background)))",
+          off: "var(--switch-off, hsl(var(--input)))",
+          "off-thumb": "var(--switch-off-thumb, hsl(var(--foreground) / 0.85))",
+        },
+        button: {
+          primary: "var(--button-primary, hsl(var(--primary)))",
+          "primary-text": "var(--button-primary-text, hsl(var(--primary-foreground)))",
+          "primary-hover": "var(--button-primary-hover, hsl(var(--primary) / 0.9))",
+          secondary: "var(--button-secondary, hsl(var(--secondary)))",
+          "secondary-text": "var(--button-secondary-text, hsl(var(--secondary-foreground)))",
+          "secondary-hover": "var(--button-secondary-hover, hsl(var(--accent)))",
+          "secondary-hover-text": "var(--button-secondary-hover-text, hsl(var(--accent-foreground)))",
+          "ghost-hover": "var(--button-ghost-hover, hsl(var(--secondary)))",
+          "ghost-hover-text": "var(--button-ghost-hover-text, hsl(var(--foreground)))",
+        },
+        field: {
+          DEFAULT: "var(--input-fill, hsl(var(--background) / 0.6))",
+          border: "var(--input-border, hsl(var(--input)))",
+        },
+        bubble: {
+          mine: "var(--bubble-mine, hsl(var(--accent)))",
+          theirs: "var(--bubble-theirs, hsl(var(--secondary)))",
+        },
       },
       borderRadius: {
         chip: "6px",

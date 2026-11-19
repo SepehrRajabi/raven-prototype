@@ -7,6 +7,8 @@ use tauri::{Manager, RunEvent};
 
 #[cfg(not(mobile))]
 mod account_export;
+#[cfg(not(mobile))]
+mod theme_files;
 pub mod attachments;
 pub mod library;
 pub mod audio;
@@ -133,6 +135,10 @@ pub fn run() {
             library::read_ravenpack,
             #[cfg(not(mobile))]
             account_export::save_export_file,
+            #[cfg(not(mobile))]
+            theme_files::open_theme_file,
+            #[cfg(not(mobile))]
+            theme_files::save_theme_file,
             audio_get_state,
             audio_get_capabilities,
             audio_get_network_totals,
