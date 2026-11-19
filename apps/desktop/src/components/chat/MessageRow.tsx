@@ -555,6 +555,9 @@ export const MessageRow = memo(function MessageRow(props: MessageRowProps) {
             className={cn(
               "min-w-0 max-w-[min(100%,34rem)] rounded-card px-3 py-1.5 transition-colors",
               mine ? "bg-accent" : "bg-secondary",
+              // A link card needs the width of a single picture (400px) inside the padding; the
+              // percentage keeps a narrow window from pushing it past the edge.
+              !deleted && message.linkPreview && "min-w-[min(100%,424px)]",
               // A message that mentions you catches a thin edge of light on its side.
               !mine && !deleted && mentionsUser(message.body, props.me) && "shadow-[inset_2px_0_0_0_hsl(var(--live))]",
               props.highlighted && "outline outline-2 outline-ring",
