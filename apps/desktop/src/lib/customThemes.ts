@@ -32,6 +32,11 @@ export interface ThemeToken {
   meaning?: boolean;
   /** A shape rather than text (a toggle's knob): it needs 3:1 against `on`, not 4.5:1. */
   shape?: boolean;
+  /**
+   * A Raven token a theme may leave unset, which then follows a setting (named here)
+   * instead of a value the editor would copy into every new theme.
+   */
+  followsSetting?: string;
 }
 
 export const THEME_TOKEN_GROUPS: readonly { id: ThemeTokenGroup; label: string; description?: string }[] = [
@@ -92,7 +97,8 @@ export const THEME_TOKENS: readonly ThemeToken[] = [
   { name: "border", label: "Lines", description: "Hairlines between rows and around panels.", group: "lines", kind: "triple" },
   { name: "ring", label: "Keyboard focus", description: "The outline around whatever the keyboard is on.", group: "lines", kind: "triple" },
 
-  { name: "live", label: "Live", description: "Someone is live, such as a room with people talking in it. The ring around whoever speaks has its own setting, Speaking colour.", group: "status", kind: "triple", meaning: true },
+  { name: "live", label: "Live", description: "Someone is live, such as a room with people talking in it.", group: "status", kind: "triple", meaning: true },
+  { name: "speaking", label: "Speaking", description: "The ring around whoever is talking, and your own mic level. Left empty, it follows Appearance › Speaking colour.", group: "status", kind: "triple", on: "card", shape: true, meaning: true, followsSetting: "Speaking colour" },
   { name: "live-foreground", label: "Text on live", description: "Text on the live colour.", group: "status", kind: "triple", on: "live", meaning: true },
   { name: "destructive", label: "Failures and red text", description: "Errors, and a muted or cut-off microphone.", group: "status", kind: "triple", on: "card", meaning: true },
   { name: "destructive-fill", label: "Red buttons", description: "Delete, Leave and other actions that remove something.", group: "status", kind: "triple", meaning: true },

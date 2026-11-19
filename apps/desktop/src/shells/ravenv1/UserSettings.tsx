@@ -501,8 +501,17 @@ function ThemeSection() {
 
 /** The colour that shows who is talking. Kept on this device. */
 function SpeakingColorSection() {
+  const { themes, activeId } = useCustomThemes();
+  const themeSetsIt = themes.find((theme) => theme.id === activeId)?.tokens.speaking !== undefined;
   return (
-    <SettingsSection title="Speaking colour" description="The ring around whoever is talking, and your own mic level. It is kept on this device.">
+    <SettingsSection
+      title="Speaking colour"
+      description={
+        themeSetsIt
+          ? "Not in use while your custom theme sets its own speaking colour. Empty it in that theme’s colours to use this again."
+          : "The ring around whoever is talking, and your own mic level. It is kept on this device."
+      }
+    >
       <SettingsRows>
         <SwatchRow
           label="Speaking colour"

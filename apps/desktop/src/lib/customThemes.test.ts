@@ -93,6 +93,15 @@ input[value^="a"] { background-image: url('http://example.org/a') }
     expect(css.trim().startsWith(".x { color: red; }")).toBe(true);
   });
 
+  test("let a theme set the speaking colour, and leave it to the setting when it doesn't", () => {
+    const speaking = THEME_TOKENS.find((token) => token.name === "speaking")!;
+    expect(speaking.kind).toBe("triple");
+    expect(speaking.followsSetting).toBe("Speaking colour");
+    expect(themeCss({ tokens: { speaking: "#FFCC66" }, extraCss: "" })).toContain("--speaking: 40 100% 70%;");
+    expect(themeCss({ tokens: { card: "#242936" }, extraCss: "" })).not.toContain("--speaking");
+    expect(splitThemeCss(":root { --speaking: 262 62% 74%; }").tokens).toEqual({ speaking: "262 62% 74%" });
+  });
+
   test("keep the name through export and load", () => {
     const theme: CustomTheme = { id: "1", name: "Ayu Mirage", tokens: { card: "#242936" }, extraCss: "", origin: "editor", updatedAt: "" };
     const file = exportThemeCss(theme);

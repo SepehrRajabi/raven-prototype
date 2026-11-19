@@ -61,11 +61,12 @@ accepts a hex colour and converts it.
 | `--input` | Edges of fields and other controls |
 | `--border` | Hairlines |
 | `--ring` | Keyboard focus |
-| `--live`, `--live-foreground` | Someone is live. The ring around whoever speaks is Appearance › Speaking colour, which a theme does not change |
+| `--live`, `--live-foreground` | Someone is live |
+| `--speaking` | The ring around whoever is talking, and your own mic level. Optional: unset, it follows Appearance › Speaking colour; set, it replaces that setting while the theme is in use |
 | `--destructive`, `--destructive-fill`, `--destructive-foreground` | Failures, red text, red buttons |
 | `--warning` | Reconnecting, things that need attention |
 
-The last three rows report something. The built-in themes never change them, and a theme
+The last four rows report something. The built-in themes never change them, and a theme
 should keep them easy to tell apart. Raven also shows those states by shape (slashed
 icons, dots), not by colour alone.
 

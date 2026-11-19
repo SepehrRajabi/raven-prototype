@@ -260,7 +260,7 @@ export function ThemeEditor({ themeId, onClose }: { themeId: string | null; onCl
     const start: Record<string, string> = {};
     for (const token of THEME_TOKENS) {
       const color = base[token.name];
-      if (token.kind === "triple" && color) start[token.name] = toHex(color);
+      if (token.kind === "triple" && !token.followsSetting && color) start[token.name] = toHex(color);
     }
     return start;
   });
@@ -330,7 +330,7 @@ export function ThemeEditor({ themeId, onClose }: { themeId: string | null; onCl
                       color={shown[token.name] ?? null}
                       against={token.on ? (shown[token.on] ?? null) : null}
                       backdrop={shown.card ?? null}
-                      startValue={editing ? editing.tokens[token.name] : base[token.name] ? toHex(base[token.name]!) : undefined}
+                      startValue={editing ? editing.tokens[token.name] : !token.followsSetting && base[token.name] ? toHex(base[token.name]!) : undefined}
                       onChange={(value) => set(token.name, value)}
                     />
                   ))}
@@ -381,6 +381,9 @@ function TokenRow({
   const [text, setText] = useState(value ?? "");
   useEffect(() => setText(value ?? ""), [value]);
   const follows = token.kind === "color" && token.fallback ? themeToken(token.fallback.token) : undefined;
+  // What an empty value follows: another token, or a setting. Such a token can be emptied.
+  const followsLabel = follows ? follows.label.toLowerCase() : token.followsSetting?.toLowerCase();
+  const canFollow = followsLabel !== undefined;
   // A see-through colour is measured as it looks: laid over what is under it.
   const flat = (rgb: Rgb | null) => (rgb && backdrop ? over(rgb, backdrop) : rgb);
   const under = flat(against);
@@ -401,7 +404,8 @@ function TokenRow({
   };
   const valid = value === undefined || validTokenValue(token, value);
   const changed = value !== startValue;
-  const placeholder = follows ? `Follows ${follows.label.toLowerCase()}${token.fallback?.alpha ? ` at ${Math.round(token.fallback.alpha * 100)}%` : ""}` : "Colour";
+  // A setting's name is in the description; the field only has room to say that it follows.
+  const placeholder = follows ? `Follows ${followsLabel}${token.fallback?.alpha ? ` at ${Math.round(token.fallback.alpha * 100)}%` : ""}` : token.followsSetting ? "Follows the setting" : "Colour";
   const id = `theme-token-${token.name}`;
   return (
     <div className="flex min-h-12 items-center gap-3 px-4 py-2.5">
@@ -430,19 +434,19 @@ function TokenRow({
         aria-invalid={!valid || undefined}
         spellCheck={false}
         onChange={(event) => setText(event.currentTarget.value)}
-        onBlur={() => onChange(text.trim() ? text.trim() : token.kind === "color" ? undefined : startValue)}
+        onBlur={() => onChange(text.trim() ? text.trim() : canFollow ? undefined : startValue)}
         onKeyDown={(event) => {
           if (event.key === "Enter") (event.currentTarget as HTMLInputElement).blur();
         }}
-        className={cn("h-8 w-40 shrink-0 font-mono text-small", !valid && "border-destructive")}
+        className={cn("h-8 w-40 shrink-0 font-mono text-small placeholder:font-sans", !valid && "border-destructive")}
       />
       <Button
         variant="ghost"
         size="icon-sm"
-        aria-label={follows ? `${token.label}: follow ${follows.label.toLowerCase()} again` : `${token.label}: put back`}
-        title={follows ? "Follow again" : "Put back"}
-        disabled={token.kind === "color" ? value === undefined : !changed}
-        onClick={() => onChange(token.kind === "color" ? undefined : startValue)}
+        aria-label={canFollow ? `${token.label}: follow ${followsLabel} again` : `${token.label}: put back`}
+        title={canFollow ? "Follow again" : "Put back"}
+        disabled={canFollow ? value === undefined : !changed}
+        onClick={() => onChange(canFollow ? undefined : startValue)}
       >
         <RotateCcw className="h-4 w-4" />
       </Button>
