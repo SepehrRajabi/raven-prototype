@@ -4,6 +4,7 @@ import {
   contrastRatio,
   exportThemeCss,
   nameInThemeFile,
+  over,
   parseColor,
   parseStoredThemes,
   sanitizeThemeCss,
@@ -116,6 +117,18 @@ describe("colours", () => {
     expect(toHex(parseColor("rgb(255, 204, 102)")!)).toBe("#FFCC66");
     expect(parseColor("tomato")).toBeNull();
     expect(toTriple(parseColor("#FFCC66")!)).toBe("40 100% 70%");
+  });
+
+  test("keep how see-through a colour is, and measure it as it looks", () => {
+    expect(parseColor("rgb(99 117 153 / 0.22)")).toEqual({ r: 99, g: 117, b: 153, a: 0.22 });
+    expect(parseColor("hsl(40 100% 70% / 50%)")!.a).toBe(0.5);
+    expect(parseColor("rgb(1 2 3 / 1)")!.a).toBeUndefined();
+    const panel = parseColor("#242936")!;
+    expect(toHex(over(parseColor("rgb(255 255 255 / 0.5)")!, parseColor("#000000")!))).toBe("#808080");
+    // Ayu Mirage's quiet-button hover: yellow text on a 22% wash over the panel, not on the solid wash colour.
+    const hover = over(parseColor("rgb(99 117 153 / 0.22)")!, panel);
+    expect(contrastRatio(parseColor("#FFCC66")!, hover)).toBeCloseTo(7.6, 1);
+    expect(contrastRatio(parseColor("#FFCC66")!, { r: 99, g: 117, b: 153 })).toBeCloseTo(3.1, 1);
   });
 
   test("measure contrast as WCAG does", () => {

@@ -30,6 +30,8 @@ export interface ThemeToken {
   on?: string;
   /** It reports something (someone live, a failure, a warning), not just decoration. */
   meaning?: boolean;
+  /** A shape rather than text (a toggle's knob): it needs 3:1 against `on`, not 4.5:1. */
+  shape?: boolean;
 }
 
 export const THEME_TOKEN_GROUPS: readonly { id: ThemeTokenGroup; label: string; description?: string }[] = [
@@ -76,9 +78,9 @@ export const THEME_TOKENS: readonly ThemeToken[] = [
   { name: "button-ghost-hover-text", label: "Quiet button text under the pointer", description: "Its label while the pointer is on it.", group: "buttons", kind: "color", fallback: { token: "foreground" }, on: "button-ghost-hover" },
 
   { name: "switch-on", label: "Toggle on", description: "The track of a toggle that is on.", group: "toggles", kind: "color", fallback: { token: "foreground" } },
-  { name: "switch-on-thumb", label: "Toggle knob when on", description: "The round knob of a toggle that is on.", group: "toggles", kind: "color", fallback: { token: "background" }, on: "switch-on" },
+  { name: "switch-on-thumb", label: "Toggle knob when on", description: "The round knob of a toggle that is on.", group: "toggles", kind: "color", fallback: { token: "background" }, on: "switch-on", shape: true },
   { name: "switch-off", label: "Toggle off", description: "The track of a toggle that is off.", group: "toggles", kind: "color", fallback: { token: "input" } },
-  { name: "switch-off-thumb", label: "Toggle knob when off", description: "The round knob of a toggle that is off.", group: "toggles", kind: "color", fallback: { token: "foreground", alpha: 0.85 }, on: "switch-off" },
+  { name: "switch-off-thumb", label: "Toggle knob when off", description: "The round knob of a toggle that is off.", group: "toggles", kind: "color", fallback: { token: "foreground", alpha: 0.85 }, on: "switch-off", shape: true },
 
   { name: "input", label: "Edges of fields", description: "The edge of text fields, and other controls.", group: "fields", kind: "triple" },
   { name: "input-fill", label: "Field fill", description: "Inside text fields and the message box.", group: "fields", kind: "color", fallback: { token: "background", alpha: 0.6 } },
@@ -127,6 +129,8 @@ export interface Rgb {
   r: number;
   g: number;
   b: number;
+  /** Opacity, 0 to 1. Left out means opaque. */
+  a?: number;
 }
 
 const TRIPLE = /^\s*(-?[\d.]+)(?:deg)?\s+([\d.]+)%\s+([\d.]+)%\s*$/;
@@ -170,11 +174,25 @@ export function parseColor(value: string): Rgb | null {
   }
   const triple = TRIPLE.exec(text);
   if (triple) return hslToRgb(Number(triple[1]), Number(triple[2]), Number(triple[3]));
-  const hsl = /^hsla?\(\s*(-?[\d.]+)(?:deg)?[\s,]+([\d.]+)%[\s,]+([\d.]+)%(?:\s*[/,]\s*[\d.]+%?)?\s*\)$/i.exec(text);
-  if (hsl) return hslToRgb(Number(hsl[1]), Number(hsl[2]), Number(hsl[3]));
-  const rgb = /^rgba?\(\s*([\d.]+)[\s,]+([\d.]+)[\s,]+([\d.]+)(?:\s*[/,]\s*[\d.]+%?)?\s*\)$/i.exec(text);
-  if (rgb) return { r: Math.round(Number(rgb[1])), g: Math.round(Number(rgb[2])), b: Math.round(Number(rgb[3])) };
+  const hsl = /^hsla?\(\s*(-?[\d.]+)(?:deg)?[\s,]+([\d.]+)%[\s,]+([\d.]+)%(?:\s*[/,]\s*([\d.]+%?))?\s*\)$/i.exec(text);
+  if (hsl) return withAlpha(hslToRgb(Number(hsl[1]), Number(hsl[2]), Number(hsl[3])), hsl[4]);
+  const rgb = /^rgba?\(\s*([\d.]+)[\s,]+([\d.]+)[\s,]+([\d.]+)(?:\s*[/,]\s*([\d.]+%?))?\s*\)$/i.exec(text);
+  if (rgb) return withAlpha({ r: Math.round(Number(rgb[1])), g: Math.round(Number(rgb[2])), b: Math.round(Number(rgb[3])) }, rgb[4]);
   return null;
+}
+
+function withAlpha(rgb: Rgb, alpha: string | undefined): Rgb {
+  if (alpha === undefined) return rgb;
+  const a = alpha.endsWith("%") ? Number(alpha.slice(0, -1)) / 100 : Number(alpha);
+  return a >= 1 || !Number.isFinite(a) ? rgb : { ...rgb, a: Math.max(a, 0) };
+}
+
+/** What a see-through colour looks like laid over another. */
+export function over(top: Rgb, under: Rgb): Rgb {
+  const a = top.a ?? 1;
+  if (a >= 1) return top;
+  const mix = (x: number, y: number) => Math.round(x * a + y * (1 - a));
+  return { r: mix(top.r, under.r), g: mix(top.g, under.g), b: mix(top.b, under.b) };
 }
 
 export function toHex({ r, g, b }: Rgb): string {
@@ -604,5 +622,6 @@ export function currentTokenColor(name: string, seen = new Set<string>()): Rgb |
   const raw = getComputedStyle(document.documentElement).getPropertyValue(`--${name}`).trim();
   if (raw) return parseColor(raw);
   const fallback = TOKEN_BY_NAME.get(name)?.fallback;
-  return fallback ? currentTokenColor(fallback.token, seen) : null;
+  const color = fallback ? currentTokenColor(fallback.token, seen) : null;
+  return color && fallback?.alpha !== undefined ? { ...color, a: (color.a ?? 1) * fallback.alpha } : color;
 }

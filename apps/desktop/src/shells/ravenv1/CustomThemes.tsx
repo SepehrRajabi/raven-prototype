@@ -14,6 +14,7 @@ import {
   currentTokenColor,
   deleteTheme,
   exportThemeCss,
+  over,
   parseColor,
   previewThemeCss,
   renameTheme,
@@ -328,6 +329,7 @@ export function ThemeEditor({ themeId, onClose }: { themeId: string | null; onCl
                       value={tokens[token.name]}
                       color={shown[token.name] ?? null}
                       against={token.on ? (shown[token.on] ?? null) : null}
+                      backdrop={shown.card ?? null}
                       startValue={editing ? editing.tokens[token.name] : base[token.name] ? toHex(base[token.name]!) : undefined}
                       onChange={(value) => set(token.name, value)}
                     />
@@ -363,6 +365,7 @@ function TokenRow({
   value,
   color,
   against,
+  backdrop,
   startValue,
   onChange,
 }: {
@@ -370,14 +373,32 @@ function TokenRow({
   value: string | undefined;
   color: Rgb | null;
   against: Rgb | null;
+  /** What see-through colours sit on: the main panel, where most controls are. */
+  backdrop: Rgb | null;
   startValue: string | undefined;
   onChange: (value: string | undefined) => void;
 }) {
   const [text, setText] = useState(value ?? "");
   useEffect(() => setText(value ?? ""), [value]);
   const follows = token.kind === "color" && token.fallback ? themeToken(token.fallback.token) : undefined;
-  const ratio = color && against ? contrastRatio(color, against) : null;
-  const hex = color ? toHex(color) : "#000000";
+  // A see-through colour is measured as it looks: laid over what is under it.
+  const flat = (rgb: Rgb | null) => (rgb && backdrop ? over(rgb, backdrop) : rgb);
+  const under = flat(against);
+  const ratio = color && under ? contrastRatio(over(color, under), under) : null;
+  const enough = token.shape ? 3 : 4.5;
+  // The swatch keeps the exact colour the picker chose. Before the preview applies, `color`
+  // still holds the old one, and setting the input back to it while the macOS picker is
+  // open makes WebKit fire `change` with the old colour, which undid the choice.
+  const [picked, setPicked] = useState<{ value: string; hex: string } | null>(null);
+  const shownColor = flat(color);
+  const hex = picked && picked.value === value ? picked.hex : shownColor ? toHex(shownColor) : "#000000";
+  const pick = (raw: string) => {
+    const next = raw.toUpperCase();
+    if (next === hex.toUpperCase()) return;
+    const chosen = token.kind === "triple" ? toTriple(parseColor(next)!) : next;
+    setPicked({ value: chosen, hex: next });
+    onChange(chosen);
+  };
   const valid = value === undefined || validTokenValue(token, value);
   const changed = value !== startValue;
   const placeholder = follows ? `Follows ${follows.label.toLowerCase()}${token.fallback?.alpha ? ` at ${Math.round(token.fallback.alpha * 100)}%` : ""}` : "Colour";
@@ -389,8 +410,8 @@ function TokenRow({
         <div className="mt-0.5 text-caption text-muted-foreground">
           {token.description}
           {ratio !== null ? (
-            <span className={cn("ml-1 tabular-nums", ratio < 4.5 && "text-warning")}>
-              {" "}· Contrast {ratio.toFixed(1)}:1{ratio < 4.5 ? ", hard to read" : ""}
+            <span className={cn("tabular-nums", ratio < enough && "text-warning")}>
+              {" "}· Contrast {ratio.toFixed(1)}:1{ratio < enough ? (token.shape ? ", hard to see" : ", hard to read") : ""}
             </span>
           ) : null}
         </div>
@@ -399,7 +420,7 @@ function TokenRow({
         type="color"
         aria-label={`${token.label}: pick a colour`}
         value={hex}
-        onChange={(event) => onChange(token.kind === "triple" ? toTriple(parseColor(event.currentTarget.value)!) : event.currentTarget.value.toUpperCase())}
+        onChange={(event) => pick(event.currentTarget.value)}
         className="h-8 w-10 shrink-0 cursor-pointer rounded-control border border-input bg-transparent p-0.5"
       />
       <Input
