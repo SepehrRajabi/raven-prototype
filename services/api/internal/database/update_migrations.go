@@ -70,6 +70,7 @@ func migrateVersioned(db *sql.DB, driver string) error {
 		sessionTokenMigration(driver),
 		{version: "2026111601_raised_hand", statements: raisedHandStatements()},
 		{version: "2026111701_server_name", statements: serverNameStatements()},
+		{version: "2026111901_chat_poll_mirrors", statements: chatPollMirrorStatements()},
 	}
 	for _, migration := range migrations {
 		if err := applyUpdateMigration(db, driver, migration); err != nil {

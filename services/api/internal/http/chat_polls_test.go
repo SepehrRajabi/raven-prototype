@@ -206,23 +206,97 @@ func TestChatPollInADirectMessageIsNeverAnonymous(t *testing.T) {
 	}
 }
 
-func TestChatPollForwardedIsANewPoll(t *testing.T) {
-	s, alice, bob, carol, _ := chatCrowd(t)
-	group := chatNewGroup(t, s, alice, "Drinks", bob, carol)
-	sent := chatSendPoll(t, s, alice, group.ID, pollInput("Tea or coffee?", []chatPollOptionInput{{Text: "Tea", Correct: true}, {Text: "Coffee"}}, false, true), http.StatusCreated)
-	chatVote(t, s, bob, group.ID, sent.ID, []int{0}, http.StatusOK)
-	saved := chatSave(t, s, bob, http.StatusCreated, sent.ID).Saved
-	if len(saved) != 1 || saved[0].Poll == nil || saved[0].Poll.Voters != 0 || !saved[0].Poll.Anonymous || !saved[0].Poll.Quiz || saved[0].Body != "Tea or coffee?" || saved[0].LinkPreview != nil {
-		t.Fatalf("saved copy: %+v %+v", saved, saved[0].Poll)
+// nextChatUpdateOf waits for the update to one message on a stream, skipping other events.
+func nextChatUpdateOf(t *testing.T, client *streamClient, messageID string) *ChatMessage {
+	t.Helper()
+	for {
+		event := nextChatEvent(t, client)
+		if event.Type == "message.updated" && event.Message != nil && event.Message.ID == messageID {
+			return event.Message
+		}
 	}
-	// Forwarded into a direct message, it stops being anonymous.
-	dm := chatOpenDM(t, s, alice, bob)
-	forwarded := chatForward(t, s, alice, dm.ID, http.StatusCreated, []string{sent.ID}, nil)
-	if len(forwarded) != 1 || forwarded[0].Poll == nil || forwarded[0].Poll.Anonymous || !forwarded[0].Poll.Quiz {
-		t.Fatalf("forwarded into a direct message: %+v", forwarded)
+}
+
+// A saved or forwarded poll shows the original's results as they change, never names
+// who voted, and is voted on and ended only where it was asked. Someone who cannot read
+// the original sees no counts until five people have voted.
+func TestChatPollCopyMirrorsTheOriginal(t *testing.T) {
+	s, alice, bob, carol, dave := chatCrowd(t)
+	erin, frank := chatNewPerson(t, s, "erin"), chatNewPerson(t, s, "frank")
+	chatBefriend(t, s, alice, erin)
+	chatBefriend(t, s, alice, frank)
+	chatBefriend(t, s, bob, dave)
+	group := chatNewGroup(t, s, alice, "Drinks", bob, carol, erin, frank)
+	sent := chatSendPoll(t, s, alice, group.ID, pollInput("Tea or coffee?", plainOptions("Tea", "Coffee"), false, false), http.StatusCreated)
+	chatVote(t, s, bob, group.ID, sent.ID, []int{0}, http.StatusOK)
+
+	// Bob can read the original, so his Saved copy shows its results, without names.
+	saved := chatSave(t, s, bob, http.StatusCreated, sent.ID).Saved
+	copied := saved[0].Poll
+	if copied == nil || copied.Mirror == nil || copied.Mirror.Hidden || copied.Voters != 1 || !reflect.DeepEqual(pollVotes(copied), []int{1, 0}) || !reflect.DeepEqual(copied.MyVotes, []int{0}) {
+		t.Fatalf("bob's saved copy: %+v %+v", copied, copied.Mirror)
+	}
+	for _, option := range copied.Options {
+		if len(option.VoterIDs) > 0 {
+			t.Fatalf("a copy names voters: %+v", copied.Options)
+		}
+	}
+	savedID := saved[0].ConversationID
+	chatVote(t, s, bob, savedID, saved[0].ID, []int{1}, http.StatusConflict)
+	chatClosePoll(t, s, alice, savedID, saved[0].ID, http.StatusNotFound)
+
+	// Dave cannot read the group: until five people have voted he sees no counts.
+	dm := chatOpenDM(t, s, bob, dave)
+	forwarded := chatForward(t, s, bob, dm.ID, http.StatusCreated, []string{sent.ID}, nil)[0]
+	chatClosePoll(t, s, bob, dm.ID, forwarded.ID, http.StatusConflict)
+	hiddenFromDave := func(label string, poll *ChatPoll) {
+		t.Helper()
+		if poll == nil || poll.Mirror == nil || !poll.Mirror.Hidden || poll.Mirror.MinVoters != chatPollMirrorMinVoters || poll.Voters != 0 || !reflect.DeepEqual(pollVotes(poll), []int{0, 0}) {
+			t.Fatalf("%s: %+v", label, poll)
+		}
+	}
+	hiddenFromDave("dave's history", chatHistoryFind(t, s, dave, dm.ID, forwarded.ID).Poll)
+	// Bob is in both conversations and still sees the counts there.
+	if poll := chatHistoryFind(t, s, bob, dm.ID, forwarded.ID).Poll; poll.Mirror.Hidden || poll.Voters != 1 {
+		t.Fatalf("bob's view of his forward: %+v", poll)
 	}
 
-	// Deleting a poll for everyone removes its answers and votes.
+	daveStream, bobStream := chatListen(s, dave), chatListen(s, bob)
+	before := chatLastSeq(t, s, savedID)
+	chatVote(t, s, carol, group.ID, sent.ID, []int{1}, http.StatusOK)
+	hiddenFromDave("dave's update", nextChatUpdateOf(t, daveStream, forwarded.ID).Poll)
+	if poll := nextChatUpdateOf(t, bobStream, saved[0].ID).Poll; poll.Voters != 2 || !reflect.DeepEqual(pollVotes(poll), []int{1, 1}) {
+		t.Fatalf("bob's saved copy after carol voted: %+v", poll)
+	}
+	// A client that missed the event finds the change when it catches up.
+	if changes := chatChanges(t, s, bob.token, savedID, before).Messages; len(changes) != 1 || changes[0].Poll.Voters != 2 {
+		t.Fatalf("changes to bob's saved copy: %+v", changes)
+	}
+
+	for _, person := range []chatPerson{alice, erin, frank} {
+		chatVote(t, s, person, group.ID, sent.ID, []int{0}, http.StatusOK)
+	}
+	var shown *ChatMessage
+	for shown == nil || shown.Poll.Voters < chatPollMirrorMinVoters {
+		shown = nextChatUpdateOf(t, daveStream, forwarded.ID)
+	}
+	if poll := shown.Poll; poll.Mirror.Hidden || !reflect.DeepEqual(pollVotes(poll), []int{4, 1}) || len(poll.Options[0].VoterIDs) > 0 {
+		t.Fatalf("dave's view at five voters: %+v", poll)
+	}
+
+	// A copy of a copy mirrors the same poll.
+	again := chatSave(t, s, dave, http.StatusCreated, forwarded.ID).Saved[0]
+	if again.Poll.Mirror == nil || again.Poll.Voters != 5 {
+		t.Fatalf("dave's copy of the forward: %+v", again.Poll)
+	}
+
+	// Ending the original ends every copy.
+	chatClosePoll(t, s, alice, group.ID, sent.ID, http.StatusOK)
+	if poll := chatHistoryFind(t, s, dave, dm.ID, forwarded.ID).Poll; poll.ClosedAt == nil {
+		t.Fatalf("the forward did not end with the original: %+v", poll)
+	}
+
+	// Deleting a poll for everyone removes its answers and votes, and its copies.
 	chatDo(t, s, http.MethodDelete, alice.token, "/v1/chat/conversations/"+group.ID+"/messages/"+sent.ID+"?for=everyone", nil, http.StatusOK)
 	var rows int
 	if err := s.db.QueryRow(`SELECT (SELECT COUNT(*) FROM chat_polls WHERE message_id = ?) + (SELECT COUNT(*) FROM chat_poll_options WHERE message_id = ?) + (SELECT COUNT(*) FROM chat_poll_votes WHERE message_id = ?)`, sent.ID, sent.ID, sent.ID).Scan(&rows); err != nil {
@@ -231,11 +305,38 @@ func TestChatPollForwardedIsANewPoll(t *testing.T) {
 	if rows != 0 {
 		t.Fatalf("%d poll rows left after deleting", rows)
 	}
+	if !chatMessageDeleted(t, s, forwarded.ID) {
+		t.Fatal("the forward outlived the original")
+	}
+}
+
+// A copy made before copies mirrored their original stays a poll of its own: its votes
+// count, and a copy of it mirrors it rather than the first original.
+func TestChatPollOlderCopyKeepsItsOwnVotes(t *testing.T) {
+	s, alice, bob, carol, _ := chatCrowd(t)
+	group := chatNewGroup(t, s, alice, "Drinks", bob, carol)
+	sent := chatSendPoll(t, s, alice, group.ID, pollInput("Tea or coffee?", plainOptions("Tea", "Coffee"), false, false), http.StatusCreated)
+	saved := chatSave(t, s, bob, http.StatusCreated, sent.ID).Saved[0]
+	if _, err := s.db.Exec(`UPDATE chat_polls SET results_of = NULL WHERE message_id = ?`, saved.ID); err != nil {
+		t.Fatal(err)
+	}
+	voted := chatVote(t, s, bob, saved.ConversationID, saved.ID, []int{1}, http.StatusOK)
+	if voted.Poll.Mirror != nil || !reflect.DeepEqual(pollVotes(voted.Poll), []int{0, 1}) {
+		t.Fatalf("an older copy: %+v", voted.Poll)
+	}
+	dm := chatOpenDM(t, s, bob, carol)
+	forwarded := chatForward(t, s, bob, dm.ID, http.StatusCreated, []string{saved.ID}, nil)[0]
+	// It mirrors bob's vote in the older copy. Saved messages are nobody's place to go, so
+	// the counts wait for five voters even for him.
+	if poll := forwarded.Poll; poll.Mirror == nil || !poll.Mirror.Hidden || !reflect.DeepEqual(poll.MyVotes, []int{1}) {
+		t.Fatalf("a forward of an older copy: %+v %+v", poll, poll.Mirror)
+	}
 }
 
 // Saving or forwarding a quiz nobody has answered does not make the copier its asker:
-// the copy keeps its answers and feedback hidden from them until they answer the copy,
-// and only the original asker can end it. The asker's own copy still shows them.
+// the copy keeps its answers and feedback hidden from them until they answer the
+// original, and only the original asker can end it, there. The asker's own copy still
+// shows them.
 func TestChatQuizCopyKeepsAnswersHidden(t *testing.T) {
 	s, alice, bob, carol, _ := chatCrowd(t)
 	group := chatNewGroup(t, s, alice, "Quiz night", bob, carol)
@@ -256,21 +357,21 @@ func TestChatQuizCopyKeepsAnswersHidden(t *testing.T) {
 	saved := chatSave(t, s, bob, http.StatusCreated, sent.ID).Saved
 	hidden("bob's saved copy", saved[0].Poll)
 	savedID := saved[0].ConversationID
-	chatClosePoll(t, s, bob, savedID, saved[0].ID, http.StatusForbidden)
+	chatClosePoll(t, s, bob, savedID, saved[0].ID, http.StatusConflict)
 	for _, m := range chatHistory(t, s, bob.token, savedID, "").Messages {
 		if m.Poll != nil {
 			hidden("bob's saved history", m.Poll)
 		}
 	}
-	// He can still answer it later in Saved messages, and then he sees how he did.
-	if answered := chatVote(t, s, bob, savedID, saved[0].ID, []int{2}, http.StatusOK); !answered.Poll.Revealed || feedbackOf(answered.Poll)[2] != "No." {
-		t.Fatalf("bob after answering his copy: %+v", answered.Poll)
+	// Once he answers the original, his copy shows how he did.
+	chatVote(t, s, bob, group.ID, sent.ID, []int{2}, http.StatusOK)
+	if answered := chatHistoryFind(t, s, bob, savedID, saved[0].ID).Poll; !answered.Revealed || feedbackOf(answered)[2] != "No." {
+		t.Fatalf("bob's copy after answering: %+v", answered)
 	}
 
 	dm := chatOpenDM(t, s, bob, carol)
 	forwarded := chatForward(t, s, bob, dm.ID, http.StatusCreated, []string{sent.ID}, nil)
-	hidden("bob's forward", forwarded[0].Poll)
-	chatClosePoll(t, s, bob, dm.ID, forwarded[0].ID, http.StatusForbidden)
+	chatClosePoll(t, s, bob, dm.ID, forwarded[0].ID, http.StatusConflict)
 	for _, m := range chatHistory(t, s, carol.token, dm.ID, "").Messages {
 		if m.Poll != nil {
 			hidden("carol's view of the forward", m.Poll)
@@ -344,4 +445,101 @@ func TestChatPollFeedbackShowsToWhoChoseIt(t *testing.T) {
 	if got := feedbackOf(saved[0].Poll); !reflect.DeepEqual(got, []string{"Good choice.", "", "Spicy!"}) {
 		t.Fatalf("the copy lost its feedback: %q", got)
 	}
+}
+
+// The asker chooses who sees a poll outside its conversation: whether it can be forwarded
+// at all (saving it for yourself always works), and whether copies show its results or
+// only that it is open, with or without how many have voted.
+func TestChatPollCopySettings(t *testing.T) {
+	s, alice, bob, carol, dave := chatCrowd(t)
+	chatBefriend(t, s, bob, dave)
+	group := chatNewGroup(t, s, alice, "Drinks", bob, carol)
+	dm := chatOpenDM(t, s, bob, dave)
+	ask := func(settings map[string]any) ChatMessage {
+		t.Helper()
+		poll := pollInput("Tea or coffee?", plainOptions("Tea", "Coffee"), false, false)
+		for key, value := range settings {
+			poll[key] = value
+		}
+		sent := chatSendPoll(t, s, alice, group.ID, poll, http.StatusCreated)
+		chatVote(t, s, bob, group.ID, sent.ID, []int{0}, http.StatusOK)
+		chatVote(t, s, carol, group.ID, sent.ID, []int{1}, http.StatusOK)
+		return sent
+	}
+
+	// Kept: it can be saved, but neither it nor the saved copy can be forwarded.
+	kept := ask(map[string]any{"forwardable": false})
+	if kept.Poll.Forwardable {
+		t.Fatalf("a kept poll reads as forwardable: %+v", kept.Poll)
+	}
+	chatForward(t, s, bob, dm.ID, http.StatusForbidden, []string{kept.ID}, nil)
+	saved := chatSave(t, s, bob, http.StatusCreated, kept.ID).Saved[0]
+	if saved.Poll.Forwardable || saved.Poll.Mirror == nil || saved.Poll.Voters != 2 {
+		t.Fatalf("bob's saved copy of a kept poll: %+v", saved.Poll)
+	}
+	chatForward(t, s, bob, dm.ID, http.StatusForbidden, []string{saved.ID}, nil)
+
+	// Status only, with the number of voters.
+	status := ask(map[string]any{"copyResults": false})
+	forwarded := chatForward(t, s, bob, dm.ID, http.StatusCreated, []string{status.ID}, nil)[0]
+	for _, person := range []chatPerson{bob, dave} {
+		poll := chatHistoryFind(t, s, person, dm.ID, forwarded.ID).Poll
+		if poll.Mirror == nil || !poll.Mirror.Status || poll.Mirror.VotersHidden || poll.Mirror.Hidden || poll.Voters != 2 || !reflect.DeepEqual(pollVotes(poll), []int{0, 0}) {
+			t.Fatalf("%s's view of a status-only copy: %+v %+v", person.user.Username, poll, poll.Mirror)
+		}
+	}
+
+	// Status only, without the number of voters.
+	quiet := ask(map[string]any{"copyResults": false, "copyVoters": false})
+	forwarded = chatForward(t, s, bob, dm.ID, http.StatusCreated, []string{quiet.ID}, nil)[0]
+	if poll := chatHistoryFind(t, s, dave, dm.ID, forwarded.ID).Poll; !poll.Mirror.Status || !poll.Mirror.VotersHidden || poll.Voters != 0 || !reflect.DeepEqual(pollVotes(poll), []int{0, 0}) {
+		t.Fatalf("dave's view of a quiet copy: %+v %+v", poll, poll.Mirror)
+	}
+
+	// Left out, every choice is allowed, as before askers could choose.
+	open := ask(nil)
+	if !open.Poll.Forwardable {
+		t.Fatalf("a poll without settings: %+v", open.Poll)
+	}
+}
+
+// Whoever asked can change what leaves the conversation at any time, and copies already
+// made follow at once. Nobody else can, and not from a copy.
+func TestChatPollSettingsCanChange(t *testing.T) {
+	s, alice, bob, carol, dave := chatCrowd(t)
+	chatBefriend(t, s, bob, dave)
+	group := chatNewGroup(t, s, alice, "Drinks", bob, carol)
+	dm := chatOpenDM(t, s, bob, dave)
+	sent := chatSendPoll(t, s, alice, group.ID, pollInput("Tea or coffee?", plainOptions("Tea", "Coffee"), false, false), http.StatusCreated)
+	chatVote(t, s, bob, group.ID, sent.ID, []int{0}, http.StatusOK)
+	forwarded := chatForward(t, s, bob, dm.ID, http.StatusCreated, []string{sent.ID}, nil)[0]
+	settings := func(person chatPerson, conversationID, messageID string, body map[string]any, want int) ChatMessage {
+		t.Helper()
+		raw := chatDo(t, s, http.MethodPost, person.token, "/v1/chat/conversations/"+conversationID+"/messages/"+messageID+"/poll/settings", body, want)
+		if want != http.StatusOK {
+			return ChatMessage{}
+		}
+		return chatDecode[chatMessagePayload](t, raw).Message
+	}
+	settings(bob, group.ID, sent.ID, map[string]any{"forwardable": false}, http.StatusForbidden)
+	settings(bob, dm.ID, forwarded.ID, map[string]any{"forwardable": false}, http.StatusConflict)
+
+	daveStream := chatListen(s, dave)
+	changed := settings(alice, group.ID, sent.ID, map[string]any{"forwardable": false, "copyResults": false}, http.StatusOK)
+	if changed.Poll.Forwardable || changed.Poll.CopyResults || !changed.Poll.CopyVoters {
+		t.Fatalf("after the change: %+v", changed.Poll)
+	}
+	if poll := nextChatUpdateOf(t, daveStream, forwarded.ID).Poll; !poll.Mirror.Status || poll.Voters != 1 || poll.Forwardable {
+		t.Fatalf("dave's copy after the change: %+v %+v", poll, poll.Mirror)
+	}
+	chatForward(t, s, bob, dm.ID, http.StatusForbidden, []string{sent.ID}, nil)
+
+	// Changing it back opens it again; asking for what is already set changes nothing.
+	settings(alice, group.ID, sent.ID, map[string]any{"forwardable": true, "copyResults": true}, http.StatusOK)
+	before := chatLastSeq(t, s, group.ID)
+	settings(alice, group.ID, sent.ID, map[string]any{"forwardable": true}, http.StatusOK)
+	if chatLastSeq(t, s, group.ID) != before {
+		t.Fatal("a change to nothing took a sequence number")
+	}
+	chatForward(t, s, bob, dm.ID, http.StatusCreated, []string{sent.ID}, nil)
 }

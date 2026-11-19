@@ -252,6 +252,7 @@ func (s *Server) registerChatRoutes(service fiber.Router) {
 	conversation.Post("/messages/:messageId/reactions", s.chatLimiter("react", 60, time.Minute), s.chatRoute("react", s.reactToChatMessage))
 	conversation.Post("/messages/:messageId/poll/vote", s.chatLimiter("react", 60, time.Minute), s.chatRoute("vote", s.voteInChatPoll))
 	conversation.Post("/messages/:messageId/poll/close", s.chatLimiter("edit", 30, time.Minute), s.chatRoute("close poll", s.closeChatPoll))
+	conversation.Post("/messages/:messageId/poll/settings", s.chatLimiter("edit", 30, time.Minute), s.chatRoute("poll settings", s.setChatPollSettings))
 	conversation.Post("/messages/:messageId/edit", s.chatLimiter("edit", 30, time.Minute), s.chatRoute("edit", s.editChatMessage))
 	conversation.Delete("/messages/:messageId", s.chatLimiter("delete", 60, time.Minute), s.chatRoute("delete message", s.deleteChatMessage))
 	conversation.Get("/messages/:messageId/link-preview/image", s.chatRoute("fetch link preview image", s.fetchChatLinkPreviewImage))

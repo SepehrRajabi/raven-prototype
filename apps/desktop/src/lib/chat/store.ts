@@ -67,6 +67,7 @@ import type {
   PreparedAttachment,
   Reduced,
   TreeLayout,
+  ChatPollPrivacy,
 } from "./types";
 
 /** How many conversations keep their messages loaded besides the ones on screen. */
@@ -824,6 +825,12 @@ export class ChatStore {
   /** Sets my choices in a poll; none takes my vote back. */
   async votePoll(conversationId: string, messageId: string, options: number[]) {
     const { message } = await this.api.votePoll(conversationId, messageId, options);
+    this.apply(applyOwnMessage(this.state, message, this.atBottom.get(conversationId) ?? true));
+  }
+
+  /** Changes what leaves the chat from a poll I asked. Its copies follow at once. */
+  async setPollPrivacy(conversationId: string, messageId: string, privacy: ChatPollPrivacy) {
+    const { message } = await this.api.setPollPrivacy(conversationId, messageId, privacy);
     this.apply(applyOwnMessage(this.state, message, this.atBottom.get(conversationId) ?? true));
   }
 

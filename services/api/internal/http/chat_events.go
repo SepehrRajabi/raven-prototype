@@ -111,7 +111,8 @@ func (s *Server) publishChatMessageViews(eventType string, message ChatMessage, 
 		for _, pollView := range chatPollViews(message.Poll, view.userIDs) {
 			shown := message
 			shown.Origin = view.origin
-			shown.Poll = pollView.poll
+			// A copy of a poll leaves small results out for people who cannot read the original.
+			shown.Poll = pollView.poll.forSource(view.origin)
 			s.publishChatEvent(ChatEvent{Type: eventType, ConversationID: message.ConversationID, Seq: seq, Message: &shown}, pollView.userIDs)
 		}
 	}

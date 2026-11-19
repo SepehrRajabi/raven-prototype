@@ -43,3 +43,18 @@ func chatPollFeedbackStatements() []string {
 		`ALTER TABLE chat_poll_options ADD COLUMN feedback TEXT NOT NULL DEFAULT ''`,
 	}
 }
+
+// chatPollMirrorStatements lets a saved or forwarded poll show the results of the poll it
+// was copied from. results_of names that poll's message; it is NULL on a poll asked where
+// it is, and on copies made before this column, which stay polls of their own. The asker
+// chooses whether the poll may be forwarded, whether copies show its results, and, when
+// they don't, whether they say how many people voted. Older polls keep allowing all three.
+func chatPollMirrorStatements() []string {
+	return []string{
+		`ALTER TABLE chat_polls ADD COLUMN results_of TEXT`,
+		`ALTER TABLE chat_polls ADD COLUMN forwardable BOOLEAN NOT NULL DEFAULT TRUE`,
+		`ALTER TABLE chat_polls ADD COLUMN copy_results BOOLEAN NOT NULL DEFAULT TRUE`,
+		`ALTER TABLE chat_polls ADD COLUMN copy_voters BOOLEAN NOT NULL DEFAULT TRUE`,
+		`CREATE INDEX IF NOT EXISTS idx_chat_polls_results_of ON chat_polls(results_of)`,
+	}
+}

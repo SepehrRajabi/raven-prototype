@@ -4,7 +4,7 @@ import { Button } from "@/components/ui/button";
 import { Tooltip } from "@/components/ui/tooltip";
 import { toast } from "@/components/ui/toast";
 import { failureText } from "@/lib/chat/errors";
-import type { ChatPoll } from "@/lib/chat/types";
+import type { ChatOrigin, ChatPoll } from "@/lib/chat/types";
 import { cn } from "@/lib/utils";
 
 /** How someone did in a quiz they answered: every correct answer and nothing else, some, or none. */
@@ -39,6 +39,10 @@ function voterNames(ids: string[], nameOf?: (id: string) => string): string {
  * A poll in a message. Choosing an answer votes at once; with multiple answers they are
  * ticked first and sent together. Results show once you voted, if you asked, or when it
  * ended. A quiz then marks what was right and wrong.
+ *
+ * A saved or forwarded copy shows the original poll's results, live, and is voted on only
+ * there. Someone who can open the original still sees results only after voting in it;
+ * someone who can't sees them straight away, once enough people voted to hide who chose what.
  */
 export function PollCard({
   poll,
@@ -47,6 +51,8 @@ export function PollCard({
   canVote,
   nameOf,
   onVote,
+  source,
+  onOpenSource,
 }: {
   poll: ChatPoll;
   question: string;
@@ -55,14 +61,21 @@ export function PollCard({
   canVote: boolean;
   nameOf?: (id: string) => string;
   onVote: (options: number[]) => Promise<void>;
+  /** Where a copy came from, when the viewer can open it. */
+  source?: ChatOrigin["source"];
+  onOpenSource?: (conversationId: string, seq: number) => void;
 }) {
   const voted = poll.myVotes.length > 0;
   const closed = Boolean(poll.closedAt);
+  const mirror = poll.mirror;
+  const counted = !mirror?.hidden && !mirror?.gone;
   // Sending a quiz isn't enough to see its results: whoever saved or forwarded a copy is
   // its sender here but not its asker, so for a quiz the server's `revealed` decides.
-  const showResults = voted || closed || (mine && (!poll.quiz || poll.revealed));
-  // A quiz takes one answer and keeps it.
-  const interactive = canVote && !closed && !(poll.quiz && voted);
+  const showResults = mirror
+    ? counted && (!poll.quiz || poll.revealed || closed) && (voted || closed || !source)
+    : voted || closed || (mine && (!poll.quiz || poll.revealed));
+  // A quiz takes one answer and keeps it. A copy is voted on where it was asked.
+  const interactive = canVote && !mirror && !closed && !(poll.quiz && voted);
   const votesKey = poll.myVotes.join(",");
   const [chosen, setChosen] = useState<number[]>(poll.myVotes);
   const [busy, setBusy] = useState(false);
@@ -92,7 +105,9 @@ export function PollCard({
   };
 
   const pending = poll.multiple && interactive && chosen.length > 0 && chosen.join(",") !== votesKey;
-  const outcome = quizOutcome(poll);
+  // The asker chose to show copies only whether the poll is open, not its answers' results.
+  const statusOnly = Boolean(mirror?.status);
+  const outcome = statusOnly ? null : quizOutcome(poll);
   const count = poll.voters;
   const noun = poll.quiz ? (count === 1 ? "answer" : "answers") : count === 1 ? "vote" : "votes";
 
@@ -103,7 +118,7 @@ export function PollCard({
         <span>{pollKind(poll)}</span>
       </div>
       <p className="mt-0.5 break-words text-body font-medium text-foreground" dir="auto"><bdi>{question}</bdi></p>
-      <ul className="mt-2 space-y-1.5" role={poll.multiple ? "group" : "radiogroup"} aria-label="Answers">
+      {statusOnly ? null : <ul className="mt-2 space-y-1.5" role={poll.multiple ? "group" : "radiogroup"} aria-label="Answers">
         {poll.options.map((option, index) => {
           const selected = chosen.includes(index);
           const share = percent(option.votes, count);
@@ -168,15 +183,29 @@ export function PollCard({
             </li>
           );
         })}
-      </ul>
+      </ul>}
       {outcome ? (
         <p className={cn("mt-2 text-small font-medium", outcome === "right" ? "text-foreground" : outcome === "wrong" ? "text-destructive" : "text-warning")} role="status">
           {outcome === "right" ? "You got it right." : outcome === "partly" ? "Partly right." : "Not quite."}
         </p>
       ) : null}
       <div className="mt-1.5 flex min-h-7 items-center gap-2 text-caption text-muted-foreground">
-        <span className="tabular-nums">{count} {noun}</span>
-        <span className="ml-auto flex items-center gap-1">
+        {mirror?.gone ? (
+          <span>The original poll was removed.</span>
+        ) : statusOnly ? (
+          // "Ended" is already above the question.
+          <span className="tabular-nums">{[closed ? null : "Still open", mirror?.votersHidden ? null : `${count} ${noun}`].filter(Boolean).join(" · ")}</span>
+        ) : mirror?.hidden ? (
+          <span>Results show here once {mirror.minVoters ?? 5} people have voted.</span>
+        ) : (
+          <span className="tabular-nums">{count} {noun}{mirror ? " in the original" : ""}</span>
+        )}
+        <span className="ml-auto flex shrink-0 items-center gap-1">
+          {mirror && !mirror.gone && !closed && !voted && source && onOpenSource ? (
+            <Button size="xs" variant="ghost" onClick={() => onOpenSource(source.conversationId, source.seq)}>
+              {poll.quiz ? "Answer in the original" : "Vote in the original"}
+            </Button>
+          ) : null}
           {voted && !poll.quiz && interactive && !pending ? (
             <Button size="xs" variant="ghost" disabled={busy} onClick={() => vote([])}>Take back vote</Button>
           ) : null}
