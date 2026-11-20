@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useId, useState, type MouseEvent } from "react";
 import { BarChart3, Check, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Tooltip } from "@/components/ui/tooltip";
@@ -6,6 +6,7 @@ import { toast } from "@/components/ui/toast";
 import { failureText } from "@/lib/chat/errors";
 import type { ChatOrigin, ChatPoll } from "@/lib/chat/types";
 import { cn } from "@/lib/utils";
+import { LinkedText } from "./MessageText";
 
 /** How someone did in a quiz they answered: every correct answer and nothing else, some, or none. */
 export function quizOutcome(poll: ChatPoll): "right" | "partly" | "wrong" | null {
@@ -65,6 +66,7 @@ export function PollCard({
   source?: ChatOrigin["source"];
   onOpenSource?: (conversationId: string, seq: number) => void;
 }) {
+  const cardId = useId();
   const voted = poll.myVotes.length > 0;
   const closed = Boolean(poll.closedAt);
   const mirror = poll.mirror;
@@ -117,7 +119,7 @@ export function PollCard({
         <BarChart3 className="h-3.5 w-3.5" aria-hidden />
         <span>{pollKind(poll)}</span>
       </div>
-      <p className="mt-0.5 break-words text-body font-medium text-foreground" dir="auto"><bdi>{question}</bdi></p>
+      <p className="mt-0.5 break-words text-body font-medium text-foreground" dir="auto"><bdi><LinkedText text={question} /></bdi></p>
       {statusOnly ? null : <ul className="mt-2 space-y-1.5" role={poll.multiple ? "group" : "radiogroup"} aria-label="Answers">
         {poll.options.map((option, index) => {
           const selected = chosen.includes(index);
@@ -126,15 +128,21 @@ export function PollCard({
           const wrongPick = poll.revealed && option.correct === false && poll.myVotes.includes(index);
           const rightPick = right && poll.myVotes.includes(index);
           const names = !poll.anonymous && showResults && option.voterIds?.length ? voterNames(option.voterIds, nameOf) : "";
-          const figure = <span className="relative shrink-0 text-caption tabular-nums text-muted-foreground">{share}%</span>;
+          const textId = `${cardId}-${index}-text`;
+          const figureId = `${cardId}-${index}-share`;
+          const markId = `${cardId}-${index}-mark`;
+          const figure = <span id={figureId} aria-hidden className="relative shrink-0 text-caption tabular-nums text-muted-foreground">{share}%</span>;
+          // A link in an answer opens the address; a click anywhere else in the row picks it.
+          // The button under the row is what the keyboard and screen readers use; a link
+          // cannot sit inside it.
+          const onRowClick = (event: MouseEvent<HTMLDivElement>) => {
+            if ((event.target as Element).closest("a")) return;
+            pick(index);
+          };
           return (
             <li key={index}>
-              <button
-                type="button"
-                role={poll.multiple ? "checkbox" : "radio"}
-                aria-checked={selected}
-                aria-disabled={!interactive || busy}
-                onClick={() => pick(index)}
+              <div
+                onClick={onRowClick}
                 className={cn(
                   "relative flex w-full items-center gap-2 overflow-hidden rounded-control border px-2.5 py-1.5 text-left transition-colors",
                   right ? "border-foreground/60" : wrongPick ? "border-destructive/60" : "border-foreground/10",
@@ -151,6 +159,14 @@ export function PollCard({
                     style={{ width: `${share}%` }}
                   />
                 ) : null}
+                <button
+                  type="button"
+                  role={poll.multiple ? "checkbox" : "radio"}
+                  aria-checked={selected}
+                  aria-disabled={!interactive || busy}
+                  aria-labelledby={[textId, showResults ? figureId : null, right || wrongPick ? markId : null].filter(Boolean).join(" ")}
+                  className="absolute inset-0 rounded-control focus-visible:-outline-offset-2"
+                />
                 <span
                   aria-hidden
                   className={cn(
@@ -165,10 +181,10 @@ export function PollCard({
                 >
                   {wrongPick ? <X className="h-3 w-3" strokeWidth={3} /> : <Check className="h-3 w-3" strokeWidth={3} />}
                 </span>
-                <span className="relative min-w-0 flex-1 break-words text-small text-foreground" dir="auto"><bdi>{option.text}</bdi></span>
+                <span id={textId} className="relative min-w-0 flex-1 break-words text-small text-foreground" dir="auto"><bdi><LinkedText text={option.text} /></bdi></span>
                 {showResults ? (names ? <Tooltip label={names}>{figure}</Tooltip> : figure) : null}
-                {right ? <span className="sr-only">, correct answer</span> : wrongPick ? <span className="sr-only">, wrong answer</span> : null}
-              </button>
+                {right ? <span id={markId} className="sr-only">, correct answer</span> : wrongPick ? <span id={markId} className="sr-only">, wrong answer</span> : null}
+              </div>
               {option.feedback ? (
                 <p
                   className={cn(
@@ -177,7 +193,7 @@ export function PollCard({
                   )}
                   dir="auto"
                 >
-                  <bdi>{option.feedback}</bdi>
+                  <bdi><LinkedText text={option.feedback} /></bdi>
                 </p>
               ) : null}
             </li>

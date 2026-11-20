@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { emojiOnlyCount, graphemes, parseMessage, type Block, type Inline } from "./format";
+import { emojiOnlyCount, graphemes, parseLinks, parseMessage, type Block, type Inline } from "./format";
 import { dayLabel, listTime, sameDay } from "./time";
 
 /** A compact rendering of the parsed tree, so expectations read like the message. */
@@ -107,6 +107,20 @@ describe("links", () => {
 
   test("an address inside formatting still links", () => {
     expect(line("**read https://example.com now**")).toBe("<b>read <a https://example.com/>https://example.com</a> now</b>");
+  });
+});
+
+describe("links outside a message", () => {
+  test("addresses link and everything else stays as written", () => {
+    expect(show(parseLinks("Which is better, https://a.example/x or **b**?"))).toBe("Which is better, <a https://a.example/x>https://a.example/x</a> or **b**?");
+    expect(show(parseLinks("Lunch at <@u:abc> `12`?"))).toBe("Lunch at <@u:abc> `12`?");
+    expect(show(parseLinks("nothttps://example.com and javascript:alert(1)"))).toBe("nothttps://example.com and javascript:alert(1)");
+    expect(parseLinks("")).toEqual([]);
+  });
+
+  test("direction-changing characters are taken out of the address", () => {
+    const [link] = parseLinks("https://example.com/\u202Eexe.jpg") as Array<Extract<Inline, { type: "link" }>>;
+    expect(link.text).toBe("https://example.com/exe.jpg");
   });
 });
 
