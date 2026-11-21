@@ -60,7 +60,9 @@ function ReplyQuote({ reply, onOpen }: { reply: ChatReplyRef; onOpen?: () => voi
   const content = (
     <>
       {reply.senderName && !reply.unavailable ? <span className="block truncate text-caption font-medium"><bdi>{reply.senderName}</bdi></span> : null}
-      <span dir="auto" className={cn("block truncate text-caption", reply.unavailable || reply.deleted ? "italic text-subtle" : "text-muted-foreground")}>{text}</span>
+      {/* The excerpt reads in its own direction but lines up with the name and the bar, not
+          with the far edge: match-parent aligns to the start of the quote, not of the text. */}
+      <span dir="auto" className={cn("block truncate text-caption [text-align:match-parent]", reply.unavailable || reply.deleted ? "italic text-subtle" : "text-muted-foreground")}>{text}</span>
     </>
   );
   const className = "mb-1 block w-full min-w-0 border-s-2 border-subtle ps-2 text-start";
