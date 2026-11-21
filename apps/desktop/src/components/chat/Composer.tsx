@@ -304,7 +304,8 @@ export function Composer({ conversationId, name, replyingTo, editing, onCancelRe
           <span className="shrink-0 text-subtle">{context.icon}</span>
           <div className="min-w-0 flex-1">
             <div className="truncate text-caption font-medium"><bdi>{context.title}</bdi></div>
-            <div dir="auto" className="truncate text-caption text-muted-foreground">{context.text}</div>
+            {/* Persian text keeps its reading order but stays under the title, as in a reply quote. */}
+            <div dir="auto" className="truncate text-caption text-muted-foreground [text-align:match-parent]">{context.text}</div>
           </div>
           <button type="button" aria-label={context.label} onClick={context.cancel} className="flex h-7 w-7 shrink-0 items-center justify-center rounded-control text-subtle transition-colors hover:bg-accent hover:text-foreground">
             <X className="h-4 w-4" />
