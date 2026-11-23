@@ -85,7 +85,7 @@ export function mentionPlainText(node: MentionNode, resolve: MentionResolver | u
 // An excerpt is cut by length, which can fall inside a token.
 const CUT_TOKEN = /<@(?:[unt](?::[^\s<>…]*)?)?…$/;
 
-/** An excerpt of a message with each mention as its name, for quotes. Code stays as written. */
+/** An excerpt of a message with each mention as its name, for quotes and lists. Code stays as written. */
 export function mentionsAsText(excerpt: string, resolve: MentionResolver | undefined): string {
   if (!excerpt.includes("<@")) return excerpt;
   return outsideCode(excerpt, (part) => part.replace(MENTION_TOKENS, (_, letter: string, id: string) =>

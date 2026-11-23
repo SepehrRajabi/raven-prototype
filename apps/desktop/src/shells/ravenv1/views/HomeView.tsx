@@ -10,6 +10,7 @@ import { EmptyState, GroupedList, NestGlyph, PersonAvatar, SectionLabel } from "
 import { PendingList } from "../Inbox";
 import { unreadConversations } from "../home";
 import { readLastVisited } from "../lastVisited";
+import { mentionNames } from "../mentionNames";
 import { personStatus, reachRank } from "../people";
 import { PRESENCE, type RavenShellData, type RavenView, type ShellPerson } from "../state";
 import { focusGlobalSearch } from "../searchFocus";
@@ -54,6 +55,7 @@ export function HomeView({
 
   const chatState = useChatState(chat);
   const unread = useMemo(() => unreadConversations(chatState ? Object.values(chatState.conversations).map(({ summary }) => summary) : []), [chatState]);
+  const mentions = useMemo(() => mentionNames(data, chatState), [data, chatState]);
   const lastVisited = useMemo(() => (data.user ? readLastVisited(data.apiServerUrl, data.user.id) : {}), [data.apiServerUrl, data.user]);
 
   // The last nest looked at, when it is quiet: a live one is already a card above.
@@ -128,7 +130,7 @@ export function HomeView({
               <SectionLabel className="mb-1">Unread</SectionLabel>
               <GroupedList>
                 {unread.map((conversation) => (
-                  <ConversationRow key={conversation.id} conversation={conversation} me={data.user!.id} onOpen={(id) => onNavigate({ kind: "chat", id })} />
+                  <ConversationRow key={conversation.id} conversation={conversation} me={data.user!.id} resolve={mentions} onOpen={(id) => onNavigate({ kind: "chat", id })} />
                 ))}
               </GroupedList>
             </section>

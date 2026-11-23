@@ -5,6 +5,7 @@
 // timing of a line on screen (`advanceHeadsUp`). Both read only the clock they are given.
 
 import type { Knock } from "@/lib/api";
+import { mentionsAsText, type MentionResolver } from "@/lib/chat/mentions";
 import type { ChatState } from "@/lib/chat/types";
 import { knockAge } from "@/lib/notifications";
 import type { VoiceOverlayCorner, VoiceOverlayHeadsUp, VoiceOverlayMessages, VoiceOverlayResolvedShape } from "./voiceOverlay";
@@ -175,6 +176,7 @@ export function messageCandidates({
   meId,
   openConversationId,
   avatarUrl,
+  resolve,
 }: {
   state: ChatState | null;
   messages: VoiceOverlayMessages;
@@ -184,13 +186,15 @@ export function messageCandidates({
   /** The conversation open in a Raven window you can see. */
   openConversationId: string;
   avatarUrl: (userId: string) => string | null;
+  /** Names the people and nests a message mentions. */
+  resolve?: MentionResolver;
 }): HeadsUpCandidate[] {
   if (!state) return [];
   const out: HeadsUpCandidate[] = [];
   for (const { summary } of Object.values(state.conversations)) {
     const last = summary.lastMessage;
     if (summary.kind !== "nest" || !last) continue;
-    const excerpt = last.deleted ? "" : cutText(last.excerpt, MESSAGE_TEXT_MAX);
+    const excerpt = last.deleted ? "" : cutText(mentionsAsText(last.excerpt, resolve), MESSAGE_TEXT_MAX);
     const eligible =
       messages === "tree" &&
       treeId != null &&
