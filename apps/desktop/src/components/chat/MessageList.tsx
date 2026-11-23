@@ -404,7 +404,7 @@ export const MessageList = forwardRef<MessageListHandle, MessageListProps>(funct
           if (row.kind === "pending") {
             return (
               <div className="mx-auto w-full max-w-3xl px-6">
-                <PendingRow pending={row.pending} onRetry={retry} onDiscard={discard} />
+                <PendingRow pending={row.pending} mentions={mentions} onRetry={retry} onDiscard={discard} />
               </div>
             );
           }

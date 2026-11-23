@@ -19,6 +19,7 @@ import {
   trackHeadsUp,
   type HeadsUpTracker,
 } from "@/lib/voiceOverlayHeadsUp";
+import { mentionNames } from "./mentionNames";
 import type { RavenShellData, RavenView } from "./state";
 import { useWindowActive } from "./useChat";
 
@@ -71,8 +72,8 @@ export function useVoiceOverlayHeadsUp({
   const knockKey = [...knocks.map((knock) => knock.id), ...answers.map((answer) => answer.key)].join("|");
   const knocksReady = Boolean(userId) && !data.loading;
 
-  const inputs = useRef({ settings, knocks, answers, knocksReady, treeId, openConversationId, userId, chat });
-  inputs.current = { settings, knocks, answers, knocksReady, treeId, openConversationId, userId, chat };
+  const inputs = useRef({ settings, knocks, answers, knocksReady, treeId, openConversationId, userId, chat, data });
+  inputs.current = { settings, knocks, answers, knocksReady, treeId, openConversationId, userId, chat, data };
   const trackers = useRef<{ knock: HeadsUpTracker; message: HeadsUpTracker }>({ knock: NEW_TRACKER, message: NEW_TRACKER });
   const timer = useRef<number | null>(null);
 
@@ -98,6 +99,7 @@ export function useVoiceOverlayHeadsUp({
           meId: current.userId,
           openConversationId: current.openConversationId,
           avatarUrl,
+          resolve: mentionNames(current.data, state),
         }),
         ready: Boolean(state?.listLoaded),
         now,

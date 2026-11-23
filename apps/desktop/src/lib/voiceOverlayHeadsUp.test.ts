@@ -172,6 +172,13 @@ describe("messages", () => {
     });
   });
 
+  test("a mention shows as a name, before the line is cut", () => {
+    const resolve = { nestSingular: "", person: (id: string) => (id === "u_sam" ? { name: "Sam", username: "sam" } : null), nest: () => null };
+    const long = `${"a".repeat(70)} <@u:u_sam>`;
+    const [entry] = messageCandidates({ ...baseMessages, state: chatState(conversation({ id: "c1" }, "m1", long)), resolve });
+    expect(entry.line.text).toBe(`in design: ${"a".repeat(70)} Sam`);
+  });
+
   test("off shows nothing but still counts the message as seen", () => {
     const [entry] = messageCandidates({ ...baseMessages, messages: "off", state });
     expect(entry.eligible).toBe(false);

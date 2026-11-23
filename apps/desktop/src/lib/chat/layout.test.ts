@@ -142,6 +142,8 @@ describe("the sentences written about conversations", () => {
     expect(previewLine({ ...base, lastMessage: { ...last, senderId: me } }, me)).toBe("You: see you at nine");
     expect(previewLine({ ...base, kind: "group", lastMessage: last }, me)).toBe("Ava: see you at nine");
     expect(previewLine({ ...base, lastMessage: { ...last, deleted: true, excerpt: "" } }, me)).toBe("Message deleted");
+    const resolve = { nestSingular: "", person: (id: string) => (id === "sam" ? { name: "Sam", username: "sam" } : null), nest: () => null };
+    expect(previewLine({ ...base, kind: "group", lastMessage: { ...last, excerpt: "ask <@u:sam> or <@u:gone>" } }, me, resolve)).toBe("Ava: ask Sam or someone");
     expect(previewLine({ ...base, kind: "group", lastMessage: { ...last, kind: "system", excerpt: "", system: { event: "member_left", user: ava } } }, me)).toBe("Ava left");
   });
 

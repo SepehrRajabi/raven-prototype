@@ -82,6 +82,16 @@ export function mentionPlainText(node: MentionNode, resolve: MentionResolver | u
   return resolve ? `a ${resolve.nestSingular.toLowerCase()}` : "…";
 }
 
+// An excerpt is cut by length, which can fall inside a token.
+const CUT_TOKEN = /<@(?:[unt](?::[^\s<>…]*)?)?…$/;
+
+/** An excerpt of a message with each mention as its name, for quotes and lists. Code stays as written. */
+export function mentionsAsText(excerpt: string, resolve: MentionResolver | undefined): string {
+  if (!excerpt.includes("<@")) return excerpt;
+  return outsideCode(excerpt, (part) => part.replace(MENTION_TOKENS, (_, letter: string, id: string) =>
+    mentionPlainText({ type: "mention", target: TARGET[letter], id }, resolve))).replace(CUT_TOKEN, "…");
+}
+
 /** What a mention of something gone says: "a removed nest". */
 export function removedNestText(resolve: MentionResolver): string {
   return `a removed ${resolve.nestSingular.toLowerCase()}`;

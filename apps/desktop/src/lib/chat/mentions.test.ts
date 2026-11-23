@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { labelsForPreference } from "@/shells/ravenv1/state";
 import { parseMessage } from "./format";
-import { filterCandidates, fromTokens, mentionPlainText, mentionQuery, mentionsUser, removedNestText, toTokens, type MentionResolver } from "./mentions";
+import { filterCandidates, fromTokens, mentionPlainText, mentionQuery, mentionsAsText, mentionsUser, removedNestText, toTokens, type MentionResolver } from "./mentions";
 
 const members = [
   { id: "u1", username: "sara" },
@@ -85,5 +85,23 @@ describe("mention helpers", () => {
     const plain = block.type === "paragraph" ? block.children.map((node) => (node.type === "mention" ? mentionPlainText(node, rooms) : node.type === "text" ? node.text : "")).join("") : "";
     expect(plain).toBe("a room someone general");
     expect(labelsForPreference("space_room").nestPlural).toBe("Rooms");
+  });
+});
+
+describe("quoted excerpts", () => {
+  test("name what was mentioned instead of showing its token", () => {
+    expect(mentionsAsText("Poll in chats <@u:u1>, see <@n:v1> and <@t:t1>", resolver())).toBe("Poll in chats Sara Ahmadi, see Standup and general");
+    expect(mentionsAsText("شد؟ <@u:u2>", resolver())).toBe("شد؟ Sam");
+    expect(mentionsAsText("<@u:gone> in <@n:gone>", resolver())).toBe("someone in a nest");
+    expect(mentionsAsText("<@u:u1>", undefined)).toBe("someone");
+  });
+
+  test("never show part of a token the excerpt was cut inside", () => {
+    for (const cut of ["<@…", "<@u…", "<@u:…", "<@u:cc8a59fd…"]) expect(mentionsAsText(`Ask ${cut}`, resolver())).toBe("Ask …");
+  });
+
+  test("leave code and ordinary text as written", () => {
+    expect(mentionsAsText("write `<@u:u1>` here <@u:u1>", resolver())).toBe("write `<@u:u1>` here Sara Ahmadi");
+    expect(mentionsAsText("a < b and mail me@x…", resolver())).toBe("a < b and mail me@x…");
   });
 });

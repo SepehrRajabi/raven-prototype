@@ -32,7 +32,7 @@ import { PollPrivacyDialog } from "./PollDialog";
 import { EmojiPicker } from "./EmojiPicker";
 import { Reactions } from "./Reactions";
 import { MessageText, type MentionContext } from "./MessageText";
-import { mentionsUser } from "@/lib/chat/mentions";
+import { mentionsAsText, mentionsUser, type MentionResolver } from "@/lib/chat/mentions";
 import { useSwipeToReply } from "./useSwipeToReply";
 
 /** What stands above a message without being part of it. */
@@ -56,8 +56,8 @@ function Decorations({ dayHeading, newDivider }: { dayHeading?: string; newDivid
 }
 
 /** The quoted line above a reply. Clicking it goes to the original when there is one to go to. */
-function ReplyQuote({ reply, onOpen }: { reply: ChatReplyRef; onOpen?: () => void }) {
-  const text = reply.unavailable ? "Original message isn’t available" : reply.deleted ? "Message deleted" : messageExcerpt(reply.excerpt, reply.attachments);
+function ReplyQuote({ reply, resolve, onOpen }: { reply: ChatReplyRef; /** Names the people and nests the original mentions. */ resolve?: MentionResolver; onOpen?: () => void }) {
+  const text = reply.unavailable ? "Original message isn’t available" : reply.deleted ? "Message deleted" : mentionsAsText(messageExcerpt(reply.excerpt, reply.attachments), resolve);
   const content = (
     <>
       {reply.senderName && !reply.unavailable ? <span className="block truncate text-caption font-medium"><bdi>{reply.senderName}</bdi></span> : null}
@@ -577,7 +577,7 @@ export const MessageRow = memo(function MessageRow(props: MessageRowProps) {
           >
             {showSender && !mine ? <div className="truncate text-caption font-medium text-muted-foreground"><PersonLink message={message} onOpenPerson={props.onOpenPerson} className="max-w-full truncate hover:underline"><bdi>{message.senderName}</bdi></PersonLink></div> : null}
             {origin ? <ForwardedFrom origin={origin} onOpenPerson={props.onOpenPerson} onOpenSource={props.onOpenSource} /> : null}
-            {reply && !deleted ? <ReplyQuote reply={reply} onOpen={reply.seq ? () => props.onOpenReply(reply.seq!) : undefined} /> : null}
+            {reply && !deleted ? <ReplyQuote reply={reply} resolve={props.mentions?.resolve} onOpen={reply.seq ? () => props.onOpenReply(reply.seq!) : undefined} /> : null}
             {attachments.length > 0 ? (
               <div className="-mx-1.5 mb-1 mt-0.5">
                 <MessageAttachments
@@ -632,10 +632,12 @@ export const MessageRow = memo(function MessageRow(props: MessageRowProps) {
 /** A message that has been written but not yet acknowledged by the server. */
 export const PendingRow = memo(function PendingRow({
   pending,
+  mentions,
   onRetry,
   onDiscard,
 }: {
   pending: PendingMessage;
+  mentions?: MentionContext;
   onRetry: (pending: PendingMessage) => void;
   onDiscard: (pending: PendingMessage) => void;
 }) {
@@ -680,7 +682,7 @@ export const PendingRow = memo(function PendingRow({
         </div>
       ) : (
         <div className="min-w-0 max-w-[min(100%,34rem)] rounded-card bg-bubble-mine px-3 py-1.5">
-          {pending.replyTo ? <ReplyQuote reply={pending.replyTo} /> : null}
+          {pending.replyTo ? <ReplyQuote reply={pending.replyTo} resolve={mentions?.resolve} /> : null}
           {library ? <div className="-mx-1.5 mb-1 mt-0.5">{libraryView()}</div> : null}
           {attachments.length > 0 ? (
             <div className="-mx-1.5 mb-1 mt-0.5">

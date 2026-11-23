@@ -6,6 +6,7 @@ import { api } from "@/lib/api";
 import { unreadLabel } from "@/lib/chat/reducer";
 import { previewLine } from "@/lib/chat/text";
 import { listTime } from "@/lib/chat/time";
+import type { MentionResolver } from "@/lib/chat/mentions";
 import type { ChatConversation } from "@/lib/chat/types";
 import { cn } from "@/lib/utils";
 
@@ -144,13 +145,16 @@ export const ConversationRowCompact = memo(function ConversationRowCompact({
 export const ConversationRow = memo(function ConversationRow({
   conversation,
   me,
+  resolve,
   onOpen,
 }: {
   conversation: ChatConversation;
   me: string;
+  /** Names the people and nests the last message mentions. */
+  resolve?: MentionResolver;
   onOpen: (id: string) => void;
 }) {
-  const preview = previewLine(conversation, me);
+  const preview = previewLine(conversation, me, resolve);
   const unread = conversation.unreadCount > 0;
   return (
     <button type="button" onClick={() => onOpen(conversation.id)} className="flex h-16 w-full items-center gap-3 px-3.5 text-left transition-colors hover:bg-secondary">

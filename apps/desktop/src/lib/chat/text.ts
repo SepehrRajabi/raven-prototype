@@ -2,6 +2,7 @@
 // and the one line shown under a conversation's name in a list.
 
 import { messageExcerpt } from "./attachments";
+import { mentionsAsText, type MentionResolver } from "./mentions";
 import type { ChatConversation, ChatMessage, ChatMessagePreview, ChatSystemPayload, TypingPerson } from "./types";
 
 /** "Ava", "Ava and Sam", "Ava, Sam and 2 others". */
@@ -56,11 +57,11 @@ export function systemLine(system: ChatSystemPayload | undefined, actorId: strin
 }
 
 /** The line under a conversation's name in a list: who said what last. */
-export function previewLine(conversation: ChatConversation, me: string): string {
+export function previewLine(conversation: ChatConversation, me: string, resolve?: MentionResolver): string {
   const last: ChatMessagePreview | undefined = conversation.lastMessage;
   if (!last) return "";
   if (last.kind === "system") return systemLine(last.system, last.senderId, last.senderName, me);
-  const text = last.deleted ? "Message deleted" : messageExcerpt(last.excerpt, last.attachments);
+  const text = last.deleted ? "Message deleted" : mentionsAsText(messageExcerpt(last.excerpt, last.attachments), resolve);
   if (conversation.kind === "saved" || conversation.kind === "raven") return text;
   if (last.senderId === me) return `You: ${text}`;
   return conversation.kind === "dm" ? text : `${last.senderName}: ${text}`;
