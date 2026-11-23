@@ -26,9 +26,9 @@ const message: ChatMessage = {
   body: "Where to?", poll: base, createdAt: "2026-11-11T12:00:00Z",
 };
 const noop = () => undefined;
-function render(poll: Partial<ChatPoll>, mine = false) {
+function render(poll: Partial<ChatPoll>, mine = false, extra: Partial<ChatMessage> = {}) {
   return renderToStaticMarkup(
-    <MessageRow message={{ ...message, poll: { ...base, ...poll } }} mine={mine} me="me" withAvatars={false} showSender={false} continuation={false} canReply canEdit={false} canDeleteForEveryone={false} onReply={noop} onEdit={noop} onRemoveForMe={noop} onDeleteForEveryone={noop} onOpenReply={noop} onOpenImage={noop} onVote={() => Promise.resolve()} />,
+    <MessageRow message={{ ...message, ...extra, poll: { ...base, ...poll } }} mine={mine} me="me" withAvatars={false} showSender={false} continuation={false} canReply canEdit={false} canDeleteForEveryone={false} onReply={noop} onEdit={noop} onRemoveForMe={noop} onDeleteForEveryone={noop} onOpenReply={noop} onOpenImage={noop} onOpenSource={noop} onVote={() => Promise.resolve()} />,
   );
 }
 
@@ -64,6 +64,38 @@ describe("polls", () => {
 
   test("keep a copied quiz's results hidden until its new sender answers", () => {
     expect(render({ quiz: true, revealed: false }, true)).not.toContain("75%");
+  });
+
+  test("show a copy's results from the original, voted on only there", () => {
+    const source = { conversationId: "c0", kind: "group" as const, name: "Lunch", seq: 4 };
+    const copy = (poll: Partial<ChatPoll>, withSource = true) =>
+      render({ mirror: {}, ...poll }, false, { origin: { createdAt: "2026-11-11T12:00:00Z", ...(withSource ? { source } : {}) } });
+    // Someone who can't open the original sees the results at once, and can't vote.
+    const outsider = copy({}, false);
+    expect(outsider).toContain("75%");
+    expect(outsider).toContain("4 votes in the original");
+    expect(outsider).toContain('aria-disabled="true"');
+    expect(outsider).not.toContain("Vote in the original");
+    // Someone who can open it votes there first, as in the original.
+    const member = copy({});
+    expect(member).not.toContain("75%");
+    expect(member).toContain("Vote in the original");
+    expect(copy({ myVotes: [1] })).toContain("75%");
+    expect(copy({ myVotes: [1] })).not.toContain("Take back vote");
+    // Small results are left out, and a removed original says so.
+    expect(copy({ voters: 0, mirror: { hidden: true, minVoters: 5 } }, false)).toContain("Results show here once 5 people have voted.");
+    expect(copy({ mirror: { gone: true } }, false)).toContain("The original poll was removed.");
+    // The asker can show copies only whether it is open, with or without how many voted.
+    const status = copy({ mirror: { status: true } }, false);
+    expect(status).toContain("Still open · 4 votes");
+    expect(status).not.toContain("Pizza");
+    expect(copy({ voters: 0, mirror: { status: true, votersHidden: true } }, false)).not.toContain("votes");
+  });
+
+  test("read the asker's privacy choices only from servers that take them", () => {
+    const limits = { maxQuestionLength: 300, minOptions: 2, maxOptions: 10, maxOptionLength: 100 };
+    expect(pollLimits({ chat: { polls: limits } })?.copySettings).toBeUndefined();
+    expect(pollLimits({ chat: { polls: { ...limits, copySettings: true, mirrorMinVoters: 5 } } })).toMatchObject({ copySettings: true, mirrorMinVoters: 5 });
   });
 
   test("mark right and wrong answers in a quiz", () => {

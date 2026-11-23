@@ -1,12 +1,12 @@
 import { useEffect, useRef, useState } from "react";
-import { Check, MessageSquareText, Plus, X } from "lucide-react";
+import { Check, ChevronDown, MessageSquareText, Plus, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Dialog } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Switch } from "@/components/ui/switch";
 import type { PollLimits } from "@/lib/chat/attachments";
 import { failureText } from "@/lib/chat/errors";
-import type { ChatPollDraft } from "@/lib/chat/types";
+import type { ChatPollDraft, ChatPollPrivacy } from "@/lib/chat/types";
 import { cn } from "@/lib/utils";
 
 interface DraftOption {
@@ -27,6 +27,119 @@ function SettingRow({ label, hint, checked, onChange }: { label: string; hint: s
       </span>
       <Switch checked={checked} onCheckedChange={onChange} />
     </label>
+  );
+}
+
+/**
+ * What leaves the chat. Each row shows only when it matters: results only when forwarding
+ * is allowed, the number of voters only when results are left out.
+ */
+function PrivacyRows({ privacy, minVoters, onChange }: { privacy: ChatPollPrivacy; minVoters?: number; onChange: (privacy: ChatPollPrivacy) => void }) {
+  return (
+    <>
+      <SettingRow
+        label="Allow forwarding"
+        hint="People can forward it to other chats. Anyone can still save it for themselves."
+        checked={privacy.forwardable}
+        onChange={(forwardable) => onChange({ ...privacy, forwardable })}
+      />
+      {privacy.forwardable ? (
+        <SettingRow
+          label="Show results in forwards"
+          hint={`Forwards show the live results, never who voted. People outside this chat see them once ${minVoters ?? 5} have voted.`}
+          checked={privacy.copyResults}
+          onChange={(copyResults) => onChange({ ...privacy, copyResults })}
+        />
+      ) : null}
+      {privacy.forwardable && !privacy.copyResults ? (
+        <SettingRow
+          label="Show how many voted"
+          hint="Forwards say whether the poll is still open and how many have voted."
+          checked={privacy.copyVoters}
+          onChange={(copyVoters) => onChange({ ...privacy, copyVoters })}
+        />
+      ) : null}
+    </>
+  );
+}
+
+/**
+ * The choices as sent. A switch that is not shown counts as on: a saved copy of a poll
+ * that can't be forwarded still follows them, and its saver can read the original anyway.
+ */
+function privacyToSend(privacy: ChatPollPrivacy): ChatPollPrivacy {
+  const copyResults = !privacy.forwardable || privacy.copyResults;
+  return { forwardable: privacy.forwardable, copyResults, copyVoters: copyResults || privacy.copyVoters };
+}
+
+/** The privacy choices in a few words, for the folded Privacy section. */
+function privacySummary(privacy: ChatPollPrivacy, anonymous: boolean, copySettings: boolean): string {
+  const forwards = !copySettings
+    ? null
+    : !privacy.forwardable
+      ? "Can’t be forwarded"
+      : privacy.copyResults
+        ? "Forwards show results"
+        : privacy.copyVoters
+          ? "Forwards show only how many voted"
+          : "Forwards show only whether it’s open";
+  return [anonymous ? "Anonymous" : null, forwards].filter(Boolean).join(" · ") || "Not anonymous";
+}
+
+const OPEN_PRIVACY: ChatPollPrivacy = { forwardable: true, copyResults: true, copyVoters: true };
+
+/** Change what leaves the chat from a poll you asked. Copies already made follow at once. */
+export function PollPrivacyDialog({
+  open,
+  onOpenChange,
+  current,
+  minVoters,
+  onSave,
+}: {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  current: ChatPollPrivacy;
+  minVoters?: number;
+  onSave: (privacy: ChatPollPrivacy) => Promise<void>;
+}) {
+  const [privacy, setPrivacy] = useState(current);
+  const [working, setWorking] = useState(false);
+  const [error, setError] = useState("");
+  useEffect(() => {
+    if (!open) return;
+    setPrivacy(current);
+    setWorking(false);
+    setError("");
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open]);
+  const save = () => {
+    if (working) return;
+    setWorking(true);
+    setError("");
+    void onSave(privacyToSend(privacy))
+      .then(() => onOpenChange(false))
+      .catch((failure: unknown) => setError(failureText(failure, "Couldn’t change the poll’s privacy.")))
+      .finally(() => setWorking(false));
+  };
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange} title="Poll privacy" description="Forwards already sent follow the change." widthClassName="max-w-md">
+      <form
+        className="space-y-4"
+        onSubmit={(event) => {
+          event.preventDefault();
+          save();
+        }}
+      >
+        <div className="divide-y divide-border border-y border-border">
+          <PrivacyRows privacy={privacy} minVoters={minVoters} onChange={setPrivacy} />
+        </div>
+        {error ? <p className="text-small text-destructive" role="alert">{error}</p> : null}
+        <div className="flex justify-end gap-2">
+          <Button variant="ghost" onClick={() => onOpenChange(false)}>Cancel</Button>
+          <Button type="submit" disabled={working}>{working ? "Saving…" : "Save"}</Button>
+        </div>
+      </form>
+    </Dialog>
   );
 }
 
@@ -70,6 +183,8 @@ export function PollDialog({
   const [multiple, setMultiple] = useState(false);
   const [anonymous, setAnonymous] = useState(false);
   const [quiz, setQuiz] = useState(false);
+  const [privacy, setPrivacy] = useState(OPEN_PRIVACY);
+  const [privacyOpen, setPrivacyOpen] = useState(false);
   const [working, setWorking] = useState(false);
   const [error, setError] = useState("");
   const [tried, setTried] = useState(false);
@@ -85,6 +200,8 @@ export function PollDialog({
     setMultiple(false);
     setAnonymous(false);
     setQuiz(false);
+    setPrivacy(OPEN_PRIVACY);
+    setPrivacyOpen(false);
     setWorking(false);
     setError("");
     setTried(false);
@@ -98,6 +215,7 @@ export function PollDialog({
     focusFeedback.current = null;
   }, [options]);
   const takesFeedback = Boolean(limits.maxFeedbackLength);
+  const copySettings = Boolean(limits.copySettings);
 
   const update = (key: number, patch: Partial<DraftOption>) => setOptions((current) => current.map((option) => (option.key === key ? { ...option, ...patch } : option)));
   const add = () => {
@@ -121,6 +239,7 @@ export function PollDialog({
         .map((option) => ({ text: option.text.trim(), correct: quiz && option.correct, ...(takesFeedback && option.feedback.trim() ? { feedback: option.feedback.trim() } : {}) })),
       multiple,
       anonymous: allowAnonymous && anonymous,
+      ...(copySettings ? privacyToSend(privacy) : {}),
     };
     void onSend(poll)
       .then(() => onOpenChange(false))
@@ -258,9 +377,31 @@ export function PollDialog({
 
         <div className="divide-y divide-border border-y border-border">
           <SettingRow label="Multiple answers" hint="People can choose more than one." checked={multiple} onChange={setMultiple} />
-          {allowAnonymous ? <SettingRow label="Anonymous" hint="Nobody sees who chose what, not even you." checked={anonymous} onChange={setAnonymous} /> : null}
           <SettingRow label="Quiz" hint="Some answers are correct. People see which once they answer, and can’t change it." checked={quiz} onChange={setQuiz} />
         </div>
+
+        {allowAnonymous || copySettings ? (
+          <div className="space-y-1.5">
+            {/* Folded by default; the line says what is chosen, so nothing changes out of sight. */}
+            <button
+              type="button"
+              aria-expanded={privacyOpen}
+              aria-controls="poll-privacy"
+              onClick={() => setPrivacyOpen((value) => !value)}
+              className="flex w-full items-center gap-2 rounded-control text-left text-small text-muted-foreground transition-colors hover:text-foreground"
+            >
+              <span className="shrink-0">Privacy</span>
+              {privacyOpen ? null : <span className="min-w-0 truncate text-caption text-subtle">{privacySummary(privacy, allowAnonymous && anonymous, copySettings)}</span>}
+              <ChevronDown className={cn("ml-auto h-3.5 w-3.5 shrink-0 transition-transform", privacyOpen && "rotate-180")} aria-hidden />
+            </button>
+            {privacyOpen ? (
+              <div id="poll-privacy" className="animate-fade-in divide-y divide-border border-y border-border">
+                {allowAnonymous ? <SettingRow label="Anonymous" hint="Nobody sees who chose what, not even you." checked={anonymous} onChange={setAnonymous} /> : null}
+                {copySettings ? <PrivacyRows privacy={privacy} minVoters={limits.mirrorMinVoters} onChange={setPrivacy} /> : null}
+              </div>
+            ) : null}
+          </div>
+        ) : null}
 
         {error || (tried && problem) ? <p className="text-small text-destructive" role="alert">{error || problem}</p> : null}
         <div className="flex justify-end gap-2">

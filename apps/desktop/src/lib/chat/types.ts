@@ -156,6 +156,23 @@ export interface ChatPoll {
   voters: number;
   /** The viewer's choices, by position. */
   myVotes: number[];
+  /** What leaves this chat, as whoever asked set it. Older servers leave these out. */
+  forwardable?: boolean;
+  copyResults?: boolean;
+  copyVoters?: boolean;
+  /** Set on a saved or forwarded copy: the results are the original poll's, voted on there. */
+  mirror?: ChatPollMirror;
+}
+
+export interface ChatPollMirror {
+  /** The original poll was removed: only the question and answers are left. */
+  gone?: boolean;
+  /** Counts are left out: the viewer can't read the original, and fewer than `minVoters` voted. */
+  hidden?: boolean;
+  minVoters?: number;
+  /** The asker shows copies only whether the poll is open, and `voters` unless `votersHidden`. */
+  status?: boolean;
+  votersHidden?: boolean;
 }
 
 /** A poll as it is written, before it is sent. */
@@ -164,6 +181,17 @@ export interface ChatPollDraft {
   options: Array<{ text: string; correct: boolean; feedback?: string }>;
   multiple: boolean;
   anonymous: boolean;
+  /** Who may see it outside this chat. Sent only to servers that take them (`copySettings`). */
+  forwardable?: boolean;
+  copyResults?: boolean;
+  copyVoters?: boolean;
+}
+
+/** What leaves the chat: whether a poll can be forwarded, and what its copies show. */
+export interface ChatPollPrivacy {
+  forwardable: boolean;
+  copyResults: boolean;
+  copyVoters: boolean;
 }
 
 export interface ChatMessage {

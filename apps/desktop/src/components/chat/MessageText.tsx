@@ -2,7 +2,7 @@ import { memo, useMemo, useState, type MouseEvent, type ReactNode } from "react"
 import { invoke, isTauri } from "@tauri-apps/api/core";
 import { toast } from "@/components/ui/toast";
 import { api } from "@/lib/api";
-import { emojiOnlyCount, parseMessage, type Inline } from "@/lib/chat/format";
+import { emojiOnlyCount, parseLinks, parseMessage, type Inline } from "@/lib/chat/format";
 import { useHighlightedCode } from "@/lib/chat/highlight";
 import { removedNestText, type MentionResolver, type MentionTarget } from "@/lib/chat/mentions";
 import { isWebAddress } from "@/lib/chat/webAddress";
@@ -161,4 +161,13 @@ export const MessageText = memo(function MessageText({ body, className, mentions
       )}
     </div>
   );
+});
+
+/**
+ * A line that is not a message, such as a poll's question: web addresses open in the
+ * browser, and nothing else is read as formatting. No preview card is drawn for them.
+ */
+export const LinkedText = memo(function LinkedText({ text }: { text: string }) {
+  const nodes = useMemo(() => parseLinks(text), [text]);
+  return <>{renderInline(nodes)}</>;
 });

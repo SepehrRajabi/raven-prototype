@@ -1,11 +1,12 @@
-import { useEffect, useState } from "react";
+import { useEffect, useId, useState, type MouseEvent } from "react";
 import { BarChart3, Check, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Tooltip } from "@/components/ui/tooltip";
 import { toast } from "@/components/ui/toast";
 import { failureText } from "@/lib/chat/errors";
-import type { ChatPoll } from "@/lib/chat/types";
+import type { ChatOrigin, ChatPoll } from "@/lib/chat/types";
 import { cn } from "@/lib/utils";
+import { LinkedText } from "./MessageText";
 
 /** How someone did in a quiz they answered: every correct answer and nothing else, some, or none. */
 export function quizOutcome(poll: ChatPoll): "right" | "partly" | "wrong" | null {
@@ -39,6 +40,10 @@ function voterNames(ids: string[], nameOf?: (id: string) => string): string {
  * A poll in a message. Choosing an answer votes at once; with multiple answers they are
  * ticked first and sent together. Results show once you voted, if you asked, or when it
  * ended. A quiz then marks what was right and wrong.
+ *
+ * A saved or forwarded copy shows the original poll's results, live, and is voted on only
+ * there. Someone who can open the original still sees results only after voting in it;
+ * someone who can't sees them straight away, once enough people voted to hide who chose what.
  */
 export function PollCard({
   poll,
@@ -47,6 +52,8 @@ export function PollCard({
   canVote,
   nameOf,
   onVote,
+  source,
+  onOpenSource,
 }: {
   poll: ChatPoll;
   question: string;
@@ -55,14 +62,22 @@ export function PollCard({
   canVote: boolean;
   nameOf?: (id: string) => string;
   onVote: (options: number[]) => Promise<void>;
+  /** Where a copy came from, when the viewer can open it. */
+  source?: ChatOrigin["source"];
+  onOpenSource?: (conversationId: string, seq: number) => void;
 }) {
+  const cardId = useId();
   const voted = poll.myVotes.length > 0;
   const closed = Boolean(poll.closedAt);
+  const mirror = poll.mirror;
+  const counted = !mirror?.hidden && !mirror?.gone;
   // Sending a quiz isn't enough to see its results: whoever saved or forwarded a copy is
   // its sender here but not its asker, so for a quiz the server's `revealed` decides.
-  const showResults = voted || closed || (mine && (!poll.quiz || poll.revealed));
-  // A quiz takes one answer and keeps it.
-  const interactive = canVote && !closed && !(poll.quiz && voted);
+  const showResults = mirror
+    ? counted && (!poll.quiz || poll.revealed || closed) && (voted || closed || !source)
+    : voted || closed || (mine && (!poll.quiz || poll.revealed));
+  // A quiz takes one answer and keeps it. A copy is voted on where it was asked.
+  const interactive = canVote && !mirror && !closed && !(poll.quiz && voted);
   const votesKey = poll.myVotes.join(",");
   const [chosen, setChosen] = useState<number[]>(poll.myVotes);
   const [busy, setBusy] = useState(false);
@@ -92,7 +107,9 @@ export function PollCard({
   };
 
   const pending = poll.multiple && interactive && chosen.length > 0 && chosen.join(",") !== votesKey;
-  const outcome = quizOutcome(poll);
+  // The asker chose to show copies only whether the poll is open, not its answers' results.
+  const statusOnly = Boolean(mirror?.status);
+  const outcome = statusOnly ? null : quizOutcome(poll);
   const count = poll.voters;
   const noun = poll.quiz ? (count === 1 ? "answer" : "answers") : count === 1 ? "vote" : "votes";
 
@@ -102,8 +119,8 @@ export function PollCard({
         <BarChart3 className="h-3.5 w-3.5" aria-hidden />
         <span>{pollKind(poll)}</span>
       </div>
-      <p className="mt-0.5 break-words text-body font-medium text-foreground" dir="auto"><bdi>{question}</bdi></p>
-      <ul className="mt-2 space-y-1.5" role={poll.multiple ? "group" : "radiogroup"} aria-label="Answers">
+      <p className="mt-0.5 break-words text-body font-medium text-foreground" dir="auto"><bdi><LinkedText text={question} /></bdi></p>
+      {statusOnly ? null : <ul className="mt-2 space-y-1.5" role={poll.multiple ? "group" : "radiogroup"} aria-label="Answers">
         {poll.options.map((option, index) => {
           const selected = chosen.includes(index);
           const share = percent(option.votes, count);
@@ -111,15 +128,21 @@ export function PollCard({
           const wrongPick = poll.revealed && option.correct === false && poll.myVotes.includes(index);
           const rightPick = right && poll.myVotes.includes(index);
           const names = !poll.anonymous && showResults && option.voterIds?.length ? voterNames(option.voterIds, nameOf) : "";
-          const figure = <span className="relative shrink-0 text-caption tabular-nums text-muted-foreground">{share}%</span>;
+          const textId = `${cardId}-${index}-text`;
+          const figureId = `${cardId}-${index}-share`;
+          const markId = `${cardId}-${index}-mark`;
+          const figure = <span id={figureId} aria-hidden className="relative shrink-0 text-caption tabular-nums text-muted-foreground">{share}%</span>;
+          // A link in an answer opens the address; a click anywhere else in the row picks it.
+          // The button under the row is what the keyboard and screen readers use; a link
+          // cannot sit inside it.
+          const onRowClick = (event: MouseEvent<HTMLDivElement>) => {
+            if ((event.target as Element).closest("a")) return;
+            pick(index);
+          };
           return (
             <li key={index}>
-              <button
-                type="button"
-                role={poll.multiple ? "checkbox" : "radio"}
-                aria-checked={selected}
-                aria-disabled={!interactive || busy}
-                onClick={() => pick(index)}
+              <div
+                onClick={onRowClick}
                 className={cn(
                   "relative flex w-full items-center gap-2 overflow-hidden rounded-control border px-2.5 py-1.5 text-left transition-colors",
                   right ? "border-foreground/60" : wrongPick ? "border-destructive/60" : "border-foreground/10",
@@ -136,6 +159,14 @@ export function PollCard({
                     style={{ width: `${share}%` }}
                   />
                 ) : null}
+                <button
+                  type="button"
+                  role={poll.multiple ? "checkbox" : "radio"}
+                  aria-checked={selected}
+                  aria-disabled={!interactive || busy}
+                  aria-labelledby={[textId, showResults ? figureId : null, right || wrongPick ? markId : null].filter(Boolean).join(" ")}
+                  className="absolute inset-0 rounded-control focus-visible:-outline-offset-2"
+                />
                 <span
                   aria-hidden
                   className={cn(
@@ -150,10 +181,10 @@ export function PollCard({
                 >
                   {wrongPick ? <X className="h-3 w-3" strokeWidth={3} /> : <Check className="h-3 w-3" strokeWidth={3} />}
                 </span>
-                <span className="relative min-w-0 flex-1 break-words text-small text-foreground" dir="auto"><bdi>{option.text}</bdi></span>
+                <span id={textId} className="relative min-w-0 flex-1 break-words text-small text-foreground" dir="auto"><bdi><LinkedText text={option.text} /></bdi></span>
                 {showResults ? (names ? <Tooltip label={names}>{figure}</Tooltip> : figure) : null}
-                {right ? <span className="sr-only">, correct answer</span> : wrongPick ? <span className="sr-only">, wrong answer</span> : null}
-              </button>
+                {right ? <span id={markId} className="sr-only">, correct answer</span> : wrongPick ? <span id={markId} className="sr-only">, wrong answer</span> : null}
+              </div>
               {option.feedback ? (
                 <p
                   className={cn(
@@ -162,21 +193,35 @@ export function PollCard({
                   )}
                   dir="auto"
                 >
-                  <bdi>{option.feedback}</bdi>
+                  <bdi><LinkedText text={option.feedback} /></bdi>
                 </p>
               ) : null}
             </li>
           );
         })}
-      </ul>
+      </ul>}
       {outcome ? (
         <p className={cn("mt-2 text-small font-medium", outcome === "right" ? "text-foreground" : outcome === "wrong" ? "text-destructive" : "text-warning")} role="status">
           {outcome === "right" ? "You got it right." : outcome === "partly" ? "Partly right." : "Not quite."}
         </p>
       ) : null}
       <div className="mt-1.5 flex min-h-7 items-center gap-2 text-caption text-muted-foreground">
-        <span className="tabular-nums">{count} {noun}</span>
-        <span className="ml-auto flex items-center gap-1">
+        {mirror?.gone ? (
+          <span>The original poll was removed.</span>
+        ) : statusOnly ? (
+          // "Ended" is already above the question.
+          <span className="tabular-nums">{[closed ? null : "Still open", mirror?.votersHidden ? null : `${count} ${noun}`].filter(Boolean).join(" · ")}</span>
+        ) : mirror?.hidden ? (
+          <span>Results show here once {mirror.minVoters ?? 5} people have voted.</span>
+        ) : (
+          <span className="tabular-nums">{count} {noun}{mirror ? " in the original" : ""}</span>
+        )}
+        <span className="ml-auto flex shrink-0 items-center gap-1">
+          {mirror && !mirror.gone && !closed && !voted && source && onOpenSource ? (
+            <Button size="xs" variant="ghost" onClick={() => onOpenSource(source.conversationId, source.seq)}>
+              {poll.quiz ? "Answer in the original" : "Vote in the original"}
+            </Button>
+          ) : null}
           {voted && !poll.quiz && interactive && !pending ? (
             <Button size="xs" variant="ghost" disabled={busy} onClick={() => vote([])}>Take back vote</Button>
           ) : null}

@@ -514,11 +514,32 @@ space limit; it is skipped there.
 - A message is at most 4096 characters and 16 KB. Invalid UTF-8, NUL and control
   characters are refused. ZWNJ and other joiners are kept. The same applies to a poll's
   question, answers and feedback.
-- A saved or forwarded quiz keeps its correct answers and feedback, but its asker stays
-  the original's sender, not the person who copied it. The copier sees the answers in
-  the copy only once they answer it there, or if they asked the original. Only the
-  original asker can end a copied quiz, so a copy in a conversation they are not in
-  stays open.
+- A saved or forwarded poll shows the original poll's results as they change. It is
+  voted on and ended only where it was asked (`409` on the copy); a copy of a copy shows
+  the same poll. Each vote in the original updates every copy: the copy takes its own
+  conversation's next sequence number and a `message.updated` event, so a vote costs one
+  small write per copy. The copy never names voters, even when the original does.
+  Someone who cannot read the original sees no counts until 5 people have voted
+  (`poll.mirror.hidden`), since in a smaller poll the counts alone can tell how each
+  person voted. Someone who can read it sees results in the copy only after voting there,
+  as in the original. When the original poll is removed, the copy keeps its question and
+  answers and says so (`poll.mirror.gone`). Copies made before 0.1.13 stay polls of
+  their own, with their own votes.
+- Whoever asks a poll chooses, under Privacy in "New poll", what leaves the conversation
+  (`forwardable`, `copyResults`, `copyVoters` in the poll; all allowed when left out, and
+  offered by servers that announce `copySettings` in `properties.chat.polls`). A poll
+  that can't be forwarded is refused with `403`, also when forwarded from a saved copy;
+  saving it to Saved messages still works. Without results, copies show only whether the
+  poll is open (`poll.mirror.status`), and how many have voted unless that is off too
+  (`poll.mirror.votersHidden`). The choices apply to every copy, saved ones included.
+  The asker can change them at any time from the poll's menu ("Poll privacy…",
+  `POST …/poll/settings` with any of the three fields), only where the poll was asked;
+  copies already made follow at once, through the same update as a vote. Turning
+  forwarding off keeps forwards already sent, but nobody can forward the poll further.
+  Anonymity can't be changed after sending: people voted believing it.
+- A saved or forwarded quiz keeps its asker: the original's sender, not the person who
+  copied it. Its correct answers and feedback show in the copy only to people who
+  answered the original or asked it, or once it ended.
 - `mentionCount` in the conversation list looks at the latest 1000 sequence numbers of
   a conversation only, so a busy conversation nobody opens costs every list a bounded
   scan. A mention further back than that is not counted (the unread count still is,

@@ -169,6 +169,34 @@ function parseInline(text: string, depth = 0): Inline[] {
   return out;
 }
 
+/**
+ * Finds the web addresses in a line that is not a message, such as a poll's question:
+ * everything else stays as written, with no formatting marks or mentions read.
+ */
+export function parseLinks(text: string): Inline[] {
+  const out: Inline[] = [];
+  let plain = "";
+  let index = 0;
+  while (index < text.length) {
+    const character = text[index];
+    if ((character === "h" || character === "H") && !isWordCharacter(text[index - 1])) {
+      const match = ADDRESS.exec(text.slice(index));
+      const address = match && readAddress(match[0]);
+      if (address) {
+        if (plain) out.push({ type: "text", text: plain });
+        plain = "";
+        out.push({ type: "link", href: address.href, text: address.text });
+        index += address.length;
+        continue;
+      }
+    }
+    plain += character;
+    index += 1;
+  }
+  if (plain) out.push({ type: "text", text: plain });
+  return out;
+}
+
 /** Parses a message into blocks: lines of text, and fenced blocks of code. */
 export function parseMessage(body: string): Block[] {
   const blocks: Block[] = [];

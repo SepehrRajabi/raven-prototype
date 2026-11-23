@@ -61,6 +61,10 @@ export interface PollLimits {
   maxOptionLength: number;
   /** Feedback on each answer, when the server takes it. */
   maxFeedbackLength?: number;
+  /** The asker may choose whether a poll can be forwarded and what copies show. */
+  copySettings?: boolean;
+  /** How many must vote before people outside the chat see a copy's results. */
+  mirrorMinVoters?: number;
 }
 
 /** Null when the server has no polls, and then nothing offers to make one. */
@@ -68,9 +72,17 @@ export function pollLimits(properties: Record<string, unknown> | undefined): Pol
   const chat = properties?.chat;
   const raw = isRecord(chat) ? chat.polls : undefined;
   if (!isRecord(raw)) return null;
-  const { maxQuestionLength, minOptions, maxOptions, maxOptionLength, maxFeedbackLength } = raw;
+  const { maxQuestionLength, minOptions, maxOptions, maxOptionLength, maxFeedbackLength, copySettings, mirrorMinVoters } = raw;
   if (!isPositive(maxQuestionLength) || !isPositive(minOptions) || !isPositive(maxOptions) || !isPositive(maxOptionLength) || minOptions > maxOptions) return null;
-  return { maxQuestionLength, minOptions, maxOptions, maxOptionLength, ...(isPositive(maxFeedbackLength) ? { maxFeedbackLength } : {}) };
+  return {
+    maxQuestionLength,
+    minOptions,
+    maxOptions,
+    maxOptionLength,
+    ...(isPositive(maxFeedbackLength) ? { maxFeedbackLength } : {}),
+    ...(copySettings === true ? { copySettings: true } : {}),
+    ...(isPositive(mirrorMinVoters) ? { mirrorMinVoters } : {}),
+  };
 }
 
 export interface ReactionLimits {

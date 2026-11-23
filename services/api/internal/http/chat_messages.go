@@ -120,6 +120,7 @@ func (s *Server) queryChatMessages(q chatQuerier, viewerID string, floor int64, 
 	if err := s.withChatOrigins(q, viewerID, messages); err != nil {
 		return nil, err
 	}
+	limitChatPollMirrors(messages)
 	return messages, nil
 }
 
@@ -146,8 +147,11 @@ func (s *Server) loadChatMessage(q chatQuerier, conversationID, messageID, viewe
 	if err = withChatLinkPreviews(q, messages); err != nil {
 		return ChatMessage{}, err
 	}
-	err = s.withChatOrigins(q, viewerID, messages)
-	return messages[0], err
+	if err = s.withChatOrigins(q, viewerID, messages); err != nil {
+		return ChatMessage{}, err
+	}
+	limitChatPollMirrors(messages)
+	return messages[0], nil
 }
 
 // chatNextSeq takes the conversation's next sequence number. It must be the first

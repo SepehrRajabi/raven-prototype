@@ -12,6 +12,7 @@ import type {
   ChatSettings,
   TreeCategory,
   TreeLayout,
+  ChatPollPrivacy,
 } from "./types";
 
 /** What creating an attachment declares: its description, with no bytes. */
@@ -80,6 +81,7 @@ export interface ChatApi {
   votePoll(id: string, messageId: string, options: number[]): Promise<{ message: ChatMessage }>;
   /** Ends a poll I asked. */
   closePoll(id: string, messageId: string): Promise<{ message: ChatMessage }>;
+  setPollPrivacy(id: string, messageId: string, privacy: ChatPollPrivacy): Promise<{ message: ChatMessage }>;
   edit(id: string, messageId: string, body: string): Promise<{ message: ChatMessage }>;
   deleteForEveryone(id: string, messageId: string): Promise<{ message: ChatMessage }>;
   deleteForMe(id: string, messageId: string): Promise<{ hideRev: number; unreadCount: number }>;
@@ -136,6 +138,7 @@ export const chatApi: ChatApi = {
   react: (id, messageId, emoji, add) => api.call(`${conversationPath(id)}/messages/${encodeURIComponent(messageId)}/reactions`, json({ emoji, add })),
   votePoll: (id, messageId, options) => api.call(`${conversationPath(id)}/messages/${encodeURIComponent(messageId)}/poll/vote`, json({ options })),
   closePoll: (id, messageId) => api.call(`${conversationPath(id)}/messages/${encodeURIComponent(messageId)}/poll/close`, { method: "POST" }),
+  setPollPrivacy: (id, messageId, privacy) => api.call(`${conversationPath(id)}/messages/${encodeURIComponent(messageId)}/poll/settings`, json(privacy)),
   edit: (id, messageId, body) => api.call(`${conversationPath(id)}/messages/${encodeURIComponent(messageId)}/edit`, json({ body })),
   deleteForEveryone: (id, messageId) => api.call(`${conversationPath(id)}/messages/${encodeURIComponent(messageId)}?for=everyone`, { method: "DELETE" }),
   deleteForMe: (id, messageId) => api.call(`${conversationPath(id)}/messages/${encodeURIComponent(messageId)}?for=me`, { method: "DELETE" }),

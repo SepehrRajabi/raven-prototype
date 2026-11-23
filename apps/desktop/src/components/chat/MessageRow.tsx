@@ -1,5 +1,5 @@
 import { memo, useState, type ReactNode } from "react";
-import { AlertCircle, Bookmark, CalendarClock, Check, CheckCheck, CheckCircle2, CircleStop, Clock, ChevronDown, Copy, CornerUpLeft, Download, EyeOff, Forward, MoreHorizontal, Pencil, SmilePlus, Trash2, Users } from "lucide-react";
+import { AlertCircle, Bookmark, CalendarClock, Check, CheckCheck, CheckCircle2, CircleStop, Clock, Shield, ChevronDown, Copy, CornerUpLeft, Download, EyeOff, Forward, MoreHorizontal, Pencil, SmilePlus, Trash2, Users } from "lucide-react";
 import { Avatar } from "@/components/ui/avatar";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
@@ -19,7 +19,7 @@ import { repeatText } from "@/lib/events";
 import { boardTime } from "@/lib/notes";
 import { Button } from "@/components/ui/button";
 import { clockTime, fullTime, listTime } from "@/lib/chat/time";
-import type { ChatAttachment, ChatMessage, ChatOrigin, ChatReplyRef, ChatSystemPayload, PendingMessage } from "@/lib/chat/types";
+import type { ChatAttachment, ChatMessage, ChatOrigin, ChatPollPrivacy, ChatReplyRef, ChatSystemPayload, PendingMessage } from "@/lib/chat/types";
 import { NestGlyph } from "@/shells/ravenv1/atoms";
 import { cn } from "@/lib/utils";
 import { MessageAttachments, PendingAttachments } from "./Attachments";
@@ -28,6 +28,7 @@ import { libraryBox } from "@/lib/library/types";
 import { RavenAvatar, SystemBadge } from "./ConversationRow";
 import { LinkPreviewCard } from "./LinkPreview";
 import { PollCard } from "./Poll";
+import { PollPrivacyDialog } from "./PollDialog";
 import { EmojiPicker } from "./EmojiPicker";
 import { Reactions } from "./Reactions";
 import { MessageText, type MentionContext } from "./MessageText";
@@ -149,6 +150,8 @@ export interface MessageRowProps {
   onVote?: (options: number[]) => Promise<void>;
   /** Ends this message's poll. Set on your own polls. */
   onClosePoll?: () => Promise<void>;
+  /** Changes what leaves the chat from this message's poll. Set on your own polls. */
+  onPollPrivacy?: (privacy: ChatPollPrivacy) => Promise<void>;
   onRemoveForMe: (message: ChatMessage) => void;
   onDeleteForEveryone: (message: ChatMessage) => void;
   onOpenReply: (seq: number) => void;
@@ -277,6 +280,7 @@ export const MessageRow = memo(function MessageRow(props: MessageRowProps) {
   const [menuOpen, setMenuOpen] = useState(false);
   const [reactionOpen, setReactionOpen] = useState(false);
   const [fullPicker, setFullPicker] = useState(false);
+  const [privacyOpen, setPrivacyOpen] = useState(false);
   // Swipe left to reply, wherever the Reply button would show.
   const swipe = useSwipeToReply({
     disabled: !props.canReply || message.kind === "system" || Boolean(message.deletedAt) || Boolean(props.selecting),
@@ -423,7 +427,7 @@ export const MessageRow = memo(function MessageRow(props: MessageRowProps) {
               Reply
             </DropdownMenuItem>
           ) : null}
-          {props.onForward && !deleted ? (
+          {props.onForward && !deleted && message.poll?.forwardable !== false ? (
             <DropdownMenuItem onSelect={() => props.onForward!(message)}>
               <Forward className="text-muted-foreground" />
               Forward
@@ -459,7 +463,13 @@ export const MessageRow = memo(function MessageRow(props: MessageRowProps) {
               Copy text
             </DropdownMenuItem>
           ) : null}
-          {poll && !poll.closedAt && props.onClosePoll ? (
+          {poll && !poll.mirror && poll.copyResults !== undefined && props.onPollPrivacy ? (
+            <DropdownMenuItem onSelect={() => setPrivacyOpen(true)}>
+              <Shield className="text-muted-foreground" />
+              Poll privacy…
+            </DropdownMenuItem>
+          ) : null}
+          {poll && !poll.closedAt && !poll.mirror && props.onClosePoll ? (
             <DropdownMenuItem onSelect={closePoll}>
               <CircleStop className="text-muted-foreground" />
               {poll.quiz ? "End quiz" : "End poll"}
@@ -581,7 +591,7 @@ export const MessageRow = memo(function MessageRow(props: MessageRowProps) {
             {deleted ? (
               <p className="text-body italic text-subtle">Message deleted</p>
             ) : poll ? (
-              <PollCard poll={poll} question={message.body} mine={mine} canVote={props.canReply && Boolean(props.onVote) && !props.selecting} nameOf={props.nameOf} onVote={props.onVote ?? (() => Promise.resolve())} />
+              <PollCard poll={poll} question={message.body} mine={mine} canVote={props.canReply && Boolean(props.onVote) && !props.selecting} nameOf={props.nameOf} onVote={props.onVote ?? (() => Promise.resolve())} source={origin?.source} onOpenSource={props.selecting ? undefined : props.onOpenSource} />
             ) : hasText ? (
               <MessageText body={message.body} mentions={props.mentions} />
             ) : null}
@@ -607,6 +617,14 @@ export const MessageRow = memo(function MessageRow(props: MessageRowProps) {
         {props.selecting ? null : actions}
       </div>
       </div>
+      {privacyOpen && poll && props.onPollPrivacy ? (
+        <PollPrivacyDialog
+          open={privacyOpen}
+          onOpenChange={setPrivacyOpen}
+          current={{ forwardable: poll.forwardable !== false, copyResults: poll.copyResults !== false, copyVoters: poll.copyVoters !== false }}
+          onSave={props.onPollPrivacy}
+        />
+      ) : null}
     </div>
   );
 });

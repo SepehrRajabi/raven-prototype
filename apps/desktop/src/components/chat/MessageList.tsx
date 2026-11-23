@@ -9,7 +9,7 @@ import { unreadLabel } from "@/lib/chat/reducer";
 import { buildRows, type ChatRow as Row } from "@/lib/chat/rows";
 import { canSelect, type MessageSelection } from "@/lib/chat/selection";
 import { lastVisibleIndex, renderedRowBoxes } from "@/lib/chat/visibility";
-import type { ChatAttachment, ChatMessage, ConversationState, PendingMessage } from "@/lib/chat/types";
+import type { ChatAttachment, ChatMessage, ConversationState, PendingMessage, ChatPollPrivacy } from "@/lib/chat/types";
 import { MessageRow, PendingRow, type DeliveryStatus } from "./MessageRow";
 import type { MentionContext } from "./MessageText";
 import { SeenBy } from "./SeenBy";
@@ -19,6 +19,7 @@ interface RowHandlers {
   onRemoveLinkPreview?: () => Promise<void>;
   onVote: (options: number[]) => Promise<void>;
   onClosePoll?: () => Promise<void>;
+  onPollPrivacy?: (privacy: ChatPollPrivacy) => Promise<void>;
 }
 
 /** Virtuoso counts rows from here, leaving room to add older ones in front. */
@@ -318,6 +319,7 @@ export const MessageList = forwardRef<MessageListHandle, MessageListProps>(funct
           onRemoveLinkPreview: mine && canSend ? () => store.removeLinkPreview(id, messageId) : undefined,
           onVote: (options) => store.votePoll(id, messageId, options),
           onClosePoll: mine && canSend ? () => store.closePoll(id, messageId) : undefined,
+          onPollPrivacy: mine && canSend ? (privacy) => store.setPollPrivacy(id, messageId, privacy) : undefined,
         };
         cache.set(key, handlers);
       }
@@ -431,6 +433,7 @@ export const MessageList = forwardRef<MessageListHandle, MessageListProps>(funct
                 onRemoveLinkPreview={handlers.onRemoveLinkPreview}
                 onVote={handlers.onVote}
                 onClosePoll={handlers.onClosePoll}
+                onPollPrivacy={handlers.onPollPrivacy}
                 canReply={summary.canSend}
                 canEdit={editable}
                 canDeleteForEveryone={mine || summary.canManage}
