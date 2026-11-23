@@ -32,6 +32,7 @@ import {
 } from "@/lib/voiceOverlay";
 import { subscribePipReturn } from "@/lib/pictureInPicture";
 import { mediaHotkeyCommands, subscribeMediaHotkeys, type MediaHotkeySettings } from "@/lib/mediaHotkeys";
+import { headsetCallModeView } from "@/lib/headsetCallMode";
 import { useTalkingWhileMuted } from "@/lib/mutedSpeech";
 import {
   manageEventSubscription,
@@ -1440,6 +1441,7 @@ export function MicMenu({ media }: { media: RavenMediaAdapterState }) {
     void media.setMicProcessing({ ...processing, ...patch }).catch(() => undefined);
   };
   const selected = media.selectedMic ?? "";
+  const headset = headsetCallModeView(media.availableInputDevices, media.selectedMic, media.headsetCallMode);
   return (
     <div role="menu" aria-label="Microphone">
       <MenuHeading>Microphone</MenuHeading>
@@ -1458,6 +1460,15 @@ export function MicMenu({ media }: { media: RavenMediaAdapterState }) {
           </DeviceOption>
         ))}
       </div>
+      {headset ? (
+        <SwitchRow
+          label="Headset call mode"
+          hint={headset.hint}
+          checked={media.headsetCallMode}
+          disabled={headset.locked}
+          onChange={(allowed) => void media.setHeadsetCallMode(allowed)}
+        />
+      ) : null}
       <div className="mx-2 my-1.5 h-px bg-border" />
       <NoiseSuppressionRow
         className="px-2 py-1.5"

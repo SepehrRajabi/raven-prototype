@@ -162,6 +162,10 @@ export interface AudioInputDevice {
   sampleRate: number | null;
   channelCount: number | null;
   format: AudioSampleFormat;
+  /** A Bluetooth headset's microphone: opening it puts the headset in call mode. Known on macOS only. */
+  bluetooth?: boolean;
+  /** The microphone Raven uses instead of a Bluetooth one while headset call mode is off. */
+  headsetStandIn?: boolean;
 }
 
 export interface AudioOutputDevice {
@@ -539,6 +543,10 @@ export const audioCommands = {
 
   setSoundCueSettings: (settings: SoundCueSettings) =>
     invoke<void>("audio_set_sound_cue_settings", { settings }),
+
+  /** Whether a Bluetooth headset's microphone may be used, which puts the headset in call mode. */
+  setHeadsetCallMode: (allowed: boolean) =>
+    invoke<void>("audio_set_headset_call_mode", { allowed }),
 
   /** While deafened, keep hearing others' shared system and app audio (and keep receiving it in Bandwidth saver). */
   setDeafenKeepsSatellites: (keep: boolean) =>

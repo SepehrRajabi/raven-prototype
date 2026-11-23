@@ -83,6 +83,13 @@ The microphone runs under a supervisor (`run_microphone_capture`,
   `capture_device_id` (the user's choice) is left alone.
 - Every `CAPTURE_DEVICE_PROBE_INTERVAL = 2 s` it checks whether the default moved (when
   following default) or the preferred device came back, and reopens.
+- **Headset call mode** (`headset.rs`, macOS). Opening a Bluetooth microphone moves the whole
+  headset to HFP. While `LiveControls::avoids_headset_call_mode` is set (an atomic written by
+  `audio_set_headset_call_mode`, default off), `select_input_device` opens the built-in
+  microphone, else a wired one, in place of a Bluetooth one, and is not a fallback. A change of
+  the setting reopens within a supervise tick, and the probe compares the stand-in, not the
+  default, with the open device. Every path that opens an input must go through
+  `select_input_device`. Virtual, aggregate and phone inputs never stand in.
 - A stream error reopens with `CAPTURE_RETRY_DELAYS` (250 ms, 1 s, 3 s; the last
   repeats forever).
 - **Silent failures are recovered too.** cpal 0.15's WASAPI loop waits on the device
@@ -313,6 +320,9 @@ A failed subscription goes through `schedule_subscription_retry` (`RECOVERY_DELA
   limiter, `LIMITER_RELEASE_MS = 180`) → `RenderReference::push_stereo`. The volume sits
   before the limiter so +6 dB can only lean on it, and before the reference so the echo
   canceller still sees exactly what reached the speaker.
+- **Format changes (macOS)**: every device probe compares the open device's rate and channel
+  count with what it was opened at and reopens on a difference. A headset entering or leaving
+  call mode there converts silently instead of failing the stream.
 - **Output meter**: the output worker's 50 ms supervise loop reports the bus meter every
   `OUTPUT_METER_INTERVAL = 120 ms` (`session.outputMeter`, plus an `audio-meter-changed`
   event with `output: true`). It runs only while the worker is, so it reads silent

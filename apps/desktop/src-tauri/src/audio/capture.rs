@@ -29,6 +29,7 @@ use crate::audio::domain::{
     NoiseSuppressionRuntime, ProcessorChainState, WebRtcAudioProcessingSettings,
 };
 use crate::audio::engine::{RenderCursor, RenderReference};
+use crate::audio::headset::{self, InputKind};
 use crate::audio::processor::{AudioBuffer, AudioProcessorPrepareConfig, ProcessorChainRuntime};
 use crate::audio::safety::{
     chain_cpu_estimate, chain_latency_samples, db_to_linear, ChannelSafetyAnalysis,
@@ -102,6 +103,9 @@ pub struct LiveControls {
     /// so the track is not flagged muted and nobody sees an icon. Written by
     /// `push_to_talk`'s polling thread.
     talk_gate: OnceLock<Arc<AtomicBool>>,
+    /// On microphones only: true keeps Bluetooth headsets out of call mode by capturing
+    /// another microphone (see `headset`).
+    avoid_headset_call_mode: OnceLock<Arc<AtomicBool>>,
     /// Safety-limiter ceiling in dB.
     ceiling_bits: AtomicU32,
     /// The processor chain as last edited, and a counter the capture thread compares to
@@ -235,6 +239,12 @@ impl LiveControls {
             .is_some_and(|gate| gate.load(Ordering::Relaxed))
     }
 
+    fn avoids_headset_call_mode(&self) -> bool {
+        self.avoid_headset_call_mode
+            .get()
+            .is_some_and(|avoid| avoid.load(Ordering::Relaxed))
+    }
+
     fn set_sink(&self, sink: Option<Arc<dyn ProcessedSampleSink>>) {
         // Swap under the lock, drop the old sink after it: the capture thread takes this
         // lock every block, so it is held only for the swap.
@@ -286,8 +296,9 @@ impl CaptureDemand {
 pub struct CaptureRuntimeManager {
     runtimes: HashMap<AudioSourceId, Box<dyn AudioSourceRuntime>>,
     live: HashMap<AudioSourceId, Arc<LiveControls>>,
-    /// Handed to every microphone's [`LiveControls`].
+    /// Both handed to every microphone's [`LiveControls`].
     talk_gate: Arc<AtomicBool>,
+    avoid_headset_call_mode: Arc<AtomicBool>,
 }
 
 /// What a [`CaptureRuntimeManager::reconcile`] pass changed. The caller merges
@@ -300,9 +311,10 @@ pub struct CaptureReconcileOutcome {
 }
 
 impl CaptureRuntimeManager {
-    pub fn with_talk_gate(talk_gate: Arc<AtomicBool>) -> Self {
+    pub fn new(talk_gate: Arc<AtomicBool>, avoid_headset_call_mode: Arc<AtomicBool>) -> Self {
         Self {
             talk_gate,
+            avoid_headset_call_mode,
             ..Self::default()
         }
     }
@@ -355,6 +367,9 @@ impl CaptureRuntimeManager {
             }));
             if source.source_type == AudioSourceType::Microphone {
                 let _ = controls.talk_gate.set(Arc::clone(&self.talk_gate));
+                let _ = controls
+                    .avoid_headset_call_mode
+                    .set(Arc::clone(&self.avoid_headset_call_mode));
             }
             controls.set_gain_linear(db_to_linear(source.channel_strip.gain_db));
             controls.set_muted(source.channel_strip.mute.muted);
@@ -615,6 +630,8 @@ pub fn list_input_devices() -> Vec<AudioInputDevice> {
     let default_name = host
         .default_input_device()
         .and_then(|device| device.name().ok());
+    let kinds = headset::inputs();
+    let stand_in = headset::stand_in(&kinds);
     let mut devices = Vec::new();
     if let Ok(input_devices) = host.input_devices() {
         for device in input_devices {
@@ -632,6 +649,10 @@ pub fn list_input_devices() -> Vec<AudioInputDevice> {
                     .as_ref()
                     .map(|config| sample_format(config.sample_format()))
                     .unwrap_or_default(),
+                bluetooth: kinds
+                    .iter()
+                    .any(|input| input.name == name && input.kind == InputKind::Bluetooth),
+                headset_stand_in: stand_in == Some(name.as_str()),
             });
         }
     }
@@ -792,6 +813,8 @@ struct OpenedMicrophone {
     state: AudioSourceRuntimeState,
     device_name: String,
     fallback: bool,
+    /// Whether it was opened to keep headsets out of call mode.
+    avoiding_call_mode: bool,
     watch: Arc<StreamWatch>,
 }
 
@@ -889,7 +912,7 @@ fn run_microphone_capture(
                     }
                 }
                 let opened_at = Instant::now();
-                let outcome = supervise_microphone(&source, &opened, &stop);
+                let outcome = supervise_microphone(&source, &opened, &controls, &stop);
                 let _ = opened.stream.pause();
                 drop(opened);
                 match outcome {
@@ -936,6 +959,7 @@ fn stop_requested_within(stop: &Receiver<()>, duration: Duration) -> bool {
 fn supervise_microphone(
     source: &AudioSourceState,
     opened: &OpenedMicrophone,
+    controls: &LiveControls,
     stop: &Receiver<()>,
 ) -> CaptureSupervision {
     let mut last_probe = Instant::now();
@@ -943,6 +967,9 @@ fn supervise_microphone(
     loop {
         if stop_requested_within(stop, CAPTURE_SUPERVISE_TICK) {
             return CaptureSupervision::Stop;
+        }
+        if controls.avoids_headset_call_mode() != opened.avoiding_call_mode {
+            return CaptureSupervision::Reopen;
         }
         if opened.watch.has_failed() {
             return CaptureSupervision::Recover(opened.watch.reason());
@@ -962,17 +989,33 @@ fn supervise_microphone(
         let should_restart = match source.capture_device_id.as_deref() {
             // Standing in for a missing device: switch back once it is listed again.
             Some(preferred) if opened.fallback => find_input_device(&host, preferred).is_some(),
-            Some(_) => false,
+            // Its own device, unless a headset's stand-in came or went.
+            Some(preferred) => {
+                opened.avoiding_call_mode
+                    && stand_in_or(preferred.to_string()) != opened.device_name
+            }
             // Following the system default: move with it.
             None => host
                 .default_input_device()
                 .and_then(|device| device.name().ok())
+                .map(|current| {
+                    if opened.avoiding_call_mode {
+                        stand_in_or(current)
+                    } else {
+                        current
+                    }
+                })
                 .is_some_and(|current| current != opened.device_name),
         };
         if should_restart {
             return CaptureSupervision::Reopen;
         }
     }
+}
+
+/// The microphone to capture instead of `wanted` while headsets stay out of call mode.
+fn stand_in_or(wanted: String) -> String {
+    headset::stand_in_for(&wanted).unwrap_or(wanted)
 }
 
 fn find_input_device(host: &cpal::Host, device_id: &str) -> Option<cpal::Device> {
@@ -983,8 +1026,26 @@ fn find_input_device(host: &cpal::Host, device_id: &str) -> Option<cpal::Device>
 
 /// Pick the capture device for a source: its chosen device when present, otherwise the
 /// system default (flagged as a fallback so the UI can say so and the supervisor can
-/// switch back later).
+/// switch back later). With `avoid_call_mode`, another microphone replaces a Bluetooth
+/// headset's; that is the user's choice too, so it is not a fallback.
 fn select_input_device(
+    host: &cpal::Host,
+    capture_device_id: Option<&str>,
+    avoid_call_mode: bool,
+) -> Result<(cpal::Device, bool), CaptureError> {
+    let (device, fallback) = select_wanted_input_device(host, capture_device_id)?;
+    if !avoid_call_mode {
+        return Ok((device, fallback));
+    }
+    let stand_in = device
+        .name()
+        .ok()
+        .and_then(|name| headset::stand_in_for(&name))
+        .and_then(|name| find_input_device(host, &name));
+    Ok((stand_in.unwrap_or(device), fallback))
+}
+
+fn select_wanted_input_device(
     host: &cpal::Host,
     capture_device_id: Option<&str>,
 ) -> Result<(cpal::Device, bool), CaptureError> {
@@ -1016,10 +1077,13 @@ fn open_microphone_stream(
     events: &SyncSender<CaptureEvent>,
 ) -> Result<OpenedMicrophone, CaptureError> {
     let host = cpal::default_host();
-    let (device, fallback) = select_input_device(&host, source.capture_device_id.as_deref())?;
+    let avoid_call_mode = controls.avoids_headset_call_mode();
+    let (device, fallback) =
+        select_input_device(&host, source.capture_device_id.as_deref(), avoid_call_mode)?;
     match open_input_device(
         &device,
         fallback,
+        avoid_call_mode,
         source,
         controls,
         render_reference,
@@ -1029,14 +1093,22 @@ fn open_microphone_stream(
         // The chosen device is listed but would not open (busy, driver error): use the
         // default rather than leaving the user without a microphone.
         Err(error) if !fallback && source.capture_device_id.is_some() => {
-            let Some(default) = host.default_input_device() else {
+            let Ok((default, _)) = select_input_device(&host, None, avoid_call_mode) else {
                 return Err(error);
             };
             if default.name().ok() == device.name().ok() {
                 return Err(error);
             }
-            open_input_device(&default, true, source, controls, render_reference, events)
-                .map_err(|_| error)
+            open_input_device(
+                &default,
+                true,
+                avoid_call_mode,
+                source,
+                controls,
+                render_reference,
+                events,
+            )
+            .map_err(|_| error)
         }
         Err(error) => Err(error),
     }
@@ -1045,6 +1117,7 @@ fn open_microphone_stream(
 fn open_input_device(
     device: &cpal::Device,
     fallback: bool,
+    avoiding_call_mode: bool,
     source: &AudioSourceState,
     controls: &Arc<LiveControls>,
     render_reference: &Arc<RenderReference>,
@@ -1099,6 +1172,7 @@ fn open_input_device(
         state,
         device_name,
         fallback,
+        avoiding_call_mode,
         watch,
     })
 }

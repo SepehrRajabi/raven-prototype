@@ -1154,6 +1154,7 @@ struct OpenedOutput {
     error: Arc<Mutex<Option<String>>>,
     device_name: String,
     sample_rate: u32,
+    channels: u16,
 }
 
 /// Why the supervising loop handed control back to the worker.
@@ -1282,7 +1283,7 @@ impl OutputWorker {
                         default_output_name().is_some_and(|current| current != opened.device_name)
                     }
                 };
-                if should_reopen {
+                if should_reopen || output_format_changed(opened, preferred, fallback) {
                     return SuperviseOutcome::Reopen;
                 }
             }
@@ -1382,7 +1383,26 @@ fn open_output_stream(
         error: stream_error,
         device_name,
         sample_rate,
+        channels: supported.channels(),
     })
+}
+
+/// True when the open device now has another rate or channel count. macOS only: a Bluetooth
+/// headset entering or leaving call mode there keeps the stream running, converted to the
+/// format it was opened in, so Raven would stay at call quality (or fold stereo into mono)
+/// for the rest of the call. On Windows the same change fails the stream, which reopens it.
+fn output_format_changed(opened: &OpenedOutput, preferred: Option<&str>, fallback: bool) -> bool {
+    if !cfg!(target_os = "macos") {
+        return false;
+    }
+    let target = if fallback { None } else { preferred };
+    resolve_output_device(target)
+        .ok()
+        .filter(|(device, _)| device.name().ok().as_deref() == Some(opened.device_name.as_str()))
+        .and_then(|(device, _)| device.default_output_config().ok())
+        .is_some_and(|config| {
+            (config.sample_rate().0, config.channels()) != (opened.sample_rate, opened.channels)
+        })
 }
 
 /// Build an output stream in the device's native channel count and sample format, fed by

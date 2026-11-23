@@ -5517,6 +5517,7 @@ dependencies = [
  "ashpd",
  "base64 0.23.1",
  "block2",
+ "coreaudio-sys",
  "cpal",
  "deep_filter",
  "fast_image_resize",

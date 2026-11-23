@@ -226,6 +226,11 @@ pub struct AudioInputDevice {
     pub sample_rate: Option<u32>,
     pub channel_count: Option<u16>,
     pub format: AudioSampleFormat,
+    /// A Bluetooth headset's microphone: opening it puts the headset in call mode. Known on
+    /// macOS only; false elsewhere.
+    pub bluetooth: bool,
+    /// The microphone Raven uses instead of a Bluetooth one while headset call mode is off.
+    pub headset_stand_in: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -258,6 +263,8 @@ impl Default for AudioInputDevice {
             sample_rate: None,
             channel_count: None,
             format: AudioSampleFormat::Unknown,
+            bluetooth: false,
+            headset_stand_in: false,
         }
     }
 }
