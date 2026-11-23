@@ -43,8 +43,8 @@ describe("large emoji messages", () => {
     const pending: PendingMessage = { clientMessageId: "c1", conversationId: "c1", body: "😄", createdAt: message.createdAt, state: "sending", attempts: 1 };
     const html = renderToStaticMarkup(<PendingRow pending={pending} onRetry={noop} onDiscard={noop} />);
     expect(html).toContain("text-emoji-1"); expect(html).toContain("Sending…");
-    expect(html).not.toContain("bg-accent"); expect(html).not.toContain("backdrop-blur-md");
+    expect(html).not.toContain("bg-bubble-mine"); expect(html).not.toContain("backdrop-blur-md");
     const reply = renderToStaticMarkup(<PendingRow pending={{ ...pending, replyTo: { id: "m0", excerpt: "Hi" } }} onRetry={noop} onDiscard={noop} />);
-    expect(reply).toContain("bg-accent"); expect(reply).toContain("text-emoji-1");
+    expect(reply).toContain("bg-bubble-mine"); expect(reply).toContain("text-emoji-1");
   });
 });

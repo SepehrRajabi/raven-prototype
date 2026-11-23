@@ -77,8 +77,9 @@
 
   /* Someone is live or speaking. Nothing else uses this colour. */
   --live: 172 42% 60%;
-  /* The speaking ring and your mic level; the user can pick it (lib/speakingColor). */
-  --speaking: var(--live);
+  /* The speaking ring and your mic level. The user picks it in Appearance
+     (lib/speakingColor sets --speaking-choice); a custom theme can set --speaking itself. */
+  --speaking: var(--speaking-choice, var(--live));
   --live-foreground: 172 40% 8%;
 
   /* `destructive` is text-safe on dark; `destructive-fill` carries white text. */

@@ -104,8 +104,8 @@ describe("searching settings", () => {
     expect(titles(searchSettings(index, "logout"))).toEqual(["Sign out of Raven on this device"]);
     expect(titles(searchSettings(index, "fps"))).toEqual(["Video smoothness"]);
     expect(titles(searchSettings(index, "ping"))).toEqual(["Connection"]);
-    expect(titles(searchSettings(index, "export"))).toEqual(["Download your data"]);
-    expect(titles(searchSettings(index, "color"))).toEqual(["Theme", "Speaking colour"]);
+    expect(titles(searchSettings(index, "export"))).toEqual(["Download your data", "Custom themes"]);
+    expect(titles(searchSettings(index, "color"))).toEqual(["Theme", "Speaking colour", "Custom themes"]);
   });
 
   test("ignores case, accents and punctuation", () => {

@@ -556,7 +556,7 @@ export const MessageRow = memo(function MessageRow(props: MessageRowProps) {
           <div
             className={cn(
               "min-w-0 max-w-[min(100%,34rem)] rounded-card px-3 py-1.5 transition-colors",
-              mine ? "bg-accent" : "bg-secondary",
+              mine ? "bg-bubble-mine" : "bg-bubble-theirs",
               // A link card needs the width of a single picture (400px) inside the padding; the
               // percentage keeps a narrow window from pushing it past the edge.
               !deleted && message.linkPreview && "min-w-[min(100%,424px)]",
@@ -661,7 +661,7 @@ export const PendingRow = memo(function PendingRow({
           {bareEmoji ? <><MessageText body={pending.body} />{meta(false)}</> : library ? libraryView(meta(true)) : <PendingAttachments attachments={attachments} footer={meta(true)} />}
         </div>
       ) : (
-        <div className="min-w-0 max-w-[min(100%,34rem)] rounded-card bg-accent px-3 py-1.5">
+        <div className="min-w-0 max-w-[min(100%,34rem)] rounded-card bg-bubble-mine px-3 py-1.5">
           {pending.replyTo ? <ReplyQuote reply={pending.replyTo} /> : null}
           {library ? <div className="-mx-1.5 mb-1 mt-0.5">{libraryView()}</div> : null}
           {attachments.length > 0 ? (

@@ -96,6 +96,7 @@ const RULES: Rule[] = [
         : inFile(file, "AudioMixerPanel.tsx") ? "meter overlay"
         : inFile(file, "LibraryTile.tsx", "LibraryMedia.tsx") ? "badge over a media thumbnail"
         : inFile(file, "WatcherStack.tsx") ? "viewer chip over a shared screen"
+        : inFile(file, "CustomThemes.tsx") && line.includes('"#000000"') ? "a colour picker needs a value when a typed colour can't be read"
         : null,
   },
   {

@@ -142,11 +142,26 @@ function read(): Theme {
   }
 }
 
+/** Set while a custom theme is in use: its own colours apply, not the built-in tint. */
+let tintSuspended = false;
+
 function set(theme: Theme) {
   current = theme;
   const style = document.documentElement.style;
-  for (const [name, value] of Object.entries(themeTokens(theme))) style.setProperty(`--${name}`, value);
+  // The tint is written on the root element itself, which beats any stylesheet; a custom
+  // theme's :root rules only show once it is taken off.
+  for (const [name, value] of Object.entries(themeTokens(theme))) {
+    if (tintSuspended) style.removeProperty(`--${name}`);
+    else style.setProperty(`--${name}`, value);
+  }
   for (const listener of listeners) listener();
+}
+
+/** Takes the built-in tint off while a custom theme is in use, and puts it back after. */
+export function suspendThemeTint(suspended: boolean) {
+  if (tintSuspended === suspended) return;
+  tintSuspended = suspended;
+  set(current);
 }
 
 /** Apply the saved theme and follow changes from other windows. Call once per window. */

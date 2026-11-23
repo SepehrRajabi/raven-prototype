@@ -2,8 +2,9 @@ import { useSyncExternalStore } from "react";
 
 /**
  * The colour of the speaking ring and your own mic level. Kept on this device. Every
- * window (main, overlay, studio) applies it through the `--speaking` CSS variable and
- * follows changes made in another window through the `storage` event.
+ * window (main, overlay, studio) applies it through the `--speaking-choice` CSS variable,
+ * which `--speaking` follows unless a custom theme sets `--speaking` itself, and follows
+ * changes made in another window through the `storage` event.
  */
 export type SpeakingColorId = "aqua" | "blue" | "violet" | "rose" | "green";
 
@@ -35,7 +36,7 @@ function read(): SpeakingColorId {
 
 function apply(id: SpeakingColorId) {
   const color = SPEAKING_COLORS.find((candidate) => candidate.id === id) ?? SPEAKING_COLORS[0];
-  document.documentElement.style.setProperty("--speaking", color.hsl);
+  document.documentElement.style.setProperty("--speaking-choice", color.hsl);
 }
 
 function set(id: SpeakingColorId) {
