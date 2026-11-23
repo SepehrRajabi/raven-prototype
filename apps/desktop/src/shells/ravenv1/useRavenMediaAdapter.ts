@@ -200,6 +200,8 @@ export interface RavenMediaAdapterState {
   windowSharing: boolean;
   appAudioCapturing: boolean;
   selectedMic: string | null;
+  /** Whether Raven may use a Bluetooth headset's microphone, which puts the headset in call mode. */
+  headsetCallMode: boolean;
   selectedCamera: string | null;
   selectedOutput: string | null;
   activeCameraProfile: VideoQualityProfile | null;
@@ -251,6 +253,7 @@ export interface RavenMediaAdapterState {
   stopScreenShare: () => Promise<void>;
   refreshMediaDevices: () => Promise<void>;
   setMicDevice: (deviceId: string | null) => Promise<void>;
+  setHeadsetCallMode: (allowed: boolean) => Promise<void>;
   setOutputDevice: (deviceId: string | null) => Promise<void>;
   testOutputDevice: () => Promise<void>;
   setDeafenMode: (mode: DeafenMode) => Promise<void>;
@@ -318,6 +321,7 @@ export function useRavenMediaAdapter(
   const [preferredCameraProfile, setPreferredCameraProfile] = useState<VideoQualityProfile>(DEFAULT_VIDEO_PROFILE);
   const initialSettings = useMemo(readMediaSettings, []);
   const [selectedMicPreference, setSelectedMicPreference] = useState<string | null>(initialSettings.selectedMic ?? null);
+  const [headsetCallMode, setHeadsetCallModeState] = useState(initialSettings.headsetCallMode ?? true);
   const [selfMediaPreviewMode, setSelfMediaPreviewModeState] = useState<SelfMediaPreviewMode>(initialSettings.selfMediaPreviewMode ?? "local");
   const [videoPresentationProfile, setVideoPresentationProfileState] = useState<VideoPresentationProfile>(initialSettings.videoPresentationProfile ?? "balanced");
   const [videoStreamEndpoint, setVideoStreamEndpoint] = useState<VideoStreamEndpoint | null>(null);
@@ -493,6 +497,8 @@ export function useRavenMediaAdapter(
     let cleanupVideo: (() => void) | null = null;
     let cleanupDevices: (() => void) | null = null;
     void Promise.allSettled([
+      // First, so no microphone is opened before the engine knows. It starts with call mode on.
+      initialSettings.headsetCallMode === false ? audioCommands.setHeadsetCallMode(false) : Promise.resolve(),
       audioCommands.getCapabilities().then((report) => mounted && setAudioCapabilities(report)),
       videoCommands.getCapabilities().then((report) => mounted && setVideoCapabilities(report)),
       videoCommands.getStreamEndpoint().then((endpoint) => mounted && setVideoStreamEndpoint(endpoint)),
@@ -543,7 +549,7 @@ export function useRavenMediaAdapter(
       cleanupVideo?.();
       cleanupDevices?.();
     };
-  }, [initialSettings.videoPresentationProfile, refreshMediaDevices, refreshNativeState]);
+  }, [initialSettings.headsetCallMode, initialSettings.videoPresentationProfile, refreshMediaDevices, refreshNativeState]);
 
   useEffect(() => {
     const sync = () => {
@@ -1254,6 +1260,19 @@ export function useRavenMediaAdapter(
     }
   }, [ensureDefaultMic, saveMediaSettings, setNonFatalError]);
 
+  const setHeadsetCallMode = useCallback(async (allowed: boolean) => {
+    setError("");
+    try {
+      // The microphone may move to another device, which is the user's doing.
+      deviceSwitchRef.current.notePick("microphone", Date.now());
+      await audioCommands.setHeadsetCallMode(allowed);
+      setHeadsetCallModeState(allowed);
+      saveMediaSettings({ headsetCallMode: allowed });
+    } catch (err) {
+      setNonFatalError(messageFromError(err, "Headset call mode could not be changed"), "capture_failure", "Try again, or pick another microphone.");
+    }
+  }, [saveMediaSettings, setNonFatalError]);
+
   /** Camera permission from the host. False means denied or failed, already reported. */
   const requestCameraAccess = useCallback(async () => {
     try {
@@ -1767,6 +1786,7 @@ export function useRavenMediaAdapter(
     windowSharing,
     appAudioCapturing,
     selectedMic: selectedDeviceIdForSource(micSources[0]?.captureDeviceId, selectedMicPreference),
+    headsetCallMode,
     selectedCamera: cameraSource?.targetId ?? preferredCameraId,
     selectedOutput,
     activeCameraProfile: cameraSource?.profile ?? null,
@@ -1813,6 +1833,7 @@ export function useRavenMediaAdapter(
     stopScreenShare,
     refreshMediaDevices,
     setMicDevice,
+    setHeadsetCallMode,
     setOutputDevice,
     testOutputDevice,
     setDeafenMode,
@@ -1903,6 +1924,7 @@ function classifyMediaError(error: unknown, fallback = "Media action failed"): M
 type MediaSettings = {
   selectedMic?: string | null;
   selectedOutput?: string | null;
+  headsetCallMode?: boolean;
   noiseSuppression?: NoiseSuppressionMode;
   noiseSuppressionDepth?: NoiseSuppressionDepth;
   echoCancellation?: boolean;
@@ -1924,6 +1946,7 @@ export function readMediaSettings(): MediaSettings {
     return {
       selectedMic: normalizeSelectedDeviceId(parsed.selectedMic),
       selectedOutput: typeof parsed.selectedOutput === "string" ? parsed.selectedOutput : null,
+      headsetCallMode: typeof parsed.headsetCallMode === "boolean" ? parsed.headsetCallMode : undefined,
       noiseSuppression: isNoiseSuppressionMode(parsed.noiseSuppression) ? parsed.noiseSuppression : undefined,
       noiseSuppressionDepth: isNoiseSuppressionDepth(parsed.noiseSuppressionDepth) ? parsed.noiseSuppressionDepth : undefined,
       echoCancellation: typeof parsed.echoCancellation === "boolean" ? parsed.echoCancellation : undefined,

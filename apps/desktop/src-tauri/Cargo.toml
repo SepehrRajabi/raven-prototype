@@ -162,6 +162,8 @@ block2 = "0.6"
 objc2 = "0.6"
 objc2-app-kit = { version = "0.3", default-features = false, features = ["std", "objc2-core-foundation", "NSResponder", "NSWindow"] }
 objc2-foundation = { version = "0.3", default-features = false, features = ["std", "block2", "NSNotification", "NSOperation", "NSString"] }
+# How each microphone is connected (Bluetooth or not). Already built as part of cpal.
+coreaudio-sys = { version = "0.2", default-features = false, features = ["core_audio"] }
 
 # Keep target/ small: line tables only for our crate, no debuginfo for dependencies.
 [profile.dev]

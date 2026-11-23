@@ -4,6 +4,7 @@ pub mod devices;
 pub mod domain;
 pub mod dynamics;
 pub mod engine;
+pub(crate) mod headset;
 pub mod leveler;
 pub mod playback;
 pub mod processor;

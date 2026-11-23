@@ -2,7 +2,10 @@ use std::{
     collections::HashMap,
     fs,
     path::Path,
-    sync::{atomic::AtomicBool, Arc, RwLock},
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc, RwLock,
+    },
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
@@ -87,6 +90,9 @@ pub struct AudioRuntime {
     /// Push to talk's gate: true silences microphones. Shared with capture so a key press
     /// reaches the audio thread without a lock.
     talk_gate: Arc<AtomicBool>,
+    /// "Headset call mode" turned off. Shared with capture, whose supervisor reopens the
+    /// microphone when it changes.
+    avoid_headset_call_mode: Arc<AtomicBool>,
 }
 
 pub struct AudioOps {
@@ -101,13 +107,18 @@ impl Default for AudioRuntime {
         let engine = AudioEngine::default();
         let output = engine.output_mixer();
         let talk_gate = Arc::new(AtomicBool::new(false));
+        let avoid_headset_call_mode = Arc::new(AtomicBool::new(false));
         Self {
             ops: AsyncMutex::new(AudioOps {
                 engine,
-                capture: CaptureRuntimeManager::with_talk_gate(Arc::clone(&talk_gate)),
+                capture: CaptureRuntimeManager::new(
+                    Arc::clone(&talk_gate),
+                    Arc::clone(&avoid_headset_call_mode),
+                ),
             }),
             output,
             talk_gate,
+            avoid_headset_call_mode,
         }
     }
 }
@@ -1956,6 +1967,20 @@ pub fn audio_set_output_muted(
     let snapshot = update_session(&state, |session| session.output_muted = muted)?;
     emit_audio_state_changed(&app, &snapshot)?;
     Ok(snapshot)
+}
+
+/// Whether Raven may use a Bluetooth headset's microphone, which puts the headset in call
+/// mode. When not, another microphone is captured in its place (see `headset`). A running
+/// microphone moves within a supervision tick; the chosen device is kept.
+#[tauri::command]
+pub fn audio_set_headset_call_mode(
+    state: State<'_, SharedAudioEngineState>,
+    allowed: bool,
+) -> Result<(), AudioStateError> {
+    audio_runtime(&state)?
+        .avoid_headset_call_mode
+        .store(!allowed, Ordering::Relaxed);
+    Ok(())
 }
 
 /// While deafened, keep hearing others' shared system and app audio (satellites). Voices stay
