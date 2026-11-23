@@ -24,7 +24,7 @@ import { cn } from "@/lib/utils";
 import { AttachmentTray } from "./AttachmentTray";
 import { Avatar } from "@/components/ui/avatar";
 import { api } from "@/lib/api";
-import { filterCandidates, fromTokens, mentionQuery, mentionToken, toTokens, type MentionCandidate, type MentionResolver, type PickedMention } from "@/lib/chat/mentions";
+import { filterCandidates, fromTokens, mentionQuery, mentionsAsText, mentionToken, toTokens, type MentionCandidate, type MentionResolver, type PickedMention } from "@/lib/chat/mentions";
 import { NestGlyph } from "@/shells/ravenv1/atoms";
 
 /** The server refuses anything longer. */
@@ -292,9 +292,9 @@ export function Composer({ conversationId, name, replyingTo, editing, onCancelRe
   };
 
   const context = editing
-    ? { icon: <Pencil className="h-4 w-4" />, title: "Editing message", text: excerptOf(editing.body), cancel: onCancelEdit, label: "Stop editing" }
+    ? { icon: <Pencil className="h-4 w-4" />, title: "Editing message", text: mentionsAsText(excerptOf(editing.body), mentionResolver), cancel: onCancelEdit, label: "Stop editing" }
     : replyingTo
-      ? { icon: <CornerUpLeft className="h-4 w-4" />, title: `Replying to ${replyingTo.senderName}`, text: messageExcerpt(excerptOf(replyingTo.body), summaryOf(replyingTo)), cancel: onCancelReply, label: "Cancel reply" }
+      ? { icon: <CornerUpLeft className="h-4 w-4" />, title: `Replying to ${replyingTo.senderName}`, text: mentionsAsText(messageExcerpt(excerptOf(replyingTo.body), summaryOf(replyingTo)), mentionResolver), cancel: onCancelReply, label: "Cancel reply" }
       : null;
 
   return (

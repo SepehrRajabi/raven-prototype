@@ -40,12 +40,15 @@ export interface MentionContext {
   onOpen?: (target: MentionTarget, id: string) => void;
 }
 
-/** A 12 or 14 px face that sits in a line of text. */
+/**
+ * A 12 or 14 px face that sits in a line of text. The initial is out of the flow: in it, the
+ * line would run through that small letter and the circle would hang lower than a picture.
+ */
 function Face({ id, name, presence, className }: { id: string; name: string; presence?: Presence; className?: string }) {
   const [failed, setFailed] = useState(false);
   return (
     <span className={cn("relative inline-flex h-3.5 w-3.5 shrink-0 items-center justify-center rounded-full bg-accent text-[8px] font-semibold leading-none text-foreground/80", className)} aria-hidden title={name}>
-      {failed ? <bdi>{Array.from(name.trim())[0]?.toUpperCase() ?? "R"}</bdi> : <img src={api.userAvatarUrl(id)} alt="" draggable={false} className="h-full w-full rounded-full object-cover" onError={() => setFailed(true)} />}
+      {failed ? <bdi className="absolute inset-0 flex items-center justify-center">{Array.from(name.trim())[0]?.toUpperCase() ?? "R"}</bdi> : <img src={api.userAvatarUrl(id)} alt="" draggable={false} className="h-full w-full rounded-full object-cover" onError={() => setFailed(true)} />}
       {presence ? <PresenceDot presence={presence} className="absolute -bottom-0.5 -right-0.5 h-1.5 w-1.5 opacity-0 transition-opacity group-hover/mention:opacity-100" /> : null}
     </span>
   );
@@ -66,10 +69,12 @@ function Mention({ node, context }: { node: Extract<Inline, { type: "mention" }>
       );
     }
     const isMe = node.id === context.me;
+    // The gap is the face's: the name is isolated and reads in its own direction, so a margin
+    // at its start would fall on the far side of a Latin name in a Persian sentence.
     const inner = (
       <>
-        <Face id={node.id} name={person.name} presence={person.presence} className="translate-y-[2px]" />
-        <bdi className={cn("ml-1 font-medium decoration-subtle underline-offset-2 group-hover/mention:underline", isMe ? "font-semibold text-foreground" : "text-foreground")}>{person.name}</bdi>
+        <Face id={node.id} name={person.name} presence={person.presence} className="me-1 translate-y-[2px]" />
+        <bdi className={cn("font-medium decoration-subtle underline-offset-2 group-hover/mention:underline", isMe ? "font-semibold text-foreground" : "text-foreground")}>{person.name}</bdi>
       </>
     );
     // A tinted chip, so a mention reads as a mention and not as plain text; yours is stronger.
