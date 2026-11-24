@@ -94,7 +94,7 @@ export function MainView({
     case "nest": {
       const nest = data.getNest(view.id);
       return nest ? (
-        <NestView key={nest.id} nest={nest} data={data} media={media} entry={entry} onNavigate={onNavigate} onBack={onBack} />
+        <NestView key={nest.id} nest={nest} data={data} media={media} entry={entry} chat={chat} onNavigate={onNavigate} onBack={onBack} />
       ) : (
         <MissingView what={data.labels.nestSingular} onNavigate={onNavigate} />
       );

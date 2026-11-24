@@ -31,6 +31,8 @@ export interface CallMarkers {
 export interface ParticipantCallState extends CallMarkers {
   serverMuted: boolean;
   serverDeafened: boolean;
+  /** The space's owner lets them hear this call and send nothing to it. */
+  listenOnly: boolean;
   /** Place in line while the hand is up (1 is first), 0 when it is down. Never a time. */
   handOrder: number;
 }
@@ -41,6 +43,7 @@ function callStateOf(participant: ParticipantSummary | undefined): ParticipantCa
     deafened: participant?.deafened === true,
     serverMuted: participant?.serverMuted === true,
     serverDeafened: participant?.serverDeafened === true,
+    listenOnly: participant?.listenOnly === true,
     hand: (participant?.handOrder ?? 0) > 0,
     handOrder: participant?.handOrder ?? 0,
   };

@@ -58,6 +58,8 @@ export type NativeMediaTile = {
   /** A moderator muted or deafened them. Set by the stage, like `away`. */
   serverMuted?: boolean;
   serverDeafened?: boolean;
+  /** They may hear the call and send nothing to it. Set by the stage, like `away`. */
+  listenOnly?: boolean;
   /** "I'd like to speak": place in line, 0 when the hand is down. Set by the stage, like `away`. */
   handOrder?: number;
 };

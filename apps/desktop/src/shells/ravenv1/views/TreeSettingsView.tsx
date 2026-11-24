@@ -1,6 +1,6 @@
 import type { ChatStore } from "@/lib/chat/store";
 import { useEffect, useMemo, useState } from "react";
-import { ClipboardList, Info, MoreHorizontal, Shield, Sticker, Trash2, Users } from "lucide-react";
+import { ClipboardList, Info, KeyRound, MoreHorizontal, Shield, Sticker, Tag, Trash2, Users } from "lucide-react";
 import { Avatar } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
 import { ConfirmDialog, Dialog } from "@/components/ui/dialog";
@@ -29,8 +29,10 @@ import { libraryCapabilities } from "@/lib/library/types";
 import { failureText } from "@/lib/chat/errors";
 import { toast } from "@/components/ui/toast";
 import { SpaceNameDialog, TREE_ROLE_LABEL } from "./dialogs";
+import { RoomAccessSettings } from "./RoomAccessSettings";
+import { RoomLabelSettings } from "./RoomLabelSettings";
 
-export type TreeSettingsSection = "general" | "access" | "members" | "board" | "library" | "delete";
+export type TreeSettingsSection = "general" | "access" | "members" | "rooms" | "labels" | "board" | "library" | "delete";
 
 // Everyone in a tree can open its settings to see who is in it and to leave. What else
 // they find there is what their role allows.
@@ -38,6 +40,8 @@ export function resolveTreeSettingsSection(section: string | undefined, details:
   const canEdit = treeCan(details, "settings.edit");
   if (section === "members") return section;
   if (section === "board" && treeCan(details, "board.manage")) return section;
+  // Also false on a server without room access, which does not know the permission.
+  if ((section === "rooms" || section === "labels") && treeCan(details, "access.manage")) return section;
   if (section === "library" && showsLibrary(details, _data)) return section;
   if ((section === "access" || section === "general") && canEdit) return section;
   if (section === "delete" && treeCan(details, "space.delete")) return section;
@@ -74,6 +78,12 @@ export function TreeSettingsNav({
             ]
           : []),
         { id: "members", label: "Members", icon: <Users /> },
+        ...(treeCan(details, "access.manage")
+          ? [
+              { id: "rooms", label: `${data.labels.nestSingular} access`, icon: <KeyRound /> },
+              { id: "labels", label: "Labels", icon: <Tag /> },
+            ]
+          : []),
         ...(treeCan(details, "board.manage") ? [{ id: "board", label: "Board", icon: <ClipboardList /> }] : []),
         ...(showsLibrary(details, data) ? [{ id: "library", label: "GIFs and stickers", icon: <Sticker /> }] : []),
       ],
@@ -109,6 +119,8 @@ export function TreeSettingsView({
 }) {
   if (section === "access") return <AccessSettings details={details} data={data} />;
   if (section === "board") return <BoardSettings details={details} data={data} chat={chat} />;
+  if (section === "rooms") return <RoomAccessSettings key={details.tree.id} details={details} data={data} chat={chat} />;
+  if (section === "labels") return <RoomLabelSettings key={details.tree.id} details={details} data={data} chat={chat} />;
   if (section === "library") return <SpaceLibrarySettings details={details} data={data} />;
   if (section === "members") return <MemberSettings details={details} data={data} onNavigate={onNavigate} />;
   if (section === "delete") return <DeleteSettings details={details} data={data} onNavigate={onNavigate} />;

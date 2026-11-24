@@ -6,11 +6,22 @@ import {
   newestScreenShareKey,
   partitionStageTiles,
   resolveStageFocusKeys,
+  showsListening,
   watchNewSharesPreference,
 } from "./stageState";
 
 const camera = (key: string) => ({ key, source: "camera" as const, speaking: false, streamUrl: "http://local/camera.mjpg" });
 const share = (key: string, shareStartedAt: number) => ({ key, source: "screenshare" as const, speaking: false, streamUrl: "http://local/share.mjpg", shareStartedAt });
+
+describe("the listening mark", () => {
+  test("stands where muted would, unless they hear nothing or are not here yet", () => {
+    expect(showsListening({ listenOnly: true })).toBe(true);
+    expect(showsListening({ listenOnly: true, deafened: true })).toBe(false);
+    expect(showsListening({ listenOnly: true, serverDeafened: true })).toBe(false);
+    expect(showsListening({ listenOnly: true, connecting: true })).toBe(false);
+    expect(showsListening({})).toBe(false);
+  });
+});
 
 describe("stage focus", () => {
   test("the newest active screen share has automatic priority", () => {

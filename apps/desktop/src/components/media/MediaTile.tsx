@@ -29,11 +29,11 @@ import { cn } from "@/lib/utils";
 import { api } from "@/lib/api";
 import { returnFocusToKeyboardOnly } from "@/lib/focusHandoff";
 import { speakingGlowStyle } from "@/lib/speakingActivity";
-import { sharePausedText } from "./stageState";
+import { sharePausedText, showsListening } from "./stageState";
 import { StreamInfo } from "./StreamInfo";
 import { VideoSurface } from "./VideoSurface";
 import { stripSidecarIdentity } from "@/lib/mediaIdentity";
-import { ServerVoiceMark, VoiceModerationItems, type VoiceModeration } from "./VoiceModeration";
+import { ListeningMark, ServerVoiceMark, VoiceModerationItems, type VoiceModeration } from "./VoiceModeration";
 import { WatcherStack, WatchingMark } from "./WatcherStack";
 import type { NativeMediaTile } from "./useNativeMediaTiles";
 
@@ -373,7 +373,9 @@ export function MediaTile({
         <span className="min-w-0 truncate">{label}</span>
         {!isShare && tile.isLocal ? <SelfMark className="text-white/70" /> : null}
         {!isShare ? <HandMark order={tile.handOrder ?? 0} raisedCount={handsUp} yourTurn={yourTurn} onVideo className={yourTurn ? "h-5 min-w-5 px-1" : undefined} /> : null}
-        {!isShare && (tile.serverMuted || tile.serverDeafened) ? (
+        {!isShare && showsListening(tile) ? (
+          <ListeningMark className="h-4 w-4 shrink-0 text-white/80" />
+        ) : !isShare && (tile.serverMuted || tile.serverDeafened) ? (
           <ServerVoiceMark person={tile} className="h-4 w-4 shrink-0" />
         ) : !isShare && tile.deafened ? (
           <HeadphoneOff className="h-3.5 w-3.5 shrink-0 text-destructive" aria-label="Deafened" role="img" />

@@ -36,6 +36,18 @@ describe("joinSummary", () => {
     expect(joinSummary({ micOn: true, cameraOn: true, sharing: true }).reveal).toBe("People will hear you and see you and your screen.");
   });
 
+  test("listening only says what stays off, whatever is on", () => {
+    expect(joinSummary({ micOn: true, cameraOn: true, sharing: true, treeName: "Weekend crew", listenOnly: true })).toEqual({
+      reveal: "You can listen here. Your microphone, camera and screen stay off.",
+      audience: "Members of Weekend crew will see you arrive.",
+    });
+  });
+
+  test("a limited room is seen by the members who can open it", () => {
+    expect(joinSummary({ micOn: false, cameraOn: false, sharing: false, treeName: "Weekend crew", limited: true, nestLabel: "nest" }).audience)
+      .toBe("Members of Weekend crew who can open this nest will see you arrive.");
+  });
+
   test("a temporary nest is seen by the people let in", () => {
     expect(joinSummary({ micOn: true, cameraOn: false, sharing: false }).audience).toBe("People invited or let in will see you arrive.");
   });

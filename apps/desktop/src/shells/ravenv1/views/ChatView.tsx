@@ -20,6 +20,10 @@ import { canShow, isLibraryMessage, pollLimits, reactionLimits, summaryOf } from
 import { addToTray } from "@/lib/chat/composerTray";
 import { dropsClaimed } from "@/lib/library/dropTarget";
 import { libraryCapabilities, type LibraryItem } from "@/lib/library/types";
+import { RoomLabels, RoomLock } from "@/components/RoomLabels";
+import { RoomAccessNote } from "@/components/RoomAccessNote";
+import { accessOfRoom, accessUntil, labelsOfRoom } from "@/lib/roomAccessView";
+import { useNow } from "../useNow";
 import { excerptOf, textNestsOfTree } from "@/lib/chat/reducer";
 import type { MentionCandidate, MentionResolver, MentionTarget } from "@/lib/chat/mentions";
 import type { ChatStore } from "@/lib/chat/store";
@@ -195,6 +199,16 @@ function OpenConversation({
   // this conversation's own tree only; anything else reads as unknown.
   const chatState = useChatState(chat);
   const treeDetails = summary.treeId ? data.getTreeDetails(summary.treeId) : undefined;
+  // The labels and your access come with the tree's layout, fetched the first time it is needed.
+  const treeId = summary.treeId ?? "";
+  const layout = treeId ? chatState?.layouts[treeId] : undefined;
+  const hasLayout = Boolean(layout);
+  useEffect(() => {
+    if (treeId && !hasLayout) void chat.loadLayout(treeId).catch(() => undefined);
+  }, [chat, hasLayout, treeId]);
+  const now = useNow();
+  const access = summary.kind === "nest" ? accessOfRoom(layout, "text", id, summary.access) : undefined;
+  const labels = summary.kind === "nest" ? labelsOfRoom(layout, "text", id) : [];
   const people = useMemo(() => {
     if (summary.kind === "nest") {
       return (treeDetails?.members ?? []).filter((member) => member.state === "joined").map((member) => ({ id: member.userId, username: member.username, name: displayNameFor(member) }));
@@ -388,7 +402,7 @@ function OpenConversation({
         ? undefined
         : summary.kind === "group"
         ? `${summary.memberCount} ${summary.memberCount === 1 ? "person" : "people"}`
-        : [tree?.name, summary.topic].filter(Boolean).join(" · ") || undefined;
+        : [tree?.name, access?.level === "full" ? accessUntil(access, now) : "", summary.topic].filter(Boolean).join(" · ") || undefined;
 
   const intro = summary.kind === "dm"
     ? `Messages here are between you and ${name}.${summary.peerReadSeq !== undefined && sharesReadStatus && !summary.peerDeleted ?" You can each see when the other has read them; Settings › Messages turns that off." : ""}`
@@ -398,6 +412,10 @@ function OpenConversation({
       ? "Only you can see this. Keep notes here, or add messages from any conversation."
       : summary.kind === "group"
       ? "Only people in this group can read it. Anyone added later sees messages from then on."
+      : access?.limited
+      ? `The owner of ${tree?.name ?? "this place"} chooses who can read and write here.`
+      : access?.level === "view"
+      ? `Members of ${tree?.name ?? "this place"} can write here. You can read.`
       : `Everyone in ${tree?.name ?? "this place"} can read and write here.`;
 
   const confirmation = confirming ? describeConfirmation(confirming, name, summary.kind) : null;
@@ -413,7 +431,16 @@ function OpenConversation({
           )
         }
         title={name}
-        badge={summary.kind === "raven" ? <SystemBadge /> : undefined}
+        badge={
+          summary.kind === "raven" ? (
+            <SystemBadge />
+          ) : access || labels.length ? (
+            <>
+              <RoomLock access={access} kind="text" focusable />
+              <RoomLabels labels={labels} max={3} focusable className="max-w-[50%] shrink-0" />
+            </>
+          ) : undefined
+        }
         subtitle={subtitle}
         titleLink={summary.kind === "dm" && summary.peer ? { label: `Open ${name}’s profile`, onOpen: () => onNavigate({ kind: "user", id: summary.peer!.id }) } : undefined}
         actions={
@@ -546,6 +573,8 @@ function OpenConversation({
             mentionResolver={mentionResolver}
             nestHeading={data.labels.nestPlural}
           />
+        ) : summary.kind === "nest" ? (
+          <RoomAccessNote access={{ ...access, level: "view" }} kind="text" now={now} className="mx-auto w-full max-w-3xl shrink-0 px-6 pb-5 text-center" />
         ) : (
           <p className="mx-auto w-full max-w-3xl shrink-0 px-6 pb-5 text-center text-small text-muted-foreground">
             {summary.peerDeleted
@@ -562,7 +591,7 @@ function OpenConversation({
       </div>
 
       {polls ? (
-        <PollDialog open={writingPoll} onOpenChange={setWritingPoll} limits={polls} allowAnonymous={summary.kind !== "dm"} replyingTo={replyingTo?.senderName} onSend={sendPoll} />
+        <PollDialog open={writingPoll && summary.canSend} onOpenChange={setWritingPoll} limits={polls} allowAnonymous={summary.kind !== "dm"} replyingTo={replyingTo?.senderName} onSend={sendPoll} />
       ) : null}
 
       {forwarding ? (

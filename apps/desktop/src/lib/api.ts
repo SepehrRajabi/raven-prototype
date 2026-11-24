@@ -9,6 +9,8 @@ import {
   type SavedAccount,
 } from "@/lib/accounts";
 import { logUiError } from "@/lib/diagnostics";
+import type { TreeLabel } from "@/lib/chat/types";
+import type { AccessChange, MemberRoomAccess, RoomAccess, RoomLabelChange, TreeAccess } from "@/lib/roomAccess";
 import { accountKey, parseVault, serializeVault, SESSION_VAULT_KEY, type SecretBackend, type SessionVault } from "@/lib/sessionVault";
 import { avatarVersion, noteAvatarRoute } from "@/lib/avatarVersions";
 import { parseCallVote, type CallVote } from "@/lib/callVote";
@@ -202,6 +204,8 @@ export interface Nest {
   lifecycleState: "created" | "waiting" | "ready" | "active" | "empty" | "expired" | "closed";
   /** Absent from older servers, which have no doors. */
   door?: NestDoor;
+  /** Your own access to a space's room. Absent outside a space and from an older server. */
+  access?: RoomAccess;
   createdAt: string;
   updatedAt: string;
   archivedAt?: string | null;
@@ -226,6 +230,8 @@ export interface ParticipantSummary {
   serverDeafened?: boolean;
   /** "I'd like to speak": 0 when down, else the place in line (1 is first). Absent on an older server. */
   handOrder?: number;
+  /** They may hear this call and send nothing to it. Absent on an older server. */
+  listenOnly?: boolean;
 }
 
 export interface CallStatePatch {
@@ -1237,6 +1243,38 @@ export class ApiClient {
 
   pinTreeEvent(treeId: string, eventId: string, pinned: boolean) {
     return this.request<void>(`/v1/trees/${treeId}/events/${eventId}/pin`, { method: "POST", body: JSON.stringify({ pinned }) });
+  }
+
+  /** Every rule and label of a tree. Owner only. */
+  treeAccess(treeId: string) {
+    return this.request<TreeAccess>(`/v1/trees/${treeId}/access`);
+  }
+
+  /** Sets or clears rules for many people and rooms at once, all or none. */
+  changeTreeAccess(treeId: string, change: AccessChange) {
+    return this.request<TreeAccess>(`/v1/trees/${treeId}/access`, { method: "POST", body: JSON.stringify(change) });
+  }
+
+  /** What one person may do in each room and why. The owner may ask about anyone, others about themselves. */
+  memberAccess(treeId: string, userId: string) {
+    return this.request<{ rooms: MemberRoomAccess[] }>(`/v1/trees/${treeId}/access/members/${userId}`);
+  }
+
+  createTreeLabel(treeId: string, payload: { name: string; visible: boolean }) {
+    return this.request<{ label: TreeLabel }>(`/v1/trees/${treeId}/labels`, { method: "POST", body: JSON.stringify(payload) });
+  }
+
+  editTreeLabel(treeId: string, labelId: string, payload: { name?: string; visible?: boolean }) {
+    return this.request<{ label: TreeLabel }>(`/v1/trees/${treeId}/labels/${labelId}`, { method: "POST", body: JSON.stringify(payload) });
+  }
+
+  /** Deletes a label with the rules about it. */
+  deleteTreeLabel(treeId: string, labelId: string) {
+    return this.request<void>(`/v1/trees/${treeId}/labels/${labelId}`, { method: "DELETE" });
+  }
+
+  changeRoomLabels(treeId: string, change: RoomLabelChange) {
+    return this.request<TreeAccess>(`/v1/trees/${treeId}/room-labels`, { method: "POST", body: JSON.stringify(change) });
   }
 
   uploadTreeAvatar(treeId: string, file: File) {

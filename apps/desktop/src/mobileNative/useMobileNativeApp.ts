@@ -1,6 +1,7 @@
 import { useEffect, useMemo } from "react";
 import type { CallHost } from "@/lib/callHost";
 import { useChat } from "@/shells/ravenv1/useChat";
+import { listenOnlyIn } from "@/shells/ravenv1/ownAccess";
 import { useNestEntry } from "@/shells/ravenv1/useNestEntry";
 import { useRavenMediaAdapter } from "@/shells/ravenv1/useRavenMediaAdapter";
 import { useRavenShellData } from "@/shells/ravenv1/useRavenShellData";
@@ -18,6 +19,7 @@ export function useMobileNativeApp(callHost: CallHost) {
     presenceState: data.presence?.state,
     presenceReachability: data.presence?.reachability,
     localUserId: data.user?.id,
+    listenOnlyIn: (nestId) => listenOnlyIn(data, nestId),
     callHost,
   });
   const entry = useNestEntry(data.joinNest, media.joinMediaSession, media.cancelMediaJoin);

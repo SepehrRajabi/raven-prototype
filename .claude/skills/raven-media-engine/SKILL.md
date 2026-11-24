@@ -54,7 +54,8 @@ Break one of these and the "random" alpha bugs come back. Each has a reason.
    a mute: its talk gate (`src-tauri/src/push_to_talk.rs`, an atomic read in the
    microphone's `fader_target`) ramps the fader to zero with no flag, reconcile or device
    restart, so listeners see someone not speaking. A hard mute still wins over the key.
-   Server mute is the one exception: LiveKit takes publishing away (`can_publish` off on
+   Server mute, and a room someone may only listen in (`listenOnlyIn` in the adapter, which
+   also stops camera and screen), is the one exception: LiveKit takes publishing away (`can_publish` off on
    `#audio`), so reconcile publishes nothing and capture stops. That is still the model and
    the reconcile pass, driven by `capture_demand.publish_revoked` from LiveKit's permission.
 6. **Nothing clicks.** Gain, mute, master mute and limiter gain all move by ramps.

@@ -231,7 +231,9 @@ About). About shows the version and one row, Open-source licences, which opens
 projects Raven is built on, grouped by licence, each licence text collapsed. It reads
 `src-tauri/THIRD-PARTY-NOTICES.md`, which `scripts/third-party-notices.ts` generates, through a
 lazy `?raw` import. Tree settings:
-General, Who can join, Members, and Delete for owners. Pieces are in
+General, Who can join, Members, Room access, Labels, and Delete for owners. Room access is a
+list of rules by person and one dialog (who, where, what, until); what a limit means is told
+to the person in the room itself (`RoomAccessNote`), never only in settings. Pieces are in
 `SettingsScaffold.tsx`; hotkeys, overlay and updates have their own panels under
 `components/`.
 

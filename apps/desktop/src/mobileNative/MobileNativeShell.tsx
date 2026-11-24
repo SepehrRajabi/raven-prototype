@@ -18,6 +18,8 @@ import { RoomKnockToasts } from "@/shells/ravenv1/RoomKnockToasts";
 import { ChoosePassword, ShellLogin } from "@/shells/ravenv1/SignIn";
 import { createMobileNativeCallHost } from "./callHost";
 import { mobileNativeCommands } from "./media";
+import { LISTEN_ONLY_TITLE } from "@/lib/roomAccessView";
+import { useLostRoom } from "@/shells/ravenv1/useLostRoom";
 import { useMobileNativeNavigation } from "./navigation";
 import { useMobileNativeApp } from "./useMobileNativeApp";
 
@@ -71,6 +73,7 @@ type SignedInAppProps = Pick<ReturnType<typeof useMobileNativeApp>, "data" | "me
 /** The signed-in layout and its Back stack. */
 function SignedInApp({ data, media, entry, chat, updater, activeEntryNotices }: SignedInAppProps) {
   const { view, navigation } = useMobileNativeNavigation();
+  useLostRoom({ data, media, chat, view: view.kind === "messages" ? { kind: "home" } : view, onFallBack: (treeId) => navigation.navigate({ kind: "tree", id: treeId }) });
   useMessageNotifications(chat, data, view.kind === "messages" ? { kind: "home" } : view);
 
   // System Back walks the in-app history while there is somewhere to go back to.
@@ -200,16 +203,17 @@ function MediaErrorBanner({ media }: { media: RavenMediaAdapterState }) {
 
 /** Call controls stay on screen through every view while a call is active. */
 function CallControls({ media, onNavigate }: { media: RavenMediaAdapterState; onNavigate: (view: RavenView) => void }) {
-  const micOn = media.localMicEnabled && !media.localServerMuted;
+  const listenOnly = media.localListenOnly;
+  const micOn = media.localMicEnabled && !media.localServerMuted && !listenOnly;
   const deafened = media.localDeafened || media.localServerDeafened;
   const cameraOn = media.localCameraEnabled;
-  const micLabel = media.localServerMuted ? "Muted by a moderator" : micOn ? "Mute microphone" : "Unmute microphone";
+  const micLabel = listenOnly ? LISTEN_ONLY_TITLE : media.localServerMuted ? "Muted by a moderator" : micOn ? "Mute microphone" : "Unmute microphone";
   const deafenLabel = media.localServerDeafened ? "Deafened by a moderator" : deafened ? "Undeafen" : "Deafen";
   return (
     <footer className="shrink-0 px-3 pb-[max(0.5rem,env(safe-area-inset-bottom))] pt-1" aria-label="Call controls">
       <div className="flex items-center justify-center gap-1.5">
         <div className="inline-flex items-center">
-          <Button size="icon" className="rounded-r-none" variant={micOn ? "secondary" : "destructive"} aria-label={micLabel} title={micLabel} disabled={media.localServerMuted || !media.audioSupported || media.busy} onClick={() => void media.toggleMic()}>
+          <Button size="icon" className="rounded-r-none" variant={micOn ? "secondary" : "destructive"} aria-label={micLabel} title={micLabel} disabled={listenOnly || media.localServerMuted || !media.audioSupported || media.busy} onClick={() => void media.toggleMic()}>
             {micOn ? <Mic /> : <MicOff />}
           </Button>
           <MenuChevron label="Microphone options" menu={<MicMenu media={media} />} />
@@ -221,7 +225,7 @@ function CallControls({ media, onNavigate }: { media: RavenMediaAdapterState; on
           <MenuChevron label="Output options" menu={<OutputMenu media={media} />} />
         </div>
         <div className="inline-flex items-center">
-          <Button size="icon" className="rounded-r-none" variant={cameraOn ? "secondary" : "ghost"} aria-label={cameraOn ? "Turn camera off" : "Turn camera on"} disabled={!media.cameraSupported || media.busy} onClick={() => void media.toggleCamera()}>
+          <Button size="icon" className="rounded-r-none" variant={cameraOn ? "secondary" : "ghost"} aria-label={listenOnly ? LISTEN_ONLY_TITLE : cameraOn ? "Turn camera off" : "Turn camera on"} disabled={listenOnly || !media.cameraSupported || media.busy} onClick={() => void media.toggleCamera()}>
             {cameraOn ? <Video /> : <VideoOff />}
           </Button>
           <MenuChevron label="Camera options" menu={<CameraMenu media={media} />} />

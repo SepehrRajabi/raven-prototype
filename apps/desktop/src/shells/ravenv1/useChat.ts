@@ -57,6 +57,10 @@ export function useChat(data: RavenShellData): ChatStore | null {
         if (update.type === "tree.layout_updated" || update.type === "stream.reconnected") {
           for (const treeId of Object.keys(next.getState().layouts)) void next.loadLayout(treeId).catch(() => undefined);
         }
+        // The layout carries your own access, and only the rooms and labels you may see.
+        if (update.type === "tree.access_changed") {
+          for (const treeId of update.treeId ? [update.treeId] : Object.keys(next.getState().layouts)) void next.loadLayout(treeId).catch(() => undefined);
+        }
       },
     });
     return () => {

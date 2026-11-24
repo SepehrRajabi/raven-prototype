@@ -16,7 +16,10 @@ import { failureText } from "@/lib/chat/errors";
 import { canMoveCategory, entryKey, existingNestRefs, layoutSections, moveCategory, moveEntry, toEntries, toLayoutRequest, type ArrangeEntry, type NestRef } from "@/lib/chat/layout";
 import { textNestsOfTree } from "@/lib/chat/reducer";
 import type { ChatStore } from "@/lib/chat/store";
-import type { TreeCategory } from "@/lib/chat/types";
+import type { TreeCategory, TreeLabel } from "@/lib/chat/types";
+import { RoomLabels, RoomLock } from "@/components/RoomLabels";
+import type { RoomAccess, RoomKind } from "@/lib/roomAccess";
+import { accessOfRoom, labelsOfRoom } from "@/lib/roomAccessView";
 import { cn } from "@/lib/utils";
 import { AvatarStack, GroupedList, NestGlyph, SectionLabel } from "../atoms";
 import { lifecycleLabel, type RavenShellData, type RavenView } from "../state";
@@ -76,6 +79,15 @@ export function TreeNestsSection({
   const textById = useMemo(() => new Map(textNests.map((nest) => [nest.summary.id, nest.summary])), [textNests]);
 
   const sections = useMemo(() => layoutSections(layout, existingNestRefs(textNests, voiceNests)), [layout, textNests, voiceNests]);
+
+  /** Who the room is for, beside its name: its labels, and a lock where not everyone has it in full. */
+  const marksOf = (ref: NestRef) => (
+    <RoomMarks
+      kind={ref.kind}
+      access={accessOfRoom(layout, ref.kind, ref.id, ref.kind === "text" ? textById.get(ref.id)?.access : voiceById.get(ref.id)?.access)}
+      labels={labelsOfRoom(layout, ref.kind, ref.id)}
+    />
+  );
 
   const nameOf = (ref: NestRef) => (ref.kind === "text" ? textById.get(ref.id)?.name : voiceById.get(ref.id)?.name) ?? "";
 
@@ -137,6 +149,7 @@ export function TreeNestsSection({
                       unread={textById.get(ref.id)?.unreadCount ?? 0}
                       mentions={textById.get(ref.id)?.mentionCount ?? 0}
                       caption={captions.get(ref.id)}
+                      marks={marksOf(ref)}
                       onOpen={() => onNavigate({ kind: "chat", id: ref.id })}
                       menu={canManage ? <NestRowMenu name={nameOf(ref)} onRename={() => setRenamingNest(ref)} onDelete={() => setDeletingNest(ref)} /> : undefined}
                     />
@@ -147,6 +160,7 @@ export function TreeNestsSection({
                       data={data}
                       here={media.activeNestId === ref.id}
                       caption={captions.get(ref.id)}
+                      marks={marksOf(ref)}
                       canJoin={canJoin}
                       onOpen={(nest) => onNavigate(nestView(nest))}
                       menu={canManage ? <NestRowMenu name={nameOf(ref)} renameLabel="Settings" onRename={() => setRenamingNest(ref)} onDelete={() => setDeletingNest(ref)} /> : undefined}
@@ -285,6 +299,15 @@ function NestRowMenu({ name, renameLabel = "Rename", onRename, onDelete }: { nam
 const rowClassName = "group flex h-11 w-full items-center transition-colors hover:bg-secondary";
 const rowButtonClassName = "flex h-11 min-w-0 flex-1 items-center gap-3 px-3.5 text-left";
 
+function RoomMarks({ kind, access, labels }: { kind: RoomKind; access: RoomAccess | undefined; labels: readonly TreeLabel[] }) {
+  return (
+    <>
+      <RoomLock kind={kind} access={access} />
+      <RoomLabels labels={labels} className="max-w-[45%] shrink-0" />
+    </>
+  );
+}
+
 /** A room's name, with what is on in it now underneath when an event is. */
 function RowName({ name, caption, strong }: { name: string; caption?: string; strong?: boolean }) {
   if (!caption) return <span className={cn("min-w-0 flex-1 truncate text-body", strong && "font-medium")}><bdi>{name}</bdi></span>;
@@ -296,12 +319,13 @@ function RowName({ name, caption, strong }: { name: string; caption?: string; st
   );
 }
 
-function TextNestRow({ name, unread, mentions, caption, onOpen, menu }: { name: string; unread: number; mentions: number; caption?: string; onOpen: () => void; menu?: ReactNode }) {
+function TextNestRow({ name, unread, mentions, caption, marks, onOpen, menu }: { name: string; unread: number; mentions: number; caption?: string; marks: ReactNode; onOpen: () => void; menu?: ReactNode }) {
   return (
     <div className={cn(rowClassName, caption && "h-14")}>
       <button type="button" onClick={onOpen} className={cn(rowButtonClassName, caption && "h-14")}>
         <NestGlyph kind="text" className="text-subtle" />
         <RowName name={name} caption={caption} strong={unread > 0} />
+        {marks}
         <MentionDot count={mentions} />
         <UnreadCount count={unread} />
       </button>
@@ -317,6 +341,7 @@ function VoiceNestRow({
   here,
   canJoin,
   caption,
+  marks,
   onOpen,
   menu,
 }: {
@@ -325,6 +350,7 @@ function VoiceNestRow({
   here: boolean;
   canJoin: boolean;
   caption?: string;
+  marks: ReactNode;
   onOpen: (nest: Nest | LauncherNest) => void;
   menu?: ReactNode;
 }) {
@@ -336,6 +362,7 @@ function VoiceNestRow({
         <button type="button" onClick={() => onOpen(nest)} className={cn(rowButtonClassName, caption && "h-14")}>
           <NestGlyph kind="voice" className="text-subtle" />
           <RowName name={nest.name} caption={caption} />
+          {marks}
           {state !== "Empty" && state !== "Created" ? <span className="shrink-0 text-caption text-muted-foreground">{state}</span> : null}
         </button>
         <DoorMark door={nest.door} />
@@ -360,6 +387,7 @@ function VoiceNestRow({
             <span className="min-w-0 truncate text-caption text-muted-foreground">{sentence}</span>
           </span>
         </span>
+        {marks}
       </button>
       <DoorMark door={nest.door} />
       <Button size="xs" variant="secondary" className="mr-2 shrink-0" disabled={!here && !canJoin} onClick={() => onOpen(nest)}>

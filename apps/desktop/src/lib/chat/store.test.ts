@@ -175,6 +175,30 @@ async function openStore(server = fakeServer(), options: Partial<ConstructorPara
 const conversation = (store: ChatStore) => store.getState().conversations[C];
 const bodies = (store: ChatStore) => conversation(store).messages.map((item) => item.body);
 
+describe("a tree's layout", () => {
+  test("an answer overtaken by a later question is dropped", async () => {
+    const { store, server } = await openStore();
+    const answers: Array<(name: string) => void> = [];
+    server.api.treeLayout = (treeId: string) =>
+      new Promise((resolve) => {
+        answers.push((name) => resolve({ layout: { treeId, categories: [{ id: name, name, position: 0 }], items: [] } }));
+      });
+    const first = store.loadLayout("t1");
+    const second = store.loadLayout("t1");
+    answers[1]("after access changed");
+    await second;
+    answers[0]("before");
+    await first;
+    expect(store.getState().layouts.t1.categories[0].name).toBe("after access changed");
+    // Another tree's answers are its own.
+    const other = store.loadLayout("t2");
+    answers[2]("t2");
+    await other;
+    expect(store.getState().layouts.t2.categories[0].name).toBe("t2");
+    store.dispose();
+  });
+});
+
 describe("sending", () => {
   test("opening at a message loads around it only when it is outside the window", async () => {
     const { store, server } = await openStore();
