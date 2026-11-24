@@ -1,4 +1,4 @@
-import { memo, useState, type ReactNode } from "react";
+import { memo, useRef, useState, type ReactNode } from "react";
 import { AlertCircle, Bookmark, CalendarClock, Check, CheckCheck, CheckCircle2, CircleStop, Clock, Shield, ChevronDown, Copy, CornerUpLeft, Download, EyeOff, Forward, MoreHorizontal, Pencil, SmilePlus, Trash2, Users } from "lucide-react";
 import { Avatar } from "@/components/ui/avatar";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
@@ -21,6 +21,7 @@ import { Button } from "@/components/ui/button";
 import { clockTime, fullTime, listTime } from "@/lib/chat/time";
 import type { ChatAttachment, ChatMessage, ChatOrigin, ChatPollPrivacy, ChatReplyRef, ChatSystemPayload, PendingMessage } from "@/lib/chat/types";
 import { NestGlyph } from "@/shells/ravenv1/atoms";
+import { returnFocusToKeyboardOnly } from "@/lib/focusHandoff";
 import { cn } from "@/lib/utils";
 import { MessageAttachments, PendingAttachments } from "./Attachments";
 import { LibraryMedia } from "@/components/library/LibraryMedia";
@@ -278,6 +279,9 @@ function EventInvitation({ system, onOpenSpace }: { system: ChatSystemPayload; o
 export const MessageRow = memo(function MessageRow(props: MessageRowProps) {
   const { message, mine, showSender, continuation, status, parent } = props;
   const [menuOpen, setMenuOpen] = useState(false);
+  // Reply and Edit move to the composer. An open menu keeps focus to itself and hands it to
+  // its trigger as it closes, so they wait until it has closed.
+  const writeAfterMenu = useRef<(() => void) | null>(null);
   const [reactionOpen, setReactionOpen] = useState(false);
   const [fullPicker, setFullPicker] = useState(false);
   const [privacyOpen, setPrivacyOpen] = useState(false);
@@ -377,7 +381,7 @@ export const MessageRow = memo(function MessageRow(props: MessageRowProps) {
         <Tooltip label="React"><PopoverTrigger asChild>
           <button type="button" aria-label="React" className="flex h-7 w-7 items-center justify-center rounded-control text-subtle transition-colors hover:bg-secondary hover:text-foreground"><SmilePlus className="h-4 w-4" /></button>
         </PopoverTrigger></Tooltip>
-        <PopoverContent side="top" align={mine ? "end" : "start"} className={fullPicker ? "w-auto p-0" : "w-auto rounded-full p-1"}>
+        <PopoverContent side="top" align={mine ? "end" : "start"} className={fullPicker ? "w-auto p-0" : "w-auto rounded-full p-1"} onCloseAutoFocus={returnFocusToKeyboardOnly}>
           {fullPicker ? <EmojiPicker autoFocus onPick={react} /> : <div className="flex items-center gap-0.5" onKeyDown={(event) => {
             if (!["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown"].includes(event.key)) return;
             event.preventDefault();
@@ -407,7 +411,13 @@ export const MessageRow = memo(function MessageRow(props: MessageRowProps) {
             <MoreHorizontal className="h-4 w-4" />
           </button>
         </DropdownMenuTrigger>
-        <DropdownMenuContent align={mine ? "end" : "start"}>
+        <DropdownMenuContent align={mine ? "end" : "start"} onCloseAutoFocus={(event) => {
+          const write = writeAfterMenu.current;
+          if (!write) return returnFocusToKeyboardOnly(event);
+          writeAfterMenu.current = null;
+          event.preventDefault();
+          write();
+        }}>
           {canReact ? <>
             <div className="flex gap-0.5" onKeyDown={(event) => {
               if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
@@ -422,7 +432,7 @@ export const MessageRow = memo(function MessageRow(props: MessageRowProps) {
             <DropdownMenuSeparator />
           </> : null}
           {props.canReply && !deleted ? (
-            <DropdownMenuItem onSelect={() => props.onReply(message)}>
+            <DropdownMenuItem onSelect={() => { writeAfterMenu.current = () => props.onReply(message); }}>
               <CornerUpLeft className="text-muted-foreground" />
               Reply
             </DropdownMenuItem>
@@ -476,7 +486,7 @@ export const MessageRow = memo(function MessageRow(props: MessageRowProps) {
             </DropdownMenuItem>
           ) : null}
           {props.canEdit && !deleted ? (
-            <DropdownMenuItem onSelect={() => props.onEdit(message)}>
+            <DropdownMenuItem onSelect={() => { writeAfterMenu.current = () => props.onEdit(message); }}>
               <Pencil className="text-muted-foreground" />
               Edit
             </DropdownMenuItem>

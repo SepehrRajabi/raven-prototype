@@ -1,6 +1,7 @@
 import { HeadphoneOff, Headphones, Mic, MicOff, MoreHorizontal } from "lucide-react";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { stripSidecarIdentity } from "@/lib/mediaIdentity";
+import { returnFocusToKeyboardOnly } from "@/lib/focusHandoff";
 import { cn } from "@/lib/utils";
 import type { NativeMediaTile } from "./useNativeMediaTiles";
 
@@ -55,7 +56,7 @@ export function VoiceModerationMenu({ person, moderation, onVoteToRemove, classN
           <MoreHorizontal className="h-3.5 w-3.5" />
         </button>
       </DropdownMenuTrigger>
-      <DropdownMenuContent align="start" className="w-56">
+      <DropdownMenuContent align="start" className="w-56" onCloseAutoFocus={returnFocusToKeyboardOnly}>
         {canModerate ? <VoiceModerationItems person={person} moderation={moderation!} /> : null}
         {canModerate && onVoteToRemove ? <DropdownMenuSeparator /> : null}
         {onVoteToRemove ? <DropdownMenuItem onSelect={onVoteToRemove}>Vote to remove from call…</DropdownMenuItem> : null}
