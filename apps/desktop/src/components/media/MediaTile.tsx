@@ -27,6 +27,7 @@ import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel,
 import { Popover, PopoverAnchor, PopoverContent } from "@/components/ui/popover";
 import { cn } from "@/lib/utils";
 import { api } from "@/lib/api";
+import { returnFocusToKeyboardOnly } from "@/lib/focusHandoff";
 import { speakingGlowStyle } from "@/lib/speakingActivity";
 import { sharePausedText } from "./stageState";
 import { StreamInfo } from "./StreamInfo";
@@ -302,7 +303,7 @@ export function MediaTile({
             onCloseAutoFocus={(event) => {
               // The menu would hand focus back to "…", and the popover opening beside it
               // reads that as focus leaving and dismisses itself. Open it now instead.
-              if (!infoRequested.current) return;
+              if (!infoRequested.current) return returnFocusToKeyboardOnly(event);
               infoRequested.current = false;
               event.preventDefault();
               setInfoOpen(true);
