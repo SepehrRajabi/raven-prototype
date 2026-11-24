@@ -4,6 +4,8 @@ import (
 	"database/sql"
 	"errors"
 
+	"raven/services/api/internal/database"
+
 	"github.com/gofiber/fiber/v2"
 )
 
@@ -42,11 +44,15 @@ const (
 	// treeActionManageStickers covers the space's GIF and sticker set: adding, editing,
 	// organising and removing what the space's members can use in its conversations.
 	treeActionManageStickers treeAction = "stickers.manage"
-	treeActionEditSettings   treeAction = "settings.edit"
-	treeActionAssignRoles    treeAction = "roles.assign"
-	treeActionTransfer       treeAction = "ownership.transfer"
-	treeActionDelete         treeAction = "space.delete"
-	treeActionLeave          treeAction = "leave"
+	// treeActionManageAccess covers the rules about who may use which room, and the rooms'
+	// labels, which those rules can be about. Only the owner has it: someone who could label
+	// a room could otherwise open it.
+	treeActionManageAccess treeAction = "access.manage"
+	treeActionEditSettings treeAction = "settings.edit"
+	treeActionAssignRoles  treeAction = "roles.assign"
+	treeActionTransfer     treeAction = "ownership.transfer"
+	treeActionDelete       treeAction = "space.delete"
+	treeActionLeave        treeAction = "leave"
 )
 
 const (
@@ -89,6 +95,7 @@ var treeActionMinimumRole = map[treeAction]string{
 	treeActionRenameMember:     treeRoleModerator,
 	treeActionManageBoard:      treeRoleModerator,
 	treeActionManageStickers:   treeRoleModerator,
+	treeActionManageAccess:     treeRoleOwner,
 	treeActionEditSettings:     treeRoleOwner,
 	treeActionAssignRoles:      treeRoleOwner,
 	treeActionTransfer:         treeRoleOwner,
@@ -106,6 +113,7 @@ var treeViewerActions = []treeAction{
 	treeActionRenameMember,
 	treeActionManageBoard,
 	treeActionManageStickers,
+	treeActionManageAccess,
 	treeActionEditSettings,
 	treeActionAssignRoles,
 	treeActionTransfer,
@@ -203,8 +211,9 @@ func (s *Server) treeAllows(q chatQuerier, userID, treeID string, action treeAct
 // Voice nests.
 //
 // A nest inside a tree belongs to the tree: its members may see and join it, and its
-// owner and moderators run it. Who created it does not matter. A nest outside any tree
-// (a temporary one) is run by whoever started it, and is open to the people they let in.
+// owner and moderators run it, as far as the owner's rules about the room let them (see
+// room_access.go). Who created it does not matter. A nest outside any tree (a temporary
+// one) is run by whoever started it, and is open to the people they let in.
 
 type nestAccessLevel int
 
@@ -221,15 +230,39 @@ func nestBelongsToTree(nest Nest) bool {
 	return nest.TreeID != nil && *nest.TreeID != "" && nest.Type == "persistent"
 }
 
-// nestAccess is the single answer to what someone may do with a voice nest.
+// nestRoom is a tree's voice nest as the access rules name it.
+func nestRoom(nest Nest) roomKey {
+	return roomKey{layoutKindVoice, nest.ID}
+}
+
+// treeRoomSeat is someone's role in a tree and their level in one of its rooms. Someone
+// outside the tree has neither.
+func (s *Server) treeRoomSeat(q chatQuerier, userID, treeID string, room roomKey) (string, roomLevel, error) {
+	var role string
+	var level int
+	err := q.QueryRow(
+		`SELECT tm.role, `+roomLevelSQL(room.Kind, "tm.tree_id", "x.room_id", "tm.user_id", "tm.role")+`
+		 FROM tree_members tm
+		 JOIN trees t ON t.id = tm.tree_id
+		 CROSS JOIN (SELECT CAST(? AS TEXT) AS room_id) x
+		 WHERE tm.tree_id = ? AND tm.user_id = ? AND tm.state = 'joined' AND t.status = 'active'`,
+		database.Now(), room.ID, treeID, userID,
+	).Scan(&role, &level)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", roomLevelNone, nil
+	}
+	return role, roomLevel(level), err
+}
+
+// nestAccess is the single answer to what someone may do with a voice nest. A moderator
+// with less than full access to a room does not run it.
 func (s *Server) nestAccess(userID string, nest Nest) (nestAccessLevel, error) {
 	if nestBelongsToTree(nest) {
-		role, err := s.treeRoleOf(s.db, userID, *nest.TreeID)
-		if err != nil {
-			return nestAccessNone, err
-		}
+		role, level, err := s.treeRoomSeat(s.db, userID, *nest.TreeID, nestRoom(nest))
 		switch {
-		case treeRoleAllows(role, treeActionManageRooms):
+		case err != nil || level == roomLevelNone:
+			return nestAccessNone, err
+		case level == roomLevelFull && treeRoleAllows(role, treeActionManageRooms):
 			return nestAccessModerator, nil
 		case treeRoleAllows(role, treeActionView):
 			return nestAccessMember, nil
@@ -315,9 +348,12 @@ func (s *Server) canJoinDirectly(userID string, nest Nest) (bool, error) {
 	return level >= nestAccessMember, nil
 }
 
+var errNestEntry = fiber.NewError(fiber.StatusForbidden, "admission is required before LiveKit access")
+
 // requireNestEntry is checked every time someone connects to a nest's call: at the token,
 // at the session and at presence. Being admitted once is not enough, because a person can
-// be removed from the tree, or the nest archived, while they are inside.
+// be removed from the tree, or the room hidden from them, or the nest archived, while they
+// are inside.
 func (s *Server) requireNestEntry(user User, nest Nest) error {
 	if err := s.requireJoinRooms(user); err != nil {
 		return err
@@ -334,7 +370,7 @@ func (s *Server) requireNestEntry(user User, nest Nest) error {
 		return err
 	}
 	if level < nestAccessMember || !joined {
-		return fiber.NewError(fiber.StatusForbidden, "admission is required before LiveKit access")
+		return errNestEntry
 	}
 	if err := s.requireDoor(user.ID, nest); err != nil {
 		return err
@@ -343,9 +379,8 @@ func (s *Server) requireNestEntry(user User, nest Nest) error {
 }
 
 // nestModeratorSQL is the "runs this nest" rule of nestAccess written as SQL, for queries
-// that look across many nests at once. alias is the nests table. It takes the person
-// twice: once as the starter of a nest outside any tree, once as a tree's owner or
-// moderator. It must be kept in step with nestAccess and treeActionManageRooms.
+// that look across many nests at once. alias is the nests table. Its placeholders are
+// nestModeratorArgs. It must be kept in step with nestAccess and treeActionManageRooms.
 func nestModeratorSQL(alias string) string {
 	inTree := `(` + alias + `.tree_id IS NOT NULL AND ` + alias + `.type = 'persistent')`
 	return `((NOT ` + inTree + ` AND ` + alias + `.creator_user_id = ?)
@@ -353,20 +388,128 @@ func nestModeratorSQL(alias string) string {
 			SELECT 1 FROM tree_members manager
 			WHERE manager.tree_id = ` + alias + `.tree_id AND manager.user_id = ?
 			  AND manager.role IN ('owner', 'moderator') AND manager.state = 'joined'
+			  AND ` + roomLevelSQL(layoutKindVoice, "manager.tree_id", alias+".id", "manager.user_id", "manager.role") + ` = 2
 		)))`
 }
 
+// nestModeratorArgs is what nestModeratorSQL's placeholders take, in order.
+func nestModeratorArgs(userID string) []any {
+	return []any{userID, userID, database.Now()}
+}
+
 // nestVisibleSQL is the "may see this nest exists" rule of nestAccess as SQL. alias is the
-// nests table. It takes the person four times.
+// nests table. Its placeholders are nestVisibleArgs.
 func nestVisibleSQL(alias string) string {
 	inTree := `(` + alias + `.tree_id IS NOT NULL AND ` + alias + `.type = 'persistent')`
 	return `((` + inTree + ` AND EXISTS (
 			SELECT 1 FROM tree_members viewer
 			WHERE viewer.tree_id = ` + alias + `.tree_id AND viewer.user_id = ? AND viewer.state = 'joined'
+			  AND ` + roomLevelSQL(layoutKindVoice, "viewer.tree_id", alias+".id", "viewer.user_id", "viewer.role") + ` > 0
 		))
 		OR (NOT ` + inTree + ` AND (
 			` + alias + `.creator_user_id = ?
 			OR EXISTS (SELECT 1 FROM nest_members seat WHERE seat.nest_id = ` + alias + `.id AND seat.user_id = ? AND seat.state IN ('joined', 'invited'))
 			OR EXISTS (SELECT 1 FROM nest_join_requests asking WHERE asking.nest_id = ` + alias + `.id AND asking.user_id = ? AND asking.status = 'pending')
 		)))`
+}
+
+// nestVisibleArgs is what nestVisibleSQL's placeholders take, in order.
+func nestVisibleArgs(userID string) []any {
+	return []any{userID, database.Now(), userID, userID, userID}
+}
+
+// nestHiddenSQL is whether a rule hides a tree's voice nest from someone in that tree. nest
+// and user are SQL expressions for their ids. It takes user and then nest (those that are
+// placeholders), and then the current time. A nest outside any tree, or one of a tree they
+// are not in, is not hidden by a rule.
+func nestHiddenSQL(nest, user string) string {
+	return `EXISTS (
+		SELECT 1 FROM nests hn
+		JOIN tree_members hv ON hv.tree_id = hn.tree_id AND hv.user_id = ` + user + ` AND hv.state = 'joined'
+		WHERE hn.id = ` + nest + ` AND hn.type = 'persistent'
+		  AND ` + roomLevelSQL(layoutKindVoice, "hn.tree_id", "hn.id", "hv.user_id", "hv.role") + ` = 0)`
+}
+
+// nestHiddenFrom is nestHiddenSQL for one nest and one person.
+func nestHiddenFrom(q chatQuerier, nestID, userID string) (bool, error) {
+	var hidden bool
+	err := q.QueryRow(`SELECT `+nestHiddenSQL("?", "?"), userID, nestID, database.Now()).Scan(&hidden)
+	return hidden, err
+}
+
+// treeRoomMemberIDs lists everyone in a tree who may see one of its rooms.
+func treeRoomMemberIDs(q chatQuerier, treeID string, room roomKey) ([]string, error) {
+	rows, err := q.Query(
+		`SELECT tm.user_id FROM tree_members tm
+		 CROSS JOIN (SELECT CAST(? AS TEXT) AS room_id) x
+		 WHERE tm.tree_id = ? AND tm.state = 'joined'
+		   AND `+roomLevelSQL(room.Kind, "tm.tree_id", "x.room_id", "tm.user_id", "tm.role")+` > 0`,
+		room.ID, treeID, database.Now(),
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	ids := []string{}
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		ids = append(ids, id)
+	}
+	return ids, rows.Err()
+}
+
+// showNestListAccess is showNestAccess for a whole list.
+func (s *Server) showNestListAccess(userID string, nests []Nest) error {
+	each := make([]*Nest, len(nests))
+	for i := range nests {
+		each[i] = &nests[i]
+	}
+	return s.showNestAccess(userID, each...)
+}
+
+// showNestAccess fills in what each of a tree's rooms tells one person about their own
+// access. However many rooms are listed, a tree's rules are read once, and a tree without
+// any costs nothing more. Never use it on a nest sent to several people.
+func (s *Server) showNestAccess(userID string, nests ...*Nest) error {
+	now := database.Now()
+	var ruled map[string]bool
+	models := map[string]accessModel{}
+	for _, nest := range nests {
+		if !nestBelongsToTree(*nest) {
+			continue
+		}
+		if ruled == nil {
+			treeIDs, err := s.stringColumn(
+				`SELECT DISTINCT ar.tree_id FROM tree_access_rules ar
+				 JOIN tree_members tm ON tm.tree_id = ar.tree_id AND tm.user_id = ? AND tm.state = 'joined'
+				 WHERE ar.expires_at IS NULL OR ar.expires_at > ?`,
+				userID, now,
+			)
+			if err != nil {
+				return err
+			}
+			ruled = map[string]bool{}
+			for _, id := range treeIDs {
+				ruled[id] = true
+			}
+		}
+		access := RoomAccess{Level: roomLevelFull.String()}
+		if treeID := *nest.TreeID; ruled[treeID] {
+			model, read := models[treeID]
+			if !read {
+				loaded, err := loadAccessModel(s.db, treeID)
+				if err != nil {
+					return err
+				}
+				model = loaded.at(now)
+				models[treeID] = model
+			}
+			access = model.accessFor(userID, nestRoom(*nest))
+		}
+		nest.Access = &access
+	}
+	return nil
 }

@@ -15,8 +15,10 @@ import (
 )
 
 // chatSummarySQL reads conversations as one person sees them: their own read position,
-// the unread count, and the newest message they may see. Its first placeholder is that
-// person. With one=true a second placeholder picks a single conversation.
+// the unread count, and the newest message they may see. Its placeholders are the current
+// time and that person. With one=true a third picks a single conversation. Text nests the
+// person has no access to are in it: chatSummaries leaves them out. A nest's people are
+// looked at one by one only where a rule could hide that nest from someone.
 func chatSummarySQL(one bool) string {
 	filter := ""
 	if one {
@@ -47,9 +49,18 @@ func chatSummarySQL(one bool) string {
 			) THEN 1 ELSE 0 END AS peer_is_friend,
 			CASE WHEN pu.deleted_at IS NULL THEN 0 ELSE 1 END AS peer_deleted,
 				CASE WHEN COALESCE(ms.read_dm, TRUE) AND COALESCE(ps.read_dm, TRUE) THEN 1 ELSE 0 END AS shares_read,
-			CASE WHEN c.kind = 'nest'
-				THEN (SELECT COUNT(*) FROM tree_members x WHERE x.tree_id = c.tree_id AND x.state = 'joined')
-				ELSE (SELECT COUNT(*) FROM chat_members x WHERE x.conversation_id = c.id AND x.state = 'joined')
+			CASE WHEN c.kind <> 'nest'
+				THEN (SELECT COUNT(*) FROM chat_members x WHERE x.conversation_id = c.id AND x.state = 'joined')
+				WHEN EXISTS (
+					SELECT 1 FROM tree_access_rules hides
+					WHERE hides.tree_id = c.tree_id AND hides.level = 0 AND (
+						(hides.kind = 'text' AND hides.target_id IN ('', c.id))
+						OR (hides.scope = 'label' AND EXISTS (
+							SELECT 1 FROM tree_room_labels hl
+							WHERE hl.tree_id = c.tree_id AND hl.label_id = hides.target_id AND hl.kind = 'text' AND hl.room_id = c.id))))
+				THEN (SELECT COUNT(*) FROM tree_members x WHERE x.tree_id = c.tree_id AND x.state = 'joined'
+				      AND `+roomLevelSQL(layoutKindText, "x.tree_id", "c.id", "x.user_id", "x.role")+` > 0)
+				ELSE (SELECT COUNT(*) FROM tree_members x WHERE x.tree_id = c.tree_id AND x.state = 'joined')
 			END AS member_count,
 			COALESCE((
 				SELECT m.seq FROM chat_messages m
@@ -102,7 +113,7 @@ func (s *Server) chatSummaries(q chatQuerier, userID, onlyID string) ([]ChatConv
 	if !capabilities.ReadMessages {
 		return []ChatConversation{}, nil
 	}
-	args := []any{userID}
+	args := []any{database.Now(), userID}
 	if onlyID != "" {
 		args = append(args, onlyID)
 	}
@@ -157,9 +168,8 @@ func (s *Server) chatSummaries(q chatQuerier, userID, onlyID string) ([]ChatConv
 			item.CanSend = true
 			item.CanManage = memberRole == "owner"
 		case chatKindNest:
+			// What they may do there is filled in below, with their access.
 			item.Role = treeRole
-			item.CanSend = true
-			item.CanManage = treeRoleAllows(treeRole, treeActionManageRooms)
 		case chatKindSaved:
 			item.Role = memberRole
 			item.Name = "Saved messages"
@@ -167,9 +177,6 @@ func (s *Server) chatSummaries(q chatQuerier, userID, onlyID string) ([]ChatConv
 		case chatKindRaven:
 			item.Role = memberRole
 			item.Name = "Raven"
-		}
-		if !capabilities.SendMessages {
-			item.CanSend = false
 		}
 		if preview.ID != "" {
 			preview.Seq = previewSeq
@@ -189,6 +196,14 @@ func (s *Server) chatSummaries(q chatQuerier, userID, onlyID string) ([]ChatConv
 		return nil, err
 	}
 	rows.Close()
+	if conversations, err = chatWithNestAccess(q, userID, conversations); err != nil {
+		return nil, err
+	}
+	if !capabilities.SendMessages {
+		for i := range conversations {
+			conversations[i].CanSend = false
+		}
+	}
 	ids := []any{}
 	for _, c := range conversations {
 		if p := c.LastMessage; p != nil && !p.Deleted {
@@ -230,8 +245,9 @@ func (s *Server) ensureNestChatRows(userID string) error {
 		 JOIN tree_members tm ON tm.tree_id = c.tree_id AND tm.user_id = ? AND tm.state = 'joined'
 		 WHERE c.kind = 'nest' AND c.status = 'active'
 		   AND NOT EXISTS (SELECT 1 FROM chat_members x WHERE x.conversation_id = c.id AND x.user_id = ?)
+		   AND `+roomLevelSQL(layoutKindText, "tm.tree_id", "c.id", "tm.user_id", "tm.role")+` > 0
 		 ON CONFLICT (conversation_id, user_id) DO NOTHING`,
-		userID, now, now, now, userID, userID,
+		userID, now, now, now, userID, userID, now,
 	)
 	return err
 }
@@ -879,14 +895,17 @@ func chatDeleteConversationTx(tx *database.Tx, conversationID string) error {
 
 // chatHideTextNestTx deletes a text nest for everyone without destroying what was
 // written in it: the conversation is marked deleted, which every read and write already
-// treats as gone, and it leaves the tree's layout. Its messages and read positions stay
-// in the database, and go with the tree if the tree is ever deleted.
+// treats as gone, and it leaves the tree's layout, labels and access rules. Its messages
+// and read positions stay in the database, and go with the tree if the tree is ever
+// deleted.
 func chatHideTextNestTx(tx *database.Tx, conversationID string) error {
 	if _, err := tx.Exec(`UPDATE chat_conversations SET status = 'deleted', updated_at = ? WHERE id = ?`, database.Now(), conversationID); err != nil {
 		return err
 	}
-	_, err := tx.Exec(`DELETE FROM tree_layout_items WHERE kind = 'text' AND item_id = ?`, conversationID)
-	return err
+	if _, err := tx.Exec(`DELETE FROM tree_layout_items WHERE kind = 'text' AND item_id = ?`, conversationID); err != nil {
+		return err
+	}
+	return deleteRoomAccessTx(tx, layoutKindText, conversationID)
 }
 
 // deleteChatForTreeTx removes a tree's text nests, categories and layout along with the
@@ -1177,10 +1196,12 @@ func (s *Server) chatReadAudience(q chatQuerier, access chatAccess, category, re
 	switchOn := chatReadSwitchSQL(category, "s")
 	if access.Kind == chatKindNest {
 		return stringColumnTx(q,
-			`SELECT tm.user_id FROM tree_members tm
+			`SELECT tm.user_id FROM chat_conversations c
+			 JOIN tree_members tm ON tm.tree_id = c.tree_id AND tm.state = 'joined'
 			 LEFT JOIN chat_user_settings s ON s.user_id = tm.user_id
-			 WHERE tm.tree_id = ? AND tm.state = 'joined' AND tm.user_id <> ? AND `+switchOn,
-			access.TreeID, readerID)
+			 WHERE c.id = ? AND tm.user_id <> ? AND `+switchOn+`
+			   AND `+roomLevelSQL(layoutKindText, "tm.tree_id", "c.id", "tm.user_id", "tm.role")+` > 0`,
+			access.ConversationID, readerID, database.Now())
 	}
 	return stringColumnTx(q,
 		`SELECT cm.user_id FROM chat_members cm
@@ -1236,8 +1257,9 @@ func (s *Server) getChatSeen(c *fiber.Ctx) error {
 	membership := `cm.state = 'joined'`
 	args := []any{}
 	if access.Kind == chatKindNest {
-		membership = `EXISTS (SELECT 1 FROM tree_members tm WHERE tm.tree_id = ? AND tm.user_id = cm.user_id AND tm.state = 'joined')`
-		args = append(args, access.TreeID)
+		membership = `EXISTS (SELECT 1 FROM tree_members tm WHERE tm.tree_id = ? AND tm.user_id = cm.user_id AND tm.state = 'joined'
+			AND ` + roomLevelSQL(layoutKindText, "tm.tree_id", "cm.conversation_id", "tm.user_id", "tm.role") + ` > 0)`
+		args = append(args, access.TreeID, database.Now())
 	}
 	furthestArgs := append(append([]any{}, args...), access.ConversationID, user.ID)
 	if err := s.db.QueryRow(
@@ -1430,7 +1452,7 @@ func (s *Server) notifyReadSwitch(userID, category string) error {
 			 JOIN chat_members o ON o.conversation_id = c.id AND o.state = 'joined'
 			 WHERE me.user_id = ? AND me.state = 'joined'`, kind, userID)
 	default:
-		visibility := "private"
+		visibility, now := "private", database.Now()
 		if category == chatReadPublicSpace {
 			visibility = "public"
 		}
@@ -1440,7 +1462,10 @@ func (s *Server) notifyReadSwitch(userID, category string) error {
 			 JOIN trees t ON t.id = me.tree_id AND t.visibility = ?
 			 JOIN chat_conversations c ON c.tree_id = t.id AND c.kind = 'nest' AND c.status = 'active'
 			 JOIN tree_members o ON o.tree_id = t.id AND o.state = 'joined'
-			 WHERE me.user_id = ? AND me.state = 'joined'`, visibility, userID)
+			 WHERE me.user_id = ? AND me.state = 'joined'
+			   AND `+roomLevelSQL(layoutKindText, "me.tree_id", "c.id", "me.user_id", "me.role")+` > 0
+			   AND `+roomLevelSQL(layoutKindText, "o.tree_id", "c.id", "o.user_id", "o.role")+` > 0`,
+			visibility, userID, now, now)
 	}
 	if err != nil {
 		return err

@@ -230,6 +230,9 @@ func (s *Server) updateTreeMemberName(c *fiber.Ctx) error {
 	if err != nil {
 		return err
 	}
+	if member, err = s.memberSeenBy(member, actor.ID); err != nil {
+		return err
+	}
 	return c.JSON(fiber.Map{"member": member})
 }
 

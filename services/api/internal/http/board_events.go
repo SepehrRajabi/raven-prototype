@@ -2,6 +2,7 @@ package http
 
 import (
 	"database/sql"
+	"encoding/json"
 	"log"
 	"strings"
 	"sync"
@@ -163,13 +164,25 @@ func treeEventSchedule(startsAt string, endsAt *string, duration *int, rrule *st
 	return sched, nil
 }
 
+// treeEventRoomSQL is the level of a tree member, whose row has the alias viewer, in an
+// event's room. It takes the current time twice.
+func treeEventRoomSQL(event, viewer string) string {
+	return `(CASE WHEN ` + event + `.nest_id IS NOT NULL
+		THEN ` + roomLevelSQL(layoutKindVoice, event+".tree_id", event+".nest_id", viewer+".user_id", viewer+".role") + `
+		ELSE ` + roomLevelSQL(layoutKindText, event+".tree_id", event+".conversation_id", viewer+".user_id", viewer+".role") + ` END)`
+}
+
 // treeEvents lists a space's events that still have an occurrence to come or under way,
-// pinned ones first in their order, then by when they next start.
-func (s *Server) treeEvents(q chatQuerier, treeID string, now time.Time, withInvitees bool) ([]TreeEvent, error) {
+// pinned ones first in their order, then by when they next start. An event in a room hidden
+// from the viewer is left out, and so are mentions of such rooms.
+func (s *Server) treeEvents(q chatQuerier, treeID, viewerID string, now time.Time, withInvitees bool) ([]TreeEvent, error) {
+	stamp := database.Now()
 	rows, err := q.Query(
 		`SELECT `+treeEventColumns+`, COALESCE(e.pin_position, 0) `+treeEventJoins+`
-		 WHERE e.tree_id = ? AND `+treeEventTargetLive+` ORDER BY e.pinned DESC, e.pin_position, e.starts_at, e.id`,
-		treeID,
+		 JOIN tree_members viewer ON viewer.tree_id = e.tree_id AND viewer.user_id = ? AND viewer.state = 'joined'
+		 WHERE e.tree_id = ? AND `+treeEventTargetLive+` AND `+treeEventRoomSQL("e", "viewer")+` > 0
+		 ORDER BY e.pinned DESC, e.pin_position, e.starts_at, e.id`,
+		viewerID, treeID, stamp, stamp,
 	)
 	if err != nil {
 		return nil, err
@@ -201,6 +214,12 @@ func (s *Server) treeEvents(q chatQuerier, treeID string, now time.Time, withInv
 	}
 	for i := range events {
 		events[i].HostName = s.spaceNameOf(treeID, User{ID: events[i].HostUserID, DisplayName: s.globalNameOf(events[i].HostUserID)})
+		if events[i].Title, err = hideUnseenRooms(q, treeID, viewerID, events[i].Title); err != nil {
+			return nil, err
+		}
+		if events[i].Description, err = hideUnseenRooms(q, treeID, viewerID, events[i].Description); err != nil {
+			return nil, err
+		}
 		if withInvitees && !events[i].InviteAll {
 			if events[i].InviteeIDs, err = treeEventInviteeRows(q, events[i].ID); err != nil {
 				return nil, err
@@ -269,31 +288,51 @@ func treeEventInviteeRows(q chatQuerier, eventID string) ([]string, error) {
 	return ids, rows.Err()
 }
 
-// treeEventInvitees is everyone invited who is still in the space: every member for an
-// event open to the whole space.
-func (s *Server) treeEventInvitees(event TreeEvent) ([]string, error) {
-	if event.InviteAll {
-		return s.treeMemberIDs(event.treeID)
+// room is the voice or text room the event is in.
+func (event TreeEvent) room() roomKey {
+	if event.NestID != nil {
+		return roomKey{layoutKindVoice, *event.NestID}
 	}
-	rows, err := s.db.Query(
-		`SELECT i.user_id FROM tree_event_invitees i
-		 JOIN tree_members tm ON tm.tree_id = ? AND tm.user_id = i.user_id AND tm.state = 'joined'
-		 WHERE i.event_id = ?`,
-		event.treeID, event.ID,
-	)
+	if event.ConversationID != nil {
+		return roomKey{layoutKindText, *event.ConversationID}
+	}
+	return roomKey{}
+}
+
+// treeEventRoomMembers is everyone in the space the event's room is not hidden from.
+func (s *Server) treeEventRoomMembers(event TreeEvent) ([]string, error) {
+	return treeRoomMemberIDs(s.db, event.treeID, event.room())
+}
+
+// treeEventInvitees is everyone invited who is still in the space and may see the event's
+// room: every such member for an event open to the whole space. Someone the room is hidden
+// from stays on the list of who is invited, so that whoever keeps it is not told, and hears
+// about the event only if the room opens to them again.
+func (s *Server) treeEventInvitees(event TreeEvent) ([]string, error) {
+	members, err := s.treeEventRoomMembers(event)
+	if err != nil || event.InviteAll {
+		return members, err
+	}
+	invited, err := treeEventInviteeRows(s.db, event.ID)
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
-	ids := []string{}
-	for rows.Next() {
-		var id string
-		if err := rows.Scan(&id); err != nil {
-			return nil, err
-		}
-		ids = append(ids, id)
+	return onlyIDs(invited, members), nil
+}
+
+// onlyIDs keeps the ids that are also in allowed.
+func onlyIDs(ids, allowed []string) []string {
+	may := make(map[string]bool, len(allowed))
+	for _, id := range allowed {
+		may[id] = true
 	}
-	return ids, rows.Err()
+	out := make([]string, 0, len(ids))
+	for _, id := range ids {
+		if may[id] {
+			out = append(out, id)
+		}
+	}
+	return out
 }
 
 func (s *Server) loadTreeEvent(treeID, eventID string) (TreeEvent, error) {
@@ -308,6 +347,20 @@ func (s *Server) loadTreeEvent(treeID, eventID string) (TreeEvent, error) {
 	event.at(time.Now())
 	event.HostName = s.spaceNameOf(treeID, User{ID: event.HostUserID, DisplayName: s.globalNameOf(event.HostUserID)})
 	return event, nil
+}
+
+// treeEventFor is loadTreeEvent for someone changing the event. One in a room hidden from
+// them is not there for them.
+func (s *Server) treeEventFor(actorID, treeID, eventID string) (TreeEvent, error) {
+	event, err := s.loadTreeEvent(treeID, eventID)
+	if err != nil {
+		return event, err
+	}
+	level, err := s.roomLevelOf(s.db, treeID, event.room(), actorID)
+	if err == nil && level == roomLevelNone {
+		err = errEventMissing
+	}
+	return event, err
 }
 
 // boardPinCount is what counts toward the five pins of a lobby: notes still showing
@@ -372,7 +425,7 @@ func (s *Server) cleanTreeEvent(treeID string, actor User, input treeEventInput,
 	if noteShownLength(event.Description) > treeEventDescRunes || utf8.RuneCountInString(event.Description) > treeEventStoredRunes {
 		return event, nil, bad("A description can be at most 1000 characters.")
 	}
-	if err := s.validateSpaceMentions(s.db, treeID, event.Title, event.Description); err != nil {
+	if err := s.validateSpaceMentionsBy(s.db, treeID, actor.ID, event.Title, event.Description); err != nil {
 		return event, nil, err
 	}
 
@@ -392,6 +445,11 @@ func (s *Server) cleanTreeEvent(treeID string, actor User, input treeEventInput,
 			return event, nil, bad("Choose a room of this space.")
 		}
 		return event, nil, err
+	}
+	if level, err := s.roomLevelOf(s.db, treeID, event.room(), actor.ID); err != nil {
+		return event, nil, err
+	} else if level == roomLevelNone {
+		return event, nil, bad("Choose a room of this space.")
 	}
 
 	// The host: a member, you unless chosen.
@@ -497,7 +555,7 @@ func (s *Server) getTreeEvents(c *fiber.Ctx) error {
 		return err
 	}
 	now := time.Now()
-	events, err := s.treeEvents(s.db, treeID, now, treeRoleAllows(role, treeActionManageBoard))
+	events, err := s.treeEvents(s.db, treeID, user.ID, now, treeRoleAllows(role, treeActionManageBoard))
 	if err != nil {
 		return err
 	}
@@ -634,7 +692,7 @@ func (s *Server) editTreeEvent(c *fiber.Ctx) error {
 	if err := c.BodyParser(&input); err != nil {
 		return errChatInvalidBody
 	}
-	before, err := s.loadTreeEvent(treeID, c.Params("eventId"))
+	before, err := s.treeEventFor(user.ID, treeID, c.Params("eventId"))
 	if err != nil {
 		return err
 	}
@@ -728,7 +786,7 @@ func (s *Server) editTreeEvent(c *fiber.Ctx) error {
 				dropped = append(dropped, id)
 			}
 		}
-		s.cancelEventMessages(stored, dropped)
+		s.cancelEventMessages(stored.ID, dropped)
 	})
 	stored.InviteeIDs = invitees
 	return c.JSON(fiber.Map{"event": stored})
@@ -739,7 +797,7 @@ func (s *Server) deleteTreeEvent(c *fiber.Ctx) error {
 	if err := s.requireBoardManager(currentUser(c).ID, treeID); err != nil {
 		return err
 	}
-	event, err := s.loadTreeEvent(treeID, c.Params("eventId"))
+	event, err := s.treeEventFor(currentUser(c).ID, treeID, c.Params("eventId"))
 	if err != nil {
 		return err
 	}
@@ -770,7 +828,7 @@ func (s *Server) removeTreeEvent(event TreeEvent, cancelled bool) error {
 				log.Printf("board events: message recipients of %s: %v", event.ID, err)
 				return
 			}
-			s.cancelEventMessages(event, messaged)
+			s.cancelEventMessages(event.ID, messaged)
 		})
 	}
 	return nil
@@ -787,7 +845,7 @@ func (s *Server) pinTreeEvent(c *fiber.Ctx) error {
 	if err := c.BodyParser(&input); err != nil {
 		return errChatInvalidBody
 	}
-	event, err := s.loadTreeEvent(treeID, c.Params("eventId"))
+	event, err := s.treeEventFor(currentUser(c).ID, treeID, c.Params("eventId"))
 	if err != nil {
 		return err
 	}
@@ -831,20 +889,36 @@ func (s *Server) orderTreeEvents(c *fiber.Ctx) error {
 	}
 	unlock := s.chatLocks.lock("tree-notes:" + treeID)
 	defer unlock()
-	rows, err := s.db.Query(`SELECT id FROM tree_events WHERE tree_id = ? AND pinned = TRUE`, treeID)
+	stamp := database.Now()
+	rows, err := s.db.Query(
+		`SELECT e.id, `+treeEventRoomSQL("e", "viewer")+` FROM tree_events e
+		 JOIN tree_members viewer ON viewer.tree_id = e.tree_id AND viewer.user_id = ? AND viewer.state = 'joined'
+		 WHERE e.tree_id = ? AND e.pinned = TRUE ORDER BY e.pin_position, e.starts_at, e.id`,
+		stamp, stamp, currentUser(c).ID, treeID,
+	)
 	if err != nil {
 		return err
 	}
+	// Pins in rooms hidden from this person keep their place; the rest take the new order.
 	known := map[string]bool{}
+	pins, shown := []string{}, []int{}
 	for rows.Next() {
 		var id string
-		if err := rows.Scan(&id); err != nil {
+		var level int
+		if err := rows.Scan(&id, &level); err != nil {
 			rows.Close()
 			return err
 		}
-		known[id] = true
+		if roomLevel(level) > roomLevelNone {
+			known[id] = true
+			shown = append(shown, len(pins))
+		}
+		pins = append(pins, id)
 	}
 	rows.Close()
+	if err := rows.Err(); err != nil {
+		return err
+	}
 	seen := map[string]bool{}
 	for _, id := range input.IDs {
 		if !known[id] || seen[id] {
@@ -860,8 +934,10 @@ func (s *Server) orderTreeEvents(c *fiber.Ctx) error {
 		return err
 	}
 	defer tx.Rollback()
-	stamp := database.Now()
-	for position, id := range input.IDs {
+	for place, id := range input.IDs {
+		pins[shown[place]] = id
+	}
+	for position, id := range pins {
 		if _, err := tx.Exec(`UPDATE tree_events SET pin_position = ?, updated_at = ? WHERE id = ? AND tree_id = ?`, position, stamp, id, treeID); err != nil {
 			return err
 		}
@@ -900,7 +976,7 @@ func eventMessageKey(eventID string) string {
 
 // eventMessagePayload is the system message Raven sends an invitee. It carries the names
 // at send time so the card needs nothing else to show.
-func (s *Server) eventMessagePayload(event TreeEvent, updated, cancelled bool) map[string]any {
+func (s *Server) eventMessagePayload(event TreeEvent, updated bool) map[string]any {
 	target := map[string]any{"name": event.RoomName}
 	if event.NestID != nil {
 		target["kind"], target["id"] = "voice", *event.NestID
@@ -919,7 +995,7 @@ func (s *Server) eventMessagePayload(event TreeEvent, updated, cancelled bool) m
 		"endsAt":     event.Occurrence.EndsAt,
 		"target":     target,
 		"updated":    updated,
-		"cancelled":  cancelled,
+		"cancelled":  false,
 	}
 	if event.RRule != nil {
 		payload["rrule"] = *event.RRule
@@ -947,6 +1023,20 @@ func (s *Server) eventMessageRecipients(eventID string) ([]string, error) {
 		ids = append(ids, id)
 	}
 	return ids, rows.Err()
+}
+
+// sentEventMessage is the message about an event a person already has.
+func (s *Server) sentEventMessage(eventID, userID string) (map[string]any, error) {
+	var raw string
+	if err := s.db.QueryRow(
+		`SELECT m.system_json FROM chat_messages m JOIN chat_conversations c ON c.id = m.conversation_id
+		 WHERE m.replace_key = ? AND c.kind = 'raven' AND c.creator_user_id = ? AND m.deleted_at IS NULL`,
+		eventMessageKey(eventID), userID,
+	).Scan(&raw); err != nil {
+		return nil, err
+	}
+	payload := map[string]any{}
+	return payload, json.Unmarshal([]byte(raw), &payload)
 }
 
 // eventMessageQueue runs Raven's messages about events after the request that caused
@@ -1025,17 +1115,25 @@ func (s *Server) sendEventMessages(event TreeEvent, userIDs []string, edited boo
 		}
 	}
 	for _, id := range userIDs {
-		if _, err := s.sendRavenMessage(id, s.eventMessagePayload(event, had[id], false), eventMessageKey(event.ID)); err != nil {
+		if _, err := s.sendRavenMessage(id, s.eventMessagePayload(event, had[id]), eventMessageKey(event.ID)); err != nil {
 			log.Printf("board events: message %s about %s: %v", id, event.ID, err)
 		}
 	}
 }
 
 // cancelEventMessages turns each person's message about an event into its cancelled form.
-func (s *Server) cancelEventMessages(event TreeEvent, userIDs []string) {
+// It keeps what it already said: the event may since have changed, or moved to a room that
+// is hidden from them.
+func (s *Server) cancelEventMessages(eventID string, userIDs []string) {
 	for _, id := range userIDs {
-		if _, err := s.sendRavenMessage(id, s.eventMessagePayload(event, true, true), eventMessageKey(event.ID)); err != nil {
-			log.Printf("board events: cancel message %s about %s: %v", id, event.ID, err)
+		payload, err := s.sentEventMessage(eventID, id)
+		if err != nil {
+			log.Printf("board events: message %s has about %s: %v", id, eventID, err)
+			continue
+		}
+		payload["updated"], payload["cancelled"] = true, true
+		if _, err := s.sendRavenMessage(id, payload, eventMessageKey(eventID)); err != nil {
+			log.Printf("board events: cancel message %s about %s: %v", id, eventID, err)
 		}
 	}
 }
@@ -1126,7 +1224,11 @@ func (s *Server) runTreeEvents(now time.Time) error {
 			if first, err := s.markEventSent(event.ID, start, "starting"); err != nil {
 				log.Printf("board events: mark starting %s: %v", event.ID, err)
 			} else if first {
-				s.publishTree(event.treeID, "event.starting")
+				members, err := s.treeEventRoomMembers(event)
+				if err != nil {
+					log.Printf("board events: room members of %s: %v", event.ID, err)
+				}
+				s.publishTreeTo(event.treeID, "event.starting", members)
 			}
 		}
 	}

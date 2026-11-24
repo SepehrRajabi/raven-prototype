@@ -42,7 +42,8 @@ Defaults chosen during the build. Each is one constant or one check to change:
   the owner leaves, the longest-standing member becomes owner; the last person leaving
   deletes the group. A person added to a group sees messages **from when they were added**.
   Leaving or being removed ends access at once.
-- Text nests: every current member of the tree reads the whole history and can write.
+- Text nests: every current member of the tree reads the whole history and can write, unless
+  the tree's owner has set something else ([permissions.md](permissions.md#room-access)).
   Leaving the tree ends access at once. Deleting the tree deletes its text nests.
 - Reactions accept any emoji, up to 3 per person per message and 20 different emoji.
   Adding a fourth replaces your oldest. Anyone who can send can react to a visible text

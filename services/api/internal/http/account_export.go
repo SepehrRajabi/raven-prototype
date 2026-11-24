@@ -11,8 +11,11 @@ import (
 	"log"
 	"path"
 	"regexp"
+	"sort"
 	"strings"
 	"time"
+
+	"raven/services/api/internal/database"
 
 	"github.com/gofiber/fiber/v2"
 )
@@ -59,6 +62,7 @@ func (s *Server) writeAccountExport(ctx context.Context, w io.Writer, user User,
 account.json        Your profile and settings.
 friends.json        Your friends and open friend requests.
 trees.json          The %s you belong to and your role in each.
+room-access.json    Rooms where the owner set how much you may do, and until when.
 calls.json          When you joined and left calls. Calls are never recorded.
 conversations/      Every conversation you can read, as .txt and .json.
 files/              The files you sent.
@@ -108,7 +112,14 @@ This copy contains other people's messages. Keep it private.
 	if err := addJSON("trees.json", fiber.Map{"trees": trees}); err != nil {
 		return err
 	}
-	calls, err := s.exportCalls(user.ID)
+	roomAccess, hiddenRooms, err := s.exportRoomAccess(user.ID, trees)
+	if err != nil {
+		return err
+	}
+	if err := addJSON("room-access.json", fiber.Map{"rooms": roomAccess}); err != nil {
+		return err
+	}
+	calls, err := s.exportCalls(user.ID, hiddenRooms)
 	if err != nil {
 		return err
 	}
@@ -215,6 +226,76 @@ func (s *Server) exportTrees(userID string) ([]exportTree, error) {
 	return trees, rows.Err()
 }
 
+// exportRoom is what the owner set for this person in one room they can see.
+type exportRoom struct {
+	Tree  string `json:"tree"`
+	Room  string `json:"room"`
+	Kind  string `json:"kind"`
+	Level string `json:"level"`
+	// SetFor is "person" for them alone, and "everyone" for every member.
+	SetFor string  `json:"setFor"`
+	EndsAt *string `json:"endsAt"`
+}
+
+// exportRoomAccess lists the rooms in which a rule decides what this person may do. Rooms
+// hidden from them are not listed; it also returns those, for leaving their names out
+// elsewhere.
+func (s *Server) exportRoomAccess(userID string, trees []exportTree) ([]exportRoom, map[roomKey]struct{}, error) {
+	rooms, hidden := []exportRoom{}, map[roomKey]struct{}{}
+	for _, tree := range trees {
+		model, err := loadAccessModel(s.db, tree.ID)
+		if err != nil {
+			return nil, nil, err
+		}
+		model = model.at(database.Now())
+		names, err := s.roomNames(tree.ID)
+		if err != nil {
+			return nil, nil, err
+		}
+		for _, room := range model.Rooms {
+			access := model.accessFor(userID, room)
+			if access.Level == roomLevelNone.String() {
+				hidden[room] = struct{}{}
+				continue
+			}
+			if access.Source != "" {
+				rooms = append(rooms, exportRoom{Tree: tree.Name, Room: names[room], Kind: room.Kind, Level: access.Level, SetFor: access.Source, EndsAt: access.ExpiresAt})
+			}
+		}
+	}
+	sort.SliceStable(rooms, func(a, b int) bool {
+		if rooms[a].Tree != rooms[b].Tree {
+			return rooms[a].Tree < rooms[b].Tree
+		}
+		return rooms[a].Room < rooms[b].Room
+	})
+	return rooms, hidden, nil
+}
+
+func (s *Server) roomNames(treeID string) (map[roomKey]string, error) {
+	rows, err := s.db.Query(
+		`SELECT 'voice', id, name FROM nests WHERE tree_id = ? AND status = 'active'
+		 UNION ALL
+		 SELECT 'text', id, name FROM chat_conversations WHERE tree_id = ? AND kind = 'nest' AND status = 'active'`, treeID, treeID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	names := map[roomKey]string{}
+	for rows.Next() {
+		var room roomKey
+		var name string
+		if err := rows.Scan(&room.Kind, &room.ID, &name); err != nil {
+			return nil, err
+		}
+		names[room] = name
+	}
+	return names, rows.Err()
+}
+
+// exportHiddenRoom stands in for the name of a room that is hidden from the person now.
+const exportHiddenRoom = "(a room you can’t see now)"
+
 type exportCall struct {
 	Nest     string  `json:"nest"`
 	Tree     string  `json:"tree,omitempty"`
@@ -222,9 +303,9 @@ type exportCall struct {
 	LeftAt   *string `json:"leftAt"`
 }
 
-func (s *Server) exportCalls(userID string) ([]exportCall, error) {
+func (s *Server) exportCalls(userID string, hidden map[roomKey]struct{}) ([]exportCall, error) {
 	rows, err := s.db.Query(
-		`SELECT n.name, COALESCE(t.name, ''), sp.joined_at, sp.left_at
+		`SELECT n.id, n.name, COALESCE(t.name, ''), sp.joined_at, sp.left_at
 		 FROM session_participants sp JOIN nests n ON n.id = sp.nest_id LEFT JOIN trees t ON t.id = n.tree_id
 		 WHERE sp.user_id = ? ORDER BY sp.joined_at, sp.id`, userID)
 	if err != nil {
@@ -234,9 +315,13 @@ func (s *Server) exportCalls(userID string) ([]exportCall, error) {
 	calls := []exportCall{}
 	for rows.Next() {
 		var call exportCall
+		var nestID string
 		var leftAt sql.NullString
-		if err := rows.Scan(&call.Nest, &call.Tree, &call.JoinedAt, &leftAt); err != nil {
+		if err := rows.Scan(&nestID, &call.Nest, &call.Tree, &call.JoinedAt, &leftAt); err != nil {
 			return nil, err
+		}
+		if _, ok := hidden[roomKey{layoutKindVoice, nestID}]; ok {
+			call.Nest = exportHiddenRoom
 		}
 		call.LeftAt = nullStringPtr(leftAt)
 		calls = append(calls, call)

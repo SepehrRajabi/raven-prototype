@@ -642,6 +642,62 @@ keep their place at the end). `POST …/categories` and `POST …/text-nests` ta
 `{ "name": "…" }`; a text Nest may also name a `categoryId`. A text Nest is a chat
 conversation of kind `nest`, used through the routes above.
 
+`labels` in the layout lists the Tree's labels, and each item carries `labelIds` and
+`access`. A Nest the caller has no access to is not listed. Only the owner sees labels that
+are not `visible`.
+
+### Room access and labels
+
+The owner's rules about who may use which Nest. [permissions.md](permissions.md#room-access)
+explains what they mean.
+
+```http
+GET    /v1/trees/:id/access
+POST   /v1/trees/:id/access
+GET    /v1/trees/:id/access/members/:userId
+POST   /v1/trees/:id/labels
+POST   /v1/trees/:id/labels/:labelId
+DELETE /v1/trees/:id/labels/:labelId
+POST   /v1/trees/:id/room-labels
+```
+
+All are for the owner, except that anyone may ask for their own `…/access/members/:userId`.
+Changes are limited to 60 a minute per account.
+
+`POST …/access` sets the rule for every person and every target, or changes nothing:
+
+```json
+{
+  "userIds": ["…"],
+  "everyone": false,
+  "targets": [
+    { "scope": "all", "kind": "text" },
+    { "scope": "label", "targetId": "…" },
+    { "scope": "room", "kind": "voice", "targetId": "…" }
+  ],
+  "level": "view",
+  "ttlSeconds": 86400
+}
+```
+
+`level` is `none`, `view`, `full`, or `clear` to remove the rules. `expiresAt` (RFC 3339) can
+take the place of `ttlSeconds`; with neither the rule has no end. The answer, like that of
+`GET …/access` and `POST …/room-labels`, is `{ labels, rules, roomLabels }`.
+
+`POST …/room-labels` takes `{ rooms: [{ kind, id }], add: [labelId], remove: [labelId] }`.
+A label is `{ name, visible }`; a name already used in the Tree answers `409`.
+
+Nests and text conversations made for one caller carry their own `access`:
+
+```json
+{ "level": "view", "expiresAt": "2026-12-01T12:00:00Z", "source": "person", "limited": true }
+```
+
+`source` is `person` or `everyone` when a rule decided. `limited` means ordinary members have
+less than full access. A participant in a call has `listenOnly` while they may not send
+anything. The people whose access changed, and the owner, receive `tree.access_changed` on
+the event stream.
+
 ### Metrics
 
 ```http

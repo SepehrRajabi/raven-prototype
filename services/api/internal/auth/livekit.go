@@ -18,15 +18,17 @@ const (
 	IdentityVideo
 )
 
-// VoiceLimits are server mute and server deafen. A deafened person is also muted.
+// VoiceLimits are server mute, server deafen, and listening only. A deafened person is also
+// muted. Someone listening only may send nothing at all: no sound, camera or screen.
 type VoiceLimits struct {
-	Muted    bool
-	Deafened bool
+	Muted      bool
+	Deafened   bool
+	ListenOnly bool
 }
 
-// Any reports whether either limit is set.
+// Any reports whether any limit is set.
 func (l VoiceLimits) Any() bool {
-	return l.Muted || l.Deafened
+	return l.Muted || l.Deafened || l.ListenOnly
 }
 
 // CallGrants is what one LiveKit participant may do. A token and a live permission change
@@ -53,6 +55,10 @@ func CallGrantsFor(kind IdentityKind, limits VoiceLimits) CallGrants {
 	if kind == IdentityAudio {
 		grants.CanPublish = false
 		grants.CanSubscribe = !limits.Deafened
+		return grants
+	}
+	if limits.ListenOnly {
+		grants.CanPublish = false
 		return grants
 	}
 	grants.PublishSources = []livekit.TrackSource{livekit.TrackSource_CAMERA, livekit.TrackSource_SCREEN_SHARE}

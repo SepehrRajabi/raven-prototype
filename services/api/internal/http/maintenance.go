@@ -59,6 +59,9 @@ func (s *Server) runMaintenance(now time.Time) {
 	if err := s.runTreeEvents(now); err != nil {
 		log.Printf("maintenance: scheduled events: %v", err)
 	}
+	if err := s.sweepRoomAccess(now); err != nil {
+		log.Printf("maintenance: sweep room access: %v", err)
+	}
 	s.loginThrottle.sweep()
 	if err := s.purgeSessions(now); err != nil {
 		log.Printf("maintenance: purge sign-ins: %v", err)

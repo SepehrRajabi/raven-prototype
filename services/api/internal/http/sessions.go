@@ -27,6 +27,8 @@ type ParticipantSummary struct {
 	// ServerMuted and ServerDeafened were set by a moderator, and the person cannot undo them.
 	ServerMuted    bool `json:"serverMuted"`
 	ServerDeafened bool `json:"serverDeafened"`
+	// ListenOnly is set for someone the owner's rules let listen here and not send anything.
+	ListenOnly bool `json:"listenOnly,omitempty"`
 }
 
 type SessionSummary struct {
@@ -88,7 +90,7 @@ func (s *Server) launcherNestsForUser(userID string) ([]LauncherNest, error) {
 		 FROM nests n
 		 WHERE n.status = 'active' AND `+nestVisibleSQL("n")+`
 		 ORDER BY n.last_activity_at DESC, n.created_at DESC`,
-		userID, userID, userID, userID,
+		nestVisibleArgs(userID)...,
 	)
 	if err != nil {
 		return nil, err
@@ -121,7 +123,14 @@ func (s *Server) launcherNestsForUser(userID string) ([]LauncherNest, error) {
 		}
 		items = append(items, item)
 	}
-	return items, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	nests := make([]*Nest, len(items))
+	for i := range items {
+		nests[i] = &items[i].Nest
+	}
+	return items, s.showNestAccess(userID, nests...)
 }
 
 func (s *Server) activeSessionSummary(c *fiber.Ctx) error {
@@ -222,9 +231,16 @@ func (s *Server) joinCallSession(c *fiber.Ctx) error {
 func (s *Server) leaveCallSession(c *fiber.Ctx) error {
 	user := currentUser(c)
 	nestID := c.Params("id")
+	inside, err := s.canSeeInsideNest(user.ID, nestID)
+	if err != nil {
+		return err
+	}
 	summary, err := s.leaveActiveSession(nestID, user.ID, "left")
 	if err != nil {
 		return err
+	}
+	if !inside {
+		summary = nil
 	}
 	// Port shares in the call end with the person who shared or used them.
 	s.revalidateWorkshop(user.ID)
@@ -244,6 +260,12 @@ func (s *Server) setCallState(c *fiber.Ctx) error {
 	}
 	if err := c.BodyParser(&body); err != nil {
 		return fiber.NewError(fiber.StatusBadRequest, "invalid call state payload")
+	}
+	if inside, err := s.canSeeInsideNest(user.ID, nestID); err != nil || !inside {
+		if err != nil {
+			return err
+		}
+		return sql.ErrNoRows
 	}
 	summary, changed, err := s.updateParticipantState(nestID, user.ID, participantStatePatch{Away: body.Away, Deafened: body.Deafened, Hand: body.Hand})
 	if err != nil {
@@ -320,9 +342,16 @@ func (s *Server) updateParticipantState(nestID, userID string, patch participant
 func (s *Server) disconnectFromNest(c *fiber.Ctx) error {
 	user := currentUser(c)
 	nestID := c.Params("id")
+	inside, err := s.canSeeInsideNest(user.ID, nestID)
+	if err != nil {
+		return err
+	}
 	summary, err := s.disconnectUserFromNest(nestID, user.ID, "disconnected", true)
 	if err != nil {
 		return err
+	}
+	if !inside {
+		summary = nil
 	}
 	return c.JSON(fiber.Map{"session": summary})
 }
@@ -703,7 +732,8 @@ func (s *Server) activeParticipants(sessionID string) ([]ParticipantSummary, err
 	rows, err := s.db.Query(
 		`SELECT u.id, u.username, `+spaceNameSQL("tm", "up", "u")+`, sp.joined_at, sp.away, sp.deafened, sp.hand_raised_at,
 		        COALESCE(CASE WHEN n.tree_id IS NOT NULL AND n.type = 'persistent' THEN tm.server_muted ELSE nm.server_muted END, FALSE),
-		        COALESCE(CASE WHEN n.tree_id IS NOT NULL AND n.type = 'persistent' THEN tm.server_deafened ELSE nm.server_deafened END, FALSE)
+		        COALESCE(CASE WHEN n.tree_id IS NOT NULL AND n.type = 'persistent' THEN tm.server_deafened ELSE nm.server_deafened END, FALSE),
+		        COALESCE(CASE WHEN n.tree_id IS NOT NULL AND n.type = 'persistent' THEN `+listenOnlySQL("tm", "n.id")+` END, FALSE)
 		 FROM session_participants sp
 		 JOIN users u ON u.id = sp.user_id
 		 JOIN nest_sessions ns ON ns.id = sp.session_id
@@ -713,7 +743,7 @@ func (s *Server) activeParticipants(sessionID string) ([]ParticipantSummary, err
 		 LEFT JOIN user_preferences up ON up.user_id = u.id
 		 WHERE sp.session_id = ? AND sp.left_at IS NULL
 		 ORDER BY sp.joined_at, u.username`,
-		sessionID,
+		database.Now(), sessionID,
 	)
 	if err != nil {
 		return nil, err
@@ -724,7 +754,7 @@ func (s *Server) activeParticipants(sessionID string) ([]ParticipantSummary, err
 	for rows.Next() {
 		var participant ParticipantSummary
 		var handRaisedAt sql.NullString
-		if err := rows.Scan(&participant.UserID, &participant.Username, &participant.DisplayName, &participant.JoinedAt, &participant.Away, &participant.Deafened, &handRaisedAt, &participant.ServerMuted, &participant.ServerDeafened); err != nil {
+		if err := rows.Scan(&participant.UserID, &participant.Username, &participant.DisplayName, &participant.JoinedAt, &participant.Away, &participant.Deafened, &handRaisedAt, &participant.ServerMuted, &participant.ServerDeafened, &participant.ListenOnly); err != nil {
 			return nil, err
 		}
 		participants = append(participants, participant)

@@ -24,6 +24,8 @@ type chatAccess struct {
 	// SendDisabled is set when the reason they cannot send is their account, not this
 	// conversation.
 	SendDisabled bool
+	// ViewOnly is set when a rule in their tree lets them read a text nest but not write.
+	ViewOnly bool
 	// PeerID is the other person in a direct message.
 	PeerID string
 	// PeerDeleted is set when the other person in a direct message deleted their account.
@@ -45,6 +47,9 @@ func (a chatAccess) sendError() error {
 	if a.PeerDeleted {
 		return errChatPeerDeleted
 	}
+	if a.ViewOnly {
+		return errChatViewOnly
+	}
 	return errChatFriendsOnly
 }
 
@@ -61,9 +66,10 @@ func (a chatAccess) viewer() ChatViewerState {
 //   - Direct message: both people stay members for good, so history stays readable;
 //     sending needs the friendship to still exist.
 //   - Group: the member row is the membership.
-//   - Text nest: membership is the tree's. The chat_members row is only the person's own
-//     read position and is created the first time it is needed; it is never consulted
-//     for access.
+//   - Text nest: membership is the tree's, within what the tree's access rules leave them
+//     (roomLevelSQL). A nest they have no access to is not there for them. The
+//     chat_members row is only the person's own read position and is created the first
+//     time it is needed; it is never consulted for access.
 func (s *Server) chatAccessFor(q chatQuerier, conversationID, userID string) (chatAccess, error) {
 	capabilities, err := s.capabilitiesForUserID(q, userID)
 	if err != nil {
@@ -146,19 +152,23 @@ func (s *Server) chatAccessFor(q chatQuerier, conversationID, userID string) (ch
 		access.Role = memberRole.String
 	case chatKindNest:
 		var treeRole string
+		var level roomLevel
 		err := q.QueryRow(
-			`SELECT role FROM tree_members WHERE tree_id = ? AND user_id = ? AND state = 'joined'`,
-			access.TreeID, userID,
-		).Scan(&treeRole)
-		if errors.Is(err, sql.ErrNoRows) {
+			`SELECT tm.role, `+roomLevelSQL(layoutKindText, "tm.tree_id", "c.id", "tm.user_id", "tm.role")+`
+			 FROM chat_conversations c
+			 JOIN tree_members tm ON tm.tree_id = c.tree_id AND tm.user_id = ? AND tm.state = 'joined'
+			 WHERE c.id = ?`,
+			database.Now(), userID, conversationID,
+		).Scan(&treeRole, &level)
+		if errors.Is(err, sql.ErrNoRows) || (err == nil && level == roomLevelNone) {
 			return chatAccess{}, errChatNotFound
 		}
 		if err != nil {
 			return chatAccess{}, err
 		}
 		access.Role = treeRole
-		access.CanSend = true
-		access.CanManage = treeRoleAllows(treeRole, treeActionManageRooms)
+		access.CanSend, access.CanManage = chatNestRights(treeRole, level)
+		access.ViewOnly = level < roomLevelFull
 		if !memberState.Valid {
 			// First contact with this text nest: start them as having read what is there.
 			now := database.Now()
@@ -182,6 +192,118 @@ func (s *Server) chatAccessFor(q chatQuerier, conversationID, userID string) (ch
 	return access, nil
 }
 
+// chatNestRights is what a role and a level in a text nest allow: writing, and running it
+// (renaming, deleting, moderating what others wrote).
+func chatNestRights(role string, level roomLevel) (canSend, canManage bool) {
+	canSend = level == roomLevelFull
+	return canSend, canSend && treeRoleAllows(role, treeActionManageRooms)
+}
+
+// chatWithNestAccess fills in what someone may do in the text nests of a list, and leaves
+// out the ones they have no access to. However long the list, it takes at most two queries.
+func chatWithNestAccess(q chatQuerier, userID string, conversations []ChatConversation) ([]ChatConversation, error) {
+	models := map[string]*accessModel{}
+	trees := []any{}
+	for _, item := range conversations {
+		if item.Kind == chatKindNest && models[item.TreeID] == nil {
+			models[item.TreeID] = &accessModel{Labels: map[roomKey][]string{}, Roles: map[string]string{userID: item.Role}}
+			trees = append(trees, item.TreeID)
+		}
+	}
+	if len(trees) == 0 {
+		return conversations, nil
+	}
+	// Only the rules that can decide here are read: the person's own and everyone's.
+	rows, err := q.Query(
+		`SELECT tree_id, subject_user_id, scope, kind, target_id, level, expires_at FROM tree_access_rules
+		 WHERE tree_id IN (`+chatPlaceholders(len(trees))+`) AND subject_user_id IN ('', ?)
+		   AND kind IN ('', 'text') AND (expires_at IS NULL OR expires_at > ?)`,
+		append(append([]any{}, trees...), userID, database.Now())...,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	labelled := false
+	for rows.Next() {
+		var treeID string
+		var rule accessRule
+		var expiresAt sql.NullString
+		if err := rows.Scan(&treeID, &rule.Subject, &rule.Scope, &rule.Kind, &rule.TargetID, &rule.Level, &expiresAt); err != nil {
+			return nil, err
+		}
+		rule.ExpiresAt = nullStringPtr(expiresAt)
+		models[treeID].Rules = append(models[treeID].Rules, rule)
+		labelled = labelled || rule.Scope == accessScopeLabel
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	rows.Close()
+	if labelled {
+		rows, err := q.Query(
+			`SELECT tree_id, room_id, label_id FROM tree_room_labels
+			 WHERE kind = 'text' AND tree_id IN (`+chatPlaceholders(len(trees))+`)`, trees...)
+		if err != nil {
+			return nil, err
+		}
+		defer rows.Close()
+		for rows.Next() {
+			var treeID, roomID, label string
+			if err := rows.Scan(&treeID, &roomID, &label); err != nil {
+				return nil, err
+			}
+			room := roomKey{layoutKindText, roomID}
+			models[treeID].Labels[room] = append(models[treeID].Labels[room], label)
+		}
+		if err := rows.Err(); err != nil {
+			return nil, err
+		}
+	}
+	seen := make([]ChatConversation, 0, len(conversations))
+	for _, item := range conversations {
+		if item.Kind == chatKindNest {
+			model, room := models[item.TreeID], roomKey{layoutKindText, item.ID}
+			level, _ := model.resolve(userID, item.Role, room)
+			if level == roomLevelNone {
+				continue
+			}
+			access := model.accessFor(userID, room)
+			item.Access = &access
+			item.CanSend, item.CanManage = chatNestRights(item.Role, level)
+		}
+		seen = append(seen, item)
+	}
+	return seen, nil
+}
+
+// chatBeginReadingTx starts people who are given access to a text nest as having read what
+// is there, like anyone who comes to one later. What was written while it was hidden from
+// them, which may be years of it, is theirs to read but never counts as unread. Only
+// their own position moves, not the one others may be shown.
+func chatBeginReadingTx(q chatQuerier, conversationID string, userIDs []string) error {
+	now := database.Now()
+	for start := 0; start < len(userIDs); start += chatOriginSourcesBatch {
+		batch := userIDs[start:min(start+chatOriginSourcesBatch, len(userIDs))]
+		args := []any{now, now, now, conversationID}
+		for _, id := range batch {
+			args = append(args, id)
+		}
+		if _, err := q.Exec(
+			`INSERT INTO chat_members (conversation_id, user_id, role, state, read_seq, joined_at, created_at, updated_at)
+			 SELECT c.id, tm.user_id, 'member', 'joined', c.last_seq, CAST(? AS TEXT), CAST(? AS TEXT), CAST(? AS TEXT)
+			 FROM chat_conversations c
+			 JOIN tree_members tm ON tm.tree_id = c.tree_id AND tm.state = 'joined'
+			 WHERE c.id = ? AND c.kind = 'nest' AND tm.user_id IN (`+chatPlaceholders(len(batch))+`)
+			 ON CONFLICT (conversation_id, user_id) DO UPDATE SET read_seq = excluded.read_seq, updated_at = excluded.updated_at`,
+			args...,
+		); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func chatAreFriends(q chatQuerier, userID, otherID string) (bool, error) {
 	var count int
 	err := q.QueryRow(`SELECT COUNT(*) FROM friendships WHERE user_id = ? AND friend_user_id = ?`, userID, otherID).Scan(&count)
@@ -198,7 +320,8 @@ type chatRecipient struct {
 }
 
 // chatAudience lists the people currently in a conversation, each with how much of it
-// they may see. messageID may be empty when the event is not about an existing message.
+// they may see. In a text nest that is whoever has access to it. messageID may be empty
+// when the event is not about an existing message.
 //
 // It is called inside the transaction that makes the change, so the list is exactly who
 // was in the conversation at that sequence number: someone removed a moment earlier is
@@ -209,11 +332,12 @@ func (s *Server) chatAudience(q chatQuerier, access chatAccess, messageID string
 	if access.Kind == chatKindNest {
 		rows, err = q.Query(
 			`SELECT tm.user_id, COALESCE(cm.visible_from_seq, 0), CASE WHEN h.user_id IS NULL THEN 0 ELSE 1 END
-			 FROM tree_members tm
-			 LEFT JOIN chat_members cm ON cm.conversation_id = ? AND cm.user_id = tm.user_id
+			 FROM chat_conversations c
+			 JOIN tree_members tm ON tm.tree_id = c.tree_id AND tm.state = 'joined'
+			 LEFT JOIN chat_members cm ON cm.conversation_id = c.id AND cm.user_id = tm.user_id
 			 LEFT JOIN chat_message_hides h ON h.user_id = tm.user_id AND h.message_id = ?
-			 WHERE tm.tree_id = ? AND tm.state = 'joined'`,
-			access.ConversationID, messageID, access.TreeID,
+			 WHERE c.id = ? AND `+roomLevelSQL(layoutKindText, "tm.tree_id", "c.id", "tm.user_id", "tm.role")+` > 0`,
+			messageID, access.ConversationID, database.Now(),
 		)
 	} else {
 		rows, err = q.Query(

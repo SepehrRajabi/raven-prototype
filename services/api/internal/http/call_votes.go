@@ -281,6 +281,11 @@ func (s *Server) castCallVote(c *fiber.Ctx) error {
 // vote are told about it.
 func (s *Server) currentCallVote(c *fiber.Ctx) error {
 	user := currentUser(c)
+	if hidden, err := nestHiddenFrom(s.db, c.Params("id"), user.ID); err != nil {
+		return err
+	} else if hidden {
+		return c.JSON(fiber.Map{"vote": nil})
+	}
 	votes := s.callVotes
 	votes.mu.Lock()
 	defer votes.mu.Unlock()
@@ -337,7 +342,17 @@ func (s *Server) settleCallVote(vote *callVote, update CallVoteUpdate) {
 	s.kickFromCall(vote.nestID, vote.targetID)
 }
 
+// publishCallVote tells the people in a vote about it, except anyone the room was hidden
+// from since it started.
 func (s *Server) publishCallVote(update CallVoteUpdate, audience []string) {
+	treeID, members, err := s.nestAudience(update.NestID)
+	if err != nil {
+		log.Printf("event stream: audience for call vote: %v", err)
+		return
+	}
+	if treeID != "" {
+		audience = onlyIDs(audience, members)
+	}
 	s.events.publishTo(LiveUpdate{Type: "call.vote", NestID: update.NestID, Vote: &update, At: database.Now()}, audience)
 }
 
