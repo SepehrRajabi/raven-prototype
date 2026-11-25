@@ -87,6 +87,11 @@ export function isVisualTile(tile: StageTileMedia) {
   return tile.cameraEnabled || Boolean(tile.streamUrl) || Boolean(tile.loading) || Boolean(tile.mediaError);
 }
 
+/** Whether a person's one mark says they are listening: hearing nothing says more than only hearing. */
+export function showsListening(person: { listenOnly?: boolean; serverDeafened?: boolean; deafened?: boolean; connecting?: boolean }) {
+  return Boolean(person.listenOnly) && !person.serverDeafened && !person.deafened && !person.connecting;
+}
+
 /**
  * Split the room into video tiles, shares nobody here is watching yet (cards), and
  * people present by voice only, keeping order. A voice-first room with nobody on

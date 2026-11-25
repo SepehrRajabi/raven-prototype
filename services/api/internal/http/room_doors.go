@@ -71,11 +71,11 @@ func (s *Server) doorDecisionIn(q chatQuerier, userID string, nest Nest) (doorDe
 	if nest.Door != doorKnock || !nestBelongsToTree(nest) {
 		return doorWalkIn, nil
 	}
-	role, err := s.treeRoleOf(q, userID, *nest.TreeID)
-	if err != nil {
+	role, level, err := s.treeRoomSeat(q, userID, *nest.TreeID, nestRoom(nest))
+	if err != nil || level == roomLevelNone {
 		return doorRefused, err
 	}
-	if treeRoleAllows(role, treeActionManageRooms) {
+	if level == roomLevelFull && treeRoleAllows(role, treeActionManageRooms) {
 		return doorWalkIn, nil
 	}
 	var inside, others int
@@ -128,10 +128,21 @@ func (s *Server) requireDoor(userID string, nest Nest) error {
 }
 
 // enterThroughDoorTx runs in the transaction that puts someone into a call. It decides
-// again, because the room may have filled since the first check, and uses up any accepted
-// knock so that one answer lets them in once, however they came in this time.
+// again, because the room may have filled, or been hidden from them, since the first check,
+// and uses up any accepted knock so that one answer lets them in once, however they came in
+// this time.
 func (s *Server) enterThroughDoorTx(tx chatQuerier, userID string, nest Nest) error {
-	if nest.Door != doorKnock || !nestBelongsToTree(nest) {
+	if !nestBelongsToTree(nest) {
+		return nil
+	}
+	level, err := s.roomLevelOf(tx, *nest.TreeID, nestRoom(nest), userID)
+	if err != nil {
+		return err
+	}
+	if level == roomLevelNone {
+		return errNestEntry
+	}
+	if nest.Door != doorKnock {
 		return nil
 	}
 	decision, err := s.doorDecisionIn(tx, userID, nest)
@@ -169,7 +180,7 @@ func (s *Server) setNestDoor(nest Nest, door string) (Nest, error) {
 }
 
 // roomKnockAudience is who hears about a knock on a room: whoever is inside, who can answer
-// it from the call, and the people who run the room.
+// it from the call, and the people who run the room. Nobody the room is hidden from is asked.
 func (s *Server) roomKnockAudience(knock Knock) ([]string, error) {
 	nest, err := s.findNest(*knock.NestID)
 	if err != nil {
@@ -182,17 +193,31 @@ func (s *Server) roomKnockAudience(knock Knock) ([]string, error) {
 	if !nestBelongsToTree(nest) {
 		return append(audience, nest.CreatorUserID), nil
 	}
-	rows, err := s.db.Query(`SELECT user_id FROM tree_members WHERE tree_id = ? AND state = 'joined' AND role IN ('owner', 'moderator')`, *nest.TreeID)
+	inside := map[string]bool{}
+	for _, id := range audience {
+		inside[id] = true
+	}
+	rows, err := s.db.Query(
+		`SELECT tm.user_id, tm.role, `+roomLevelSQL(layoutKindVoice, "tm.tree_id", "n.id", "tm.user_id", "tm.role")+`
+		 FROM tree_members tm JOIN nests n ON n.tree_id = tm.tree_id
+		 WHERE n.id = ? AND tm.state = 'joined'`,
+		database.Now(), nest.ID,
+	)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
+	audience = []string{}
 	for rows.Next() {
-		var id string
-		if err := rows.Scan(&id); err != nil {
+		var id, role string
+		var level int
+		if err := rows.Scan(&id, &role, &level); err != nil {
 			return nil, err
 		}
-		audience = append(audience, id)
+		runsIt := roomLevel(level) == roomLevelFull && treeRoleAllows(role, treeActionManageRooms)
+		if runsIt || inside[id] && roomLevel(level) > roomLevelNone {
+			audience = append(audience, id)
+		}
 	}
 	return audience, rows.Err()
 }

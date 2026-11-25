@@ -33,29 +33,46 @@ var errMentionOutsideSpace = &reasonedError{
 
 var errNoteOrder = fiber.NewError(fiber.StatusBadRequest, "That order doesn’t match the notes in this space.")
 
-// validateSpaceMentions refuses text that mentions anyone or anything outside the tree:
+// hideUnseenRooms takes the ids out of mentions of rooms one member can't see. Clients
+// draw such a mention as "a room", as they do for one that was deleted.
+func hideUnseenRooms(q chatQuerier, treeID, viewerID, text string) (string, error) {
+	var failure error
+	out := chatNestMention.ReplaceAllStringFunc(text, func(token string) string {
+		match := chatNestMention.FindStringSubmatch(token)
+		seen, err := mentionedRoomSeenBy(q, treeID, viewerID, match[1], match[2])
+		if err != nil {
+			failure = err
+		}
+		if seen {
+			return token
+		}
+		return "<@" + match[1] + ":hidden>"
+	})
+	return out, failure
+}
+
+// validateSpaceMentionsBy refuses text that mentions anyone or anything outside the tree:
 // people must be joined members, rooms must be active voice nests or text rooms of the
-// tree. Pinned notes use it, and so will event descriptions.
-func (s *Server) validateSpaceMentions(q chatQuerier, treeID string, texts ...string) error {
+// tree that the author can see. Pinned notes and event descriptions use it.
+func (s *Server) validateSpaceMentionsBy(q chatQuerier, treeID, authorID string, texts ...string) error {
 	for _, text := range texts {
 		if !strings.Contains(text, "<@") {
 			continue
 		}
 		for _, match := range chatMentionToken.FindAllStringSubmatch(text, -1) {
-			var query string
-			switch match[1] {
-			case "u":
-				query = `SELECT COUNT(*) FROM tree_members WHERE tree_id = ? AND user_id = ? AND state = 'joined'`
-			case "n":
-				query = `SELECT COUNT(*) FROM nests WHERE tree_id = ? AND id = ? AND status = 'active' AND type = 'persistent'`
-			default:
-				query = `SELECT COUNT(*) FROM chat_conversations WHERE tree_id = ? AND id = ? AND kind = 'nest' AND status = 'active'`
+			var known bool
+			var err error
+			if match[1] == "u" {
+				var count int
+				err = q.QueryRow(`SELECT COUNT(*) FROM tree_members WHERE tree_id = ? AND user_id = ? AND state = 'joined'`, treeID, match[2]).Scan(&count)
+				known = count > 0
+			} else {
+				known, err = mentionedRoomSeenBy(q, treeID, authorID, match[1], match[2])
 			}
-			var count int
-			if err := q.QueryRow(query, treeID, match[2]).Scan(&count); err != nil {
+			if err != nil {
 				return err
 			}
-			if count == 0 {
+			if !known {
 				return errMentionOutsideSpace
 			}
 		}
@@ -106,6 +123,23 @@ func (s *Server) treeNotes(q chatQuerier, treeID string, now time.Time) ([]TreeN
 		notes = append(notes, note)
 	}
 	return notes, rows.Err()
+}
+
+// treeNotesFor is treeNotes as one member may see them.
+func (s *Server) treeNotesFor(q chatQuerier, treeID, viewerID string, now time.Time) ([]TreeNote, error) {
+	notes, err := s.treeNotes(q, treeID, now)
+	if err != nil {
+		return nil, err
+	}
+	for i := range notes {
+		if notes[i].Title, err = hideUnseenRooms(q, treeID, viewerID, notes[i].Title); err != nil {
+			return nil, err
+		}
+		if notes[i].Description, err = hideUnseenRooms(q, treeID, viewerID, notes[i].Description); err != nil {
+			return nil, err
+		}
+	}
+	return notes, nil
 }
 
 // expireTreeNotes deletes notes past their end time and tells the affected spaces.
@@ -189,7 +223,7 @@ func (s *Server) getTreeNotes(c *fiber.Ctx) error {
 	if err := s.requireTreeMember(currentUser(c).ID, treeID); err != nil {
 		return err
 	}
-	notes, err := s.treeNotes(s.db, treeID, time.Now())
+	notes, err := s.treeNotesFor(s.db, treeID, currentUser(c).ID, time.Now())
 	if err != nil {
 		return err
 	}
@@ -211,7 +245,7 @@ func (s *Server) createTreeNote(c *fiber.Ctx) error {
 	if err != nil {
 		return err
 	}
-	if err := s.validateSpaceMentions(s.db, treeID, title, description); err != nil {
+	if err := s.validateSpaceMentionsBy(s.db, treeID, user.ID, title, description); err != nil {
 		return err
 	}
 
@@ -258,7 +292,7 @@ func (s *Server) editTreeNote(c *fiber.Ctx) error {
 	if err != nil {
 		return err
 	}
-	if err := s.validateSpaceMentions(s.db, treeID, title, description); err != nil {
+	if err := s.validateSpaceMentionsBy(s.db, treeID, currentUser(c).ID, title, description); err != nil {
 		return err
 	}
 	result, err := s.db.Exec(
@@ -339,7 +373,7 @@ func (s *Server) orderTreeNotes(c *fiber.Ctx) error {
 		return err
 	}
 	s.publishTree(treeID, "tree.updated")
-	notes, err := s.treeNotes(s.db, treeID, time.Now())
+	notes, err := s.treeNotesFor(s.db, treeID, currentUser(c).ID, time.Now())
 	if err != nil {
 		return err
 	}

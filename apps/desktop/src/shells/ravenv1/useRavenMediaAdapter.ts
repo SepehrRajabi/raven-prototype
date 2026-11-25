@@ -71,6 +71,7 @@ import { presenceForActiveNest } from "./state";
 import { callStateCatchUp, callStateSupported, participantCallState, raisedHandSupported } from "@/lib/callState";
 import { hadTurn, NO_SPEECH, SPEECH_TICK_MS, trackSpeech } from "@/lib/raisedHand";
 import { rememberActiveNest } from "@/lib/crashRecovery";
+import { refusedForGood } from "@/lib/roomAccessView";
 import { desktopCallHost, type CallHost } from "@/lib/callHost";
 
 export type SelfMediaPreviewMode = SelfPreviewMode;
@@ -167,6 +168,8 @@ export interface RavenMediaAdapterState {
   localDeafened: boolean;
   /** A moderator muted you, or deafened you, which also mutes. LiveKit enforces it. */
   localServerMuted: boolean;
+  /** The space's owner lets you hear this call and send nothing to it. LiveKit enforces it too. */
+  localListenOnly: boolean;
   /** A moderator deafened you. Kept apart from your own deafen, which it returns to. */
   localServerDeafened: boolean;
   /** Whether you are marked "Back in a bit" for everyone in the call. */
@@ -297,6 +300,8 @@ export function useRavenMediaAdapter(
     presenceState?: UserPresenceState;
     presenceReachability?: UserReachability;
     localUserId?: string;
+    /** Whether you may only listen in this nest. Undefined when nothing says so. */
+    listenOnlyIn?: (nestId: string) => boolean | undefined;
     /** The platform's share of a call, chosen by the shell. Desktop leaves it to the engines. */
     callHost?: CallHost;
   } = {},
@@ -341,6 +346,15 @@ export function useRavenMediaAdapter(
   const [hand, setHandState] = useState(false);
   const [handSupported, setHandSupported] = useState(false);
   const handRef = useRef(false);
+  // What the server said on joining, for the moment before the room and the call are
+  // fetched again and say it themselves.
+  const [joinedListenOnly, setJoinedListenOnly] = useState(false);
+  const joinedListenOnlyRef = useRef(false);
+  const listenOnlyInRef = useRef(options.listenOnlyIn);
+  listenOnlyInRef.current = options.listenOnlyIn;
+  const listenOnly = activeNestId != null && (options.listenOnlyIn?.(activeNestId) ?? joinedListenOnly);
+  const listenOnlyRef = useRef(listenOnly);
+  listenOnlyRef.current = listenOnly;
   /** The deafened value the server last confirmed for this participation. */
   const deafenSharedRef = useRef(false);
   const localUserIdRef = useRef(options.localUserId);
@@ -704,7 +718,11 @@ export function useRavenMediaAdapter(
     setVideoState(state);
   }, []);
 
-  const applyVideoJoinDefaults = useCallback(async () => {
+  const applyVideoJoinDefaults = useCallback(async (sendNothing: boolean) => {
+    if (sendNothing) {
+      await stopLocalVideoSources(() => true);
+      return;
+    }
     if (!joinWithCameraOffRef.current && !joinWithoutScreenSharingRef.current) return;
     await stopLocalVideoSources((source) =>
       (joinWithCameraOffRef.current && source.kind === "camera") ||
@@ -718,6 +736,8 @@ export function useRavenMediaAdapter(
     awayRef.current = false;
     deafenSharedRef.current = false;
     handRef.current = false;
+    joinedListenOnlyRef.current = false;
+    setJoinedListenOnly(false);
     setAwayState(false);
     setAwaySupported(false);
     setHandState(false);
@@ -732,6 +752,9 @@ export function useRavenMediaAdapter(
    */
   const registerSession = useCallback(async (nestId: string) => {
     const { session } = await api.joinSession(nestId);
+    const own = participantCallState(session.participants, localUserIdRef.current ?? "");
+    joinedListenOnlyRef.current = own.listenOnly;
+    setJoinedListenOnly(own.listenOnly);
     const supported = callStateSupported(session);
     setAwaySupported(supported);
     const handsHere = raisedHandSupported(session);
@@ -741,7 +764,7 @@ export function useRavenMediaAdapter(
       setHandState(false);
     }
     if (!supported) return;
-    const server = participantCallState(session.participants, localUserIdRef.current ?? "");
+    const server = own;
     const want = { away: awayRef.current, deafened: deafenRef.current.deafened, hand: handsHere ? handRef.current : server.hand };
     deafenSharedRef.current = want.deafened;
     const patch = callStateCatchUp(server, want);
@@ -786,6 +809,16 @@ export function useRavenMediaAdapter(
     return operation;
   }, [cleanupMediaOnly, nestLabel, onStateChanged, refreshNativeState, resetSharedCallState, setNonFatalError]);
 
+  /** The server will not let this person back in: end the call here and say so, once. */
+  const leaveRefused = useCallback((nestId: string, refusal: unknown) => {
+    if (activeNestRef.current !== nestId) return;
+    void leaveMediaSession().then(() => {
+      setNonFatalError(messageFromError(refusal, `You are no longer in this ${nestLabel}.`), "rtc_failure", "You left the call. Nobody there can hear or see you.");
+    });
+  }, [leaveMediaSession, nestLabel, setNonFatalError]);
+  const leaveRefusedRef = useRef(leaveRefused);
+  leaveRefusedRef.current = leaveRefused;
+
   useEffect(() => {
     const disconnectActiveNest = () => {
       const nestId = activeNestRef.current;
@@ -826,6 +859,7 @@ export function useRavenMediaAdapter(
       requestController = new AbortController();
       const controller = requestController;
       const timeout = window.setTimeout(() => controller.abort(), NEST_HEARTBEAT_TIMEOUT_MS);
+      let rejoining = false;
       try {
         const result = await api.presenceHeartbeat(controller.signal, true, activeNestId);
         // The supervisor's rejoin registers the session itself; doing it here at the same
@@ -839,15 +873,19 @@ export function useRavenMediaAdapter(
           // The server timed this client out of the Nest (a stalled network, a sleeping
           // laptop) while its media stayed connected. Put the membership back so the
           // others see who they are talking to.
+          rejoining = true;
           await api.joinNest(activeNestId);
+          rejoining = false;
           await registerSessionRef.current(activeNestId);
           await api.joinNestPresence(activeNestId);
           const nextPresence = presenceForActiveNest(presenceRef.current);
           await api.updatePresence(nextPresence.state, nextPresence.reachability, activeNestId);
           await onStateChangedRef.current?.();
         }
-      } catch {
-        // Presence expiry is server-owned; retry after the normal interval.
+      } catch (err) {
+        // Presence expiry is server-owned; retry after the normal interval. Unless the
+        // server put this person out and will not have them back: then the call is over.
+        if (rejoining && !cancelled && refusedForGood(err)) leaveRefusedRef.current(activeNestId, err);
       } finally {
         window.clearTimeout(timeout);
         if (requestController === controller) requestController = null;
@@ -967,8 +1005,9 @@ export function useRavenMediaAdapter(
 
           // Native sidecars reconcile and publish existing sources as soon as they
           // connect, so join defaults must be enforced before either sidecar joins.
-          await guard(applyVideoJoinDefaults());
-          if (alwaysJoinMutedRef.current || options?.muted) await guard(muteLocalMicrophones());
+          const onlyListening = listenOnlyInRef.current?.(nestId) === true;
+          await guard(applyVideoJoinDefaults(onlyListening));
+          if (alwaysJoinMutedRef.current || options?.muted || onlyListening) await guard(muteLocalMicrophones());
 
           // Only a user-initiated Nest entry opens the host's call. Reconnects reuse it
           // and cannot revive a call the host ended.
@@ -976,10 +1015,15 @@ export function useRavenMediaAdapter(
 
           // Open local capture before connecting, so a microphone kept from an earlier
           // call is already running when its track is published. A device that fails to
-          // open is reported on its strip and retried; it must not fail the join.
-          await guard(audioCommands.setCallActive(true).catch(() => undefined));
+          // open is reported on its strip and retried; it must not fail the join. Where you
+          // may only listen the call starts after connecting, when the engine knows that
+          // publishing is taken away and opens no microphone for it.
+          if (!onlyListening) await guard(audioCommands.setCallActive(true).catch(() => undefined));
           await guard(connectMedia(nestId, attempt));
-          await guard(prepareMicrophoneRef.current().catch(() => undefined));
+          if (onlyListening) await guard(audioCommands.setCallActive(true).catch(() => undefined));
+          if (!(listenOnlyInRef.current?.(nestId) ?? joinedListenOnlyRef.current)) {
+            await guard(prepareMicrophoneRef.current().catch(() => undefined));
+          }
 
           attempt.committed = true;
           activeNestRef.current = nestId;
@@ -1001,7 +1045,7 @@ export function useRavenMediaAdapter(
             await onStateChanged?.();
             throw new NestEntryCancelled();
           }
-          if (err instanceof ApiError && err.status === 403) {
+          if (err instanceof ApiError && (err.status === 403 || refusedForGood(err))) {
             // The server said no, for example after a vote. Nothing is wrong with the
             // connection or a device, so only the reason is shown.
             setError(err.message);
@@ -1094,9 +1138,12 @@ export function useRavenMediaAdapter(
         if (!pending.audio && !pending.video && !pending.session) break;
         await waitForDelayOrOnline(mediaReconnectDelayMs(attempt));
         if (activeNestRef.current !== nestId) break;
+        let refusedRejoin = false;
         try {
           // Membership may have lapsed while the connection was down.
-          await api.joinNest(nestId).catch(() => undefined);
+          await api.joinNest(nestId).catch((err: unknown) => {
+            refusedRejoin = refusedForGood(err);
+          });
           await connectMedia(nestId, left, pending);
           if (activeNestRef.current !== nestId) {
             // The user left while this attempt was in flight.
@@ -1106,10 +1153,16 @@ export function useRavenMediaAdapter(
           await refreshNativeState();
           await Promise.resolve(onStateChangedRef.current?.()).catch(() => undefined);
           break;
-        } catch {
+        } catch (err) {
           if (activeNestRef.current !== nestId) {
             // Cancelled by a leave: undo whatever this attempt connected.
             await cleanupMediaOnly();
+            break;
+          }
+          if (refusedRejoin && refusedForGood(err)) {
+            // Refused the room and a token for it: access was taken away. Trying again
+            // would only say "Reconnecting…" for ever.
+            leaveRefusedRef.current(nestId, err);
             break;
           }
           attempt += 1;
@@ -1185,6 +1238,7 @@ export function useRavenMediaAdapter(
   }, [ensureDefaultMic, supportsMicrophone]);
 
   const publishMic = useCallback(async () => {
+    if (listenOnlyRef.current) return;
     setError("");
     if (!audioCapabilities?.supportsMicrophone) {
       setNonFatalError("Microphone capture is not supported on this system.", "unsupported", "Use a supported OS/audio backend or add another audio source in the mixer.");
@@ -1237,7 +1291,9 @@ export function useRavenMediaAdapter(
     }
   }, [micSources, setNonFatalError]);
 
-  const serverMuted = audioState?.session.publishRevoked === true;
+  // LiveKit takes publishing away for both a server mute and listening only.
+  const publishRevoked = audioState?.session.publishRevoked === true;
+  const serverMuted = publishRevoked && !listenOnly;
   const serverDeafened = audioState?.session.subscribeRevoked === true;
 
   // Defined below, after deafen, which turning the mic on can undo.
@@ -1287,6 +1343,7 @@ export function useRavenMediaAdapter(
   }, [callHost, setNonFatalError]);
 
   const startCamera = useCallback(async (camera: CameraDevice, profile: VideoQualityProfile = DEFAULT_VIDEO_PROFILE) => {
+    if (listenOnlyRef.current) return;
     setError("");
     setPreferredCameraId(camera.id);
     setPreferredCameraProfile(profile);
@@ -1350,6 +1407,7 @@ export function useRavenMediaAdapter(
       await stopCamera();
       return;
     }
+    if (listenOnlyRef.current) return;
     // Ask before enumerating: MobileNative's CameraX may list no devices until granted.
     if (!(await requestCameraAccess())) return;
     const listedCameras = cameras.length ? cameras : await videoCommands.listCameras();
@@ -1435,7 +1493,7 @@ export function useRavenMediaAdapter(
 
   // Turning the mic on while deafened undeafens too: you asked to be heard, so you hear.
   toggleMicRef.current = async () => {
-    if (serverMuted) return;
+    if (publishRevoked || (listenOnly && !localMicOn)) return;
     // Heard at once, as the answer to the click or hotkey. Only in a call: the engine
     // drops it when no call is playing.
     void audioCommands.playSoundCue(localMicOn ? "mute" : "unmute").catch(() => undefined);
@@ -1541,14 +1599,14 @@ export function useRavenMediaAdapter(
   const localSpeakingRef = useRef(localSpeaking);
   localSpeakingRef.current = localSpeaking;
   useEffect(() => {
-    if (!hand || !localMicEnabled || serverMuted) return;
+    if (!hand || !localMicEnabled || publishRevoked) return;
     let run = NO_SPEECH;
     const timer = window.setInterval(() => {
       run = trackSpeech(run, localSpeakingRef.current, Date.now());
       if (hadTurn(run)) void setHand(false);
     }, SPEECH_TICK_MS);
     return () => window.clearInterval(timer);
-  }, [hand, localMicEnabled, serverMuted, setHand]);
+  }, [hand, localMicEnabled, publishRevoked, setHand]);
 
   const setOutputDevice = useCallback(async (deviceId: string | null) => {
     setError("");
@@ -1615,6 +1673,7 @@ export function useRavenMediaAdapter(
     withAudio: boolean,
     profile: VideoQualityProfile = DEFAULT_VIDEO_PROFILE,
   ) => {
+    if (listenOnlyRef.current) return;
     setError("");
     if (!videoCapabilities || (!videoCapabilities.supportsDisplayCapture && !videoCapabilities.supportsWindowCapture)) {
       setNonFatalError("Screen sharing is not supported on this system.", "unsupported", "Use a supported OS screen capture backend.");
@@ -1641,6 +1700,7 @@ export function useRavenMediaAdapter(
     withAudio: boolean,
     profile: VideoQualityProfile = DEFAULT_VIDEO_PROFILE,
   ) => {
+    if (listenOnlyRef.current) return;
     setError("");
     if (!videoCapabilities?.supportsWindowCapture) {
       setNonFatalError("Window capture is not supported on this system.", "unsupported", "Use display sharing if available.");
@@ -1666,6 +1726,7 @@ export function useRavenMediaAdapter(
   }, [screenSource, setNonFatalError, videoCapabilities]);
 
   const startScreenShare = useCallback(async () => {
+    if (listenOnlyRef.current) return;
     const display = displays[0] ?? (await videoCommands.listDisplays())[0];
     if (!display) {
       setNonFatalError("No shareable display is available.", "missing_device", "Open the source picker or check OS screen capture permission.");
@@ -1682,6 +1743,27 @@ export function useRavenMediaAdapter(
       setNonFatalError(messageFromError(err, "Screen sharing could not be stopped"), "capture_failure", "Try stopping share again or leave the media session.");
     }
   }, [screenSource, setNonFatalError]);
+
+  // Where you may only listen nothing of yours is sent, whatever was on when that began or
+  // was still starting then. The server refuses it as well; this keeps the devices closed
+  // and what the dock says true. Lifting it opens nothing: each is turned on again by hand.
+  const hasLocalVideo = (videoState?.localSources.length ?? 0) > 0;
+  const sendsNothing = listenOnly && phase === "connected";
+  useEffect(() => {
+    if (!sendsNothing || !hasLocalVideo) return;
+    void stopLocalVideoSources(() => true).catch(() => void refreshNativeState());
+  }, [hasLocalVideo, refreshNativeState, sendsNothing, stopLocalVideoSources]);
+  useEffect(() => {
+    if (!sendsNothing || !localMicEnabled) return;
+    void muteLocalMicrophones().catch(() => undefined);
+  }, [localMicEnabled, muteLocalMicrophones, sendsNothing]);
+  const sentNothingRef = useRef(false);
+  useEffect(() => {
+    const lifted = sentNothingRef.current && !sendsNothing && phase === "connected";
+    sentNothingRef.current = sendsNothing;
+    // Muted and published, as on a normal join, so the first unmute is instant.
+    if (lifted) void prepareMicrophone().catch(() => undefined);
+  }, [phase, prepareMicrophone, sendsNothing]);
 
   const setMicProcessing = useCallback(async (processing: WebRtcAudioProcessingSettings) => {
     setError("");
@@ -1768,6 +1850,7 @@ export function useRavenMediaAdapter(
     cameraStatus,
     localDeafened: deafened,
     localServerMuted: serverMuted,
+    localListenOnly: listenOnly,
     localServerDeafened: serverDeafened,
     localAway: away,
     localHand: hand,

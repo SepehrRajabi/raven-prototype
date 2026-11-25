@@ -34,6 +34,8 @@ import { subscribePipReturn } from "@/lib/pictureInPicture";
 import { mediaHotkeyCommands, subscribeMediaHotkeys, type MediaHotkeySettings } from "@/lib/mediaHotkeys";
 import { headsetCallModeView } from "@/lib/headsetCallMode";
 import { useTalkingWhileMuted } from "@/lib/mutedSpeech";
+import { accessReason, callLimit, limitNotice, LISTEN_ONLY_TITLE, type CallLimit } from "@/lib/roomAccessView";
+import { ownVoiceAccess } from "./ownAccess";
 import {
   manageEventSubscription,
   runGuardedThumbnailAction,
@@ -110,6 +112,9 @@ const SIGNED_OUT_CALL_SNAPSHOT = {
   deafenPending: false,
   leavePending: false,
 };
+
+/** How long a limit has to hold before it is named (see `limitSettles`). */
+const LIMIT_SETTLE_MS = 1500;
 
 /** What the switch confirm is about to do once the call has been left. */
 type PendingSwitch = { kind: "switch"; account: SavedAccount } | { kind: "add" } | null;
@@ -194,11 +199,11 @@ export function DeviceDock({
   // "You're muted" once per mute: the dock callout and the voice overlay show the same signal.
   const talkingWhileMuted = useTalkingWhileMuted(
     media.audioState,
-    connected && media.audioSupported && !media.localMicEnabled && !media.localDeafened && !media.localServerMuted,
+    connected && media.audioSupported && !media.localMicEnabled && !media.localDeafened && !media.localServerMuted && !media.localListenOnly,
   );
   const [mutedHint, dismissMutedHint] = useMutedHint(talkingWhileMuted, media.localMicEnabled);
   const mixerOpen = view.kind === "mixer";
-  const pushToTalk = usePushToTalk(connected && media.localMicEnabled);
+  const pushToTalk = usePushToTalk(connected && media.localMicEnabled && !media.localListenOnly);
   // The mic stays silent while this is set, so it must not wait for someone to open a menu.
   const pushToTalkError = pushToTalk.settings?.error ?? null;
   useEffect(() => {
@@ -206,25 +211,55 @@ export function DeviceDock({
   }, [pushToTalkError]);
 
   // Told once, when it changes. Joining while already limited shows in the dock instead.
-  const { localServerMuted, localServerDeafened } = media;
-  const lastServerLimits = useRef({ muted: localServerMuted, deafened: localServerDeafened });
+  const { localListenOnly, localServerMuted, localServerDeafened } = media;
+  const limit = callLimit({ listenOnly: localListenOnly, muted: localServerMuted, deafened: localServerDeafened });
+  // LiveKit says at once that publishing was taken away or given back; why follows when the
+  // call is fetched again. With room access both have to be in before naming a reason.
+  const limitSettles = Boolean(media.activeNestId && ownVoiceAccess(data, media.activeNestId));
+  const toldLimitRef = useRef<CallLimit | null>(null);
   useEffect(() => {
-    const was = lastServerLimits.current;
-    lastServerLimits.current = { muted: localServerMuted, deafened: localServerDeafened };
-    if (!connected) return;
-    if (localServerDeafened && !was.deafened) {
-      toast({ title: "A moderator deafened you", description: "You can’t hear anyone, and they can’t hear you." });
-    } else if (localServerMuted && !was.muted) {
-      toast({ title: "A moderator muted you", description: "People here can’t hear you." });
-    } else if (!localServerMuted && was.muted) {
-      toast({ title: "You can talk again", description: "Your mic stays off until you turn it on." });
-    } else if (!localServerDeafened && was.deafened) {
-      toast({ title: "You can hear people again" });
+    if (!connected || toldLimitRef.current === null) {
+      toldLimitRef.current = connected ? limit : null;
+      return;
     }
-  }, [connected, localServerDeafened, localServerMuted]);
+    if (limit === toldLimitRef.current) return;
+    const tell = () => {
+      const notice = limitNotice(toldLimitRef.current ?? "none", limit);
+      toldLimitRef.current = limit;
+      if (notice) toast(notice);
+    };
+    if (!limitSettles) {
+      tell();
+      return;
+    }
+    const timer = window.setTimeout(tell, LIMIT_SETTLE_MS);
+    return () => window.clearTimeout(timer);
+  }, [connected, limit, limitSettles]);
+
+  // What a hotkey, the overlay, the tray and the taskbar buttons answer where you may only listen.
+  const tellListenOnly = useCallback(() => {
+    const nestId = mediaRef.current.activeNestId;
+    const reason = nestId ? accessReason(ownVoiceAccess(dataRef.current, nestId), Date.now()) : "";
+    toast({ title: LISTEN_ONLY_TITLE, description: ["Your microphone, camera and screen stay off.", reason].filter(Boolean).join(" ") });
+  }, []);
+
+  // Push to talk has no control to show why nothing happens, so the key says it, once per limit.
+  const pttTalking = Boolean(pushToTalk.settings?.enabled && pushToTalk.settings.talking);
+  const pttToldRef = useRef(false);
+  useEffect(() => {
+    if (!connected || !localListenOnly) pttToldRef.current = false;
+    else if (pttTalking && !pttToldRef.current) {
+      pttToldRef.current = true;
+      tellListenOnly();
+    }
+  }, [connected, localListenOnly, pttTalking, tellListenOnly]);
 
   const runCallAction = useCallback((action: ThumbnailToolbarAction) => {
     const current = mediaRef.current;
+    if (action === "mic" && current.localListenOnly && !current.localMicOn) {
+      tellListenOnly();
+      return;
+    }
     if (action === "mic" && current.localServerMuted) {
       toast({ title: "A moderator muted you", description: "You can’t unmute until they lift it." });
       return;
@@ -248,7 +283,7 @@ export function DeviceDock({
       if (action === "deafen") return current.toggleDeafen();
       return current.leaveMediaSession();
     }, setPendingCallActions);
-  }, []);
+  }, [tellListenOnly]);
 
   useEffect(() => {
     let unlisten: (() => void) | undefined;
@@ -261,6 +296,11 @@ export function DeviceDock({
       }
       if (action === "hand") {
         if (current.handSupported) void current.setHand(!current.localHand).catch(() => undefined);
+        return;
+      }
+      const turningOn = action === "camera" ? !current.localCameraEnabled : action === "screenShare" && !current.screenSharing;
+      if (turningOn && current.localListenOnly) {
+        tellListenOnly();
         return;
       }
       let operation: Promise<void> | null = null;
@@ -280,7 +320,7 @@ export function DeviceDock({
       void operation.catch(() => undefined).finally(() => hotkeyActionRef.current.delete(action));
     }).then((nextUnlisten) => { unlisten = nextUnlisten; }).catch(() => undefined);
     return () => unlisten?.();
-  }, [runCallAction]);
+  }, [runCallAction, tellListenOnly]);
 
   // The overlay's buttons and volume scrolls arrive here, so they run through the same
   // path as the hotkeys and the taskbar buttons (the guards and the error toasts included).
@@ -620,6 +660,7 @@ export function DeviceDock({
       onScreenPicker={() => setScreenPickerOpen(true)}
       pendingActions={pendingCallActions}
       onCallAction={runCallAction}
+      onListenOnly={tellListenOnly}
       // Arranging happens in the dock itself; the fullscreen copy only follows the order.
       arranging={placement === "dock" && arranging}
       onArrange={placement === "dock" ? () => setArranging(true) : undefined}
@@ -848,7 +889,7 @@ export function DeviceDock({
       />
 
       <ScreenSharePickerDialog
-        open={screenPickerOpen}
+        open={screenPickerOpen && !localListenOnly}
         onOpenChange={setScreenPickerOpen}
         supportsDisplayAudio={Boolean(media.videoCapabilities?.supportsDisplayAudio)}
         supportsWindowAudio={Boolean(media.videoCapabilities?.supportsWindowAudio)}
@@ -922,6 +963,7 @@ function DockDeviceControls({
   onScreenPicker,
   pendingActions,
   onCallAction,
+  onListenOnly,
   arranging,
   onArrange,
   onArrangeEnd,
@@ -938,6 +980,8 @@ function DockDeviceControls({
   onScreenPicker: () => void;
   pendingActions: ReadonlySet<ThumbnailToolbarAction>;
   onCallAction: (action: ThumbnailToolbarAction) => void;
+  /** Says why a control does nothing where you may only listen. */
+  onListenOnly: () => void;
   arranging: boolean;
   /** Offered from the group's context menu and from each device menu. */
   onArrange?: () => void;
@@ -964,6 +1008,14 @@ function DockDeviceControls({
     ? `Sharing is paused while ${media.sharedAppName ?? "the app"} is minimized.`
     : null;
   useSharePausedToast(sharePausedLine);
+  // Off and held there. Something still on its way off keeps its own control and words, so
+  // nothing says "nobody can see you" a moment early.
+  const listenOnly = media.localListenOnly;
+  const micHeld = listenOnly && !media.localMicOn;
+  const cameraHeld = listenOnly && media.cameraStatus !== "live";
+  const screenHeld = listenOnly && media.screenShareStatus !== "live";
+  const listenOnlyReason = listenOnly && media.activeNestId ? accessReason(ownVoiceAccess(data, media.activeNestId), Date.now()) : "";
+  const listenOnlyNote = (what: string) => [what, listenOnlyReason].filter(Boolean).join(" ");
   const controls: Record<DockControlId, ReactNode> = {
     mic: (
       <DockControl
@@ -990,9 +1042,11 @@ function DockDeviceControls({
           </div>
         ) : null}
         onCalloutDismiss={dismissMutedHint}
-        label={media.localServerMuted ? "Muted by a moderator" : !media.audioSupported ? "No microphone available" : media.localMicOn ? "Mute" : "Unmute"}
+        label={micHeld ? LISTEN_ONLY_TITLE : media.localServerMuted ? "Muted by a moderator" : !media.audioSupported ? "No microphone available" : media.localMicOn ? "Mute" : "Unmute"}
         description={
-          media.localServerMuted
+          micHeld
+            ? listenOnlyNote("Nobody can hear you.")
+            : media.localServerMuted
             ? "Nobody can hear you, and you can’t unmute until they lift it."
             : !media.audioSupported
             ? undefined
@@ -1009,7 +1063,8 @@ function DockDeviceControls({
         shortcut={micShortcut}
         tone={media.localServerMuted || !media.localMicOn ? "cut" : pushToTalkOn && inCall ? (pttSettings?.talking ? "on" : "ready") : "neutral"}
         pressed={media.localMicOn && !media.localServerMuted}
-        disabled={media.localServerMuted || !media.audioSupported || media.busy || pendingActions.has("mic")}
+        unavailable={micHeld}
+        disabled={!micHeld && (media.localServerMuted || !media.audioSupported || media.busy || pendingActions.has("mic"))}
         onClick={() => onCallAction("mic")}
         menuLabel="Microphone settings"
         menu={<MicMenu media={media} />}
@@ -1021,30 +1076,31 @@ function DockDeviceControls({
     ),
     camera: (
       <DockControl
-        label={!media.cameraSupported ? "No camera available" : media.localCameraEnabled ? "Turn camera off" : "Turn camera on"}
-        description={videoDescription(media.cameraStatus, inCall, {
+        label={cameraHeld ? LISTEN_ONLY_TITLE : !media.cameraSupported ? "No camera available" : media.localCameraEnabled ? "Turn camera off" : "Turn camera on"}
+        description={cameraHeld ? listenOnlyNote("Nobody can see you.") : videoDescription(media.cameraStatus, inCall, {
           live: "People here can see you.",
           starting: "Starting. People cannot see you yet.",
           ready: `Ready. It turns on when you join a ${nest}, and people will see you.`,
           error: "The camera could not start. Click to try again.",
         })}
         shortcut={hotkeyLabel(hotkeys?.camera)}
-        tone={videoTone(media.cameraStatus)}
-        pressed={media.localCameraEnabled}
-        disabled={!media.cameraSupported || media.busy}
-        onClick={() => void media.toggleCamera().catch(() => undefined)}
+        tone={cameraHeld ? "off" : videoTone(media.cameraStatus)}
+        pressed={media.localCameraEnabled && !cameraHeld}
+        unavailable={cameraHeld}
+        disabled={!cameraHeld && (!media.cameraSupported || media.busy)}
+        onClick={() => (cameraHeld ? onListenOnly() : void media.toggleCamera().catch(() => undefined))}
         menuLabel="Camera settings"
         menu={<CameraMenu media={media} />}
         onArrange={onArrange}
       >
-        {media.localCameraEnabled ? <Video /> : <VideoOff />}
-        {inCall && media.localCameraEnabled && media.cameraStatus !== "live" ? <Loader2 className="animate-spin" /> : null}
+        {media.localCameraEnabled && !cameraHeld ? <Video /> : <VideoOff />}
+        {inCall && !cameraHeld && media.localCameraEnabled && media.cameraStatus !== "live" ? <Loader2 className="animate-spin" /> : null}
       </DockControl>
     ),
     screen: (
       <DockControl
-        label={!media.screenShareSupported ? "Screen sharing is not available" : media.screenSharing ? "Stop sharing" : "Share your screen"}
-        description={videoDescription(media.screenShareStatus, inCall, {
+        label={screenHeld ? LISTEN_ONLY_TITLE : !media.screenShareSupported ? "Screen sharing is not available" : media.screenSharing ? "Stop sharing" : "Share your screen"}
+        description={screenHeld ? listenOnlyNote("Your screen is not shared.") : videoDescription(media.screenShareStatus, inCall, {
           live: sharePausedLine
             ? `${sharePausedLine} People see the last picture until you restore it.`
             : media.windowSharing ? "People here can see the window you picked." : "People here can see your screen.",
@@ -1053,13 +1109,14 @@ function DockDeviceControls({
           error: "Sharing could not start. Click to pick again.",
         })}
         shortcut={hotkeyLabel(hotkeys?.screenShare)}
-        tone={videoTone(media.screenShareStatus)}
-        pressed={media.screenSharing}
-        disabled={!media.screenShareSupported || media.busy}
-        onClick={() => void (media.screenSharing ? media.stopScreenShare().catch(() => undefined) : onScreenPicker())}
+        tone={screenHeld ? "off" : videoTone(media.screenShareStatus)}
+        pressed={media.screenSharing && !screenHeld}
+        unavailable={screenHeld}
+        disabled={!screenHeld && (!media.screenShareSupported || media.busy)}
+        onClick={() => void (screenHeld ? onListenOnly() : media.screenSharing ? media.stopScreenShare().catch(() => undefined) : onScreenPicker())}
       >
         {sharePausedLine ? <MonitorPause /> : <MonitorUp />}
-        {inCall && media.screenSharing && media.screenShareStatus !== "live" ? <Loader2 className="animate-spin" /> : null}
+        {inCall && !screenHeld && media.screenSharing && media.screenShareStatus !== "live" ? <Loader2 className="animate-spin" /> : null}
       </DockControl>
     ),
     hear: (
@@ -1268,6 +1325,7 @@ function DockControl({
   tone,
   pressed,
   disabled,
+  unavailable,
   onClick,
   menu,
   menuLabel,
@@ -1282,6 +1340,8 @@ function DockControl({
   tone: "neutral" | "off" | "ready" | "on" | "cut";
   pressed: boolean;
   disabled?: boolean;
+  /** Looks disabled but can be focused and pressed, and the press says why it is off. */
+  unavailable?: boolean;
   onClick: () => void;
   menu?: ReactNode;
   menuLabel?: string;
@@ -1295,7 +1355,7 @@ function DockControl({
   return (
     <Popover open={callout != null} onOpenChange={(open) => { if (!open) onCalloutDismiss?.(); }}>
       <PopoverAnchor asChild>
-        <div className={cn("flex h-11 items-stretch rounded-card bg-secondary", disabled && "opacity-45")}>
+        <div className={cn("flex h-11 items-stretch rounded-card bg-secondary", (disabled || unavailable) && "opacity-45")}>
           <Tooltip
             label={description ? <span><span className="block font-medium">{label}</span><span className="block text-muted-foreground">{description}</span></span> : label}
             shortcut={shortcut}
@@ -1305,9 +1365,10 @@ function DockControl({
               aria-label={description ? `${label}. ${description}` : label}
               aria-pressed={pressed}
               disabled={disabled}
+              aria-disabled={unavailable || undefined}
               onClick={onClick}
               className={cn(
-                "flex min-w-11 items-center justify-center gap-2 px-3 transition-colors focus-visible:-outline-offset-2 disabled:cursor-not-allowed [&>svg]:h-[18px] [&>svg]:w-[18px] [&>svg]:shrink-0",
+                "flex min-w-11 items-center justify-center gap-2 px-3 transition-colors focus-visible:-outline-offset-2 disabled:cursor-not-allowed aria-disabled:cursor-not-allowed [&>svg]:h-[18px] [&>svg]:w-[18px] [&>svg]:shrink-0",
                 menu ? "rounded-l-card" : "rounded-card",
                 tone === "neutral" && "text-foreground hover:bg-accent",
                 tone === "off" && "text-muted-foreground hover:bg-accent hover:text-foreground",

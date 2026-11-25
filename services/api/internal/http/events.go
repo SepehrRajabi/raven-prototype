@@ -427,8 +427,8 @@ func (s *Server) publishNest(update LiveUpdate) {
 }
 
 // nestAudience lists who hears about a voice nest. For a nest in a tree that is the
-// tree's members. For one outside any tree it is whoever started it, the people in it or
-// invited to it, and anyone waiting to be let in.
+// tree's members it is not hidden from. For one outside any tree it is whoever started
+// it, the people in it or invited to it, and anyone waiting to be let in.
 func (s *Server) nestAudience(nestID string) (string, []string, error) {
 	return s.nestAudienceIn(s.db, nestID)
 }
@@ -444,7 +444,7 @@ func (s *Server) nestAudienceIn(q chatQuerier, nestID string) (string, []string,
 		return "", nil, err
 	}
 	if treeID.Valid && treeID.String != "" && nestType == "persistent" {
-		members, err := treeMemberIDsIn(q, treeID.String)
+		members, err := treeRoomMemberIDs(q, treeID.String, roomKey{layoutKindVoice, nestID})
 		return treeID.String, members, err
 	}
 	rows, err := q.Query(

@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { AlertCircle, ChevronLeft, Loader2, Mic, MicOff, MonitorUp, Video, VideoOff } from "lucide-react";
+import { AlertCircle, ChevronLeft, Ear, Loader2, Mic, MicOff, MonitorUp, Video, VideoOff } from "lucide-react";
 import { pushToTalkKeyLabel } from "@/lib/pushToTalk";
 import { usePushToTalk } from "../usePushToTalk";
 import { groupAudioSatellites, type SatelliteActions } from "@/components/media/audioSatellites";
@@ -23,6 +23,15 @@ import { formatRelativeTime, type RavenShellData, type RavenView } from "../stat
 import type { RavenMediaAdapterState } from "../useRavenMediaAdapter";
 import type { NestEntryController } from "../useNestEntry";
 import { treeCan } from "@/lib/permissions";
+import { RoomMeta } from "@/components/RoomLabels";
+import { useShowRoomLabels } from "@/lib/roomLabelPreference";
+import type { ChatStore } from "@/lib/chat/store";
+import { accessOfRoom, accessReason, accessUntil, boundaryLine, labelsOfRoom, LISTEN_ONLY_TITLE } from "@/lib/roomAccessView";
+import type { RoomAccess } from "@/lib/roomAccess";
+import type { TreeLabel } from "@/lib/chat/types";
+import { listenOnlyIn, ownVoiceAccess } from "../ownAccess";
+import { useChatSelector } from "../useChat";
+import { useNow } from "../useNow";
 import { DoorwayHeader, DoorwayPage, namesSentence, nestPeople, treeNameFor } from "./shared";
 import { ReachableRow } from "./HomeView";
 
@@ -35,6 +44,7 @@ export function NestView({
   data,
   media,
   entry,
+  chat = null,
   onNavigate,
   onBack,
 }: {
@@ -42,6 +52,8 @@ export function NestView({
   data: RavenShellData;
   media: RavenMediaAdapterState;
   entry: NestEntryController;
+  /** Text chat, or null when the server has none. It holds the tree's layout, with the labels. */
+  chat?: ChatStore | null;
   onNavigate: (view: RavenView) => void;
   onBack: () => void;
 }) {
@@ -81,6 +93,16 @@ export function NestView({
       },
     };
   }, [canOfferModeration, localUserId, nest, treeDetails]);
+  const now = useNow();
+  const treeId = nest.treeId ?? "";
+  const layout = useChatSelector(chat, (state) => (treeId ? state.layouts[treeId] : undefined), undefined, treeId);
+  useEffect(() => {
+    if (chat && treeId && !layout) void chat.loadLayout(treeId).catch(() => undefined);
+  }, [chat, layout, treeId]);
+  const access = accessOfRoom(layout, "voice", nest.id, ownVoiceAccess(data, nest.id));
+  const showLabels = useShowRoomLabels();
+  const labels = showLabels ? labelsOfRoom(layout, "voice", nest.id) : [];
+
   const { setRemoteTrackVolume, setRemoteTrackMuted, stopScreenShare } = media;
   const satelliteActions = useMemo<SatelliteActions>(() => ({
     setVolume: async (satellite, gainDb) => {
@@ -97,7 +119,7 @@ export function NestView({
     return (
       <LiveMediaStage
         title={nest.name}
-        subtitle={treeNameFor(data, nest.treeId)}
+        subtitle={[treeNameFor(data, nest.treeId), media.localListenOnly ? LISTEN_ONLY_TITLE : null, accessUntil(access, now)].filter(Boolean).join(" · ")}
         connected={media.phase === "connected"}
         phase={media.phase}
         audioNotice={media.audioNotice}
@@ -127,7 +149,7 @@ export function NestView({
     );
   }
 
-  return <NestThreshold nest={nest} data={data} media={media} entry={entry} onNavigate={onNavigate} onBack={onBack} />;
+  return <NestThreshold nest={nest} data={data} media={media} entry={entry} access={access} labels={labels} now={now} onNavigate={onNavigate} onBack={onBack} />;
 }
 
 /** Before you enter: who is inside, what you will reveal, and one way in. */
@@ -136,6 +158,9 @@ function NestThreshold({
   data,
   media,
   entry,
+  access,
+  labels,
+  now,
   onNavigate,
   onBack,
 }: {
@@ -143,6 +168,9 @@ function NestThreshold({
   data: RavenShellData;
   media: RavenMediaAdapterState;
   entry: NestEntryController;
+  access: RoomAccess | undefined;
+  labels: readonly TreeLabel[];
+  now: number;
   onNavigate: (view: RavenView) => void;
   onBack: () => void;
 }) {
@@ -186,6 +214,9 @@ function NestThreshold({
 
   const joinsMuted = data.preferences.alwaysJoinMuted || quiet;
   const joinsCameraOff = data.preferences.joinWithCameraOff;
+  const listenOnly = listenOnlyIn(data, nest.id) ?? access?.level === "view";
+  const until = listenOnly ? "" : accessUntil(access, now);
+  const boundary = boundaryLine(access);
   const pushToTalk = usePushToTalk().settings;
   // "Join muted" holds the mic outside a call (`joinMutedHoldsMic`), so the chip shows the setting rather than a choice.
   const micOn = media.audioSupported && !joinsMuted && media.localMicOn;
@@ -197,8 +228,13 @@ function NestThreshold({
     cameraOn,
     sharing,
     treeName: tree?.name,
+    listenOnly,
+    limited: access?.limited,
+    nestLabel,
   });
-  const settingNote = !media.audioSupported
+  const settingNote = listenOnly
+    ? null
+    : !media.audioSupported
     ? "No microphone found."
     : data.preferences.alwaysJoinMuted && joinsCameraOff
       ? "Your settings are to join muted with your camera off."
@@ -276,6 +312,12 @@ function NestThreshold({
           )
         }
         title={nest.name}
+        meta={boundary || labels.length || until ? (
+          <>
+            {boundary || until ? <span className="min-w-0 truncate">{[boundary, until].filter(Boolean).join(" · ")}</span> : null}
+            <RoomMeta kind="voice" labels={labels} focusable className="max-w-[45%] shrink-0" />
+          </>
+        ) : undefined}
       />
 
       <div className="mt-4 flex min-h-7 items-center gap-3">
@@ -302,36 +344,46 @@ function NestThreshold({
         </div>
       ) : (
         <>
-          <div className="mt-6 flex flex-wrap gap-2" role="group" aria-label="What you will share">
-            <JoinChip
-              on={micOn}
-              icon={micOn ? <Mic /> : <MicOff />}
-              label="Mic"
-              name="Microphone"
-              disabled={!media.audioSupported || joinsMuted || media.busy}
-              onToggle={() => void media.toggleMic().catch(() => undefined)}
-            />
-            <JoinChip
-              on={cameraOn}
-              icon={cameraOn ? <Video /> : <VideoOff />}
-              label="Camera"
-              name="Camera"
-              disabled={!media.cameraSupported || joinsCameraOff || media.busy}
-              onToggle={() => void media.toggleCamera().catch(() => undefined)}
-            />
-            {sharing ? (
-              <JoinChip on icon={<MonitorUp />} label="Screen" name="Screen share. Press to stop sharing" onToggle={() => void media.stopScreenShare().catch(() => undefined)} />
-            ) : null}
-          </div>
+          {listenOnly ? (
+            <div className="mt-6 flex items-start gap-3 rounded-card bg-secondary/60 px-3.5 py-3 text-small">
+              <Ear className="mt-px h-4 w-4 shrink-0 text-muted-foreground" aria-hidden />
+              <div className="min-w-0">
+                <p>{summary.reveal}</p>
+                {accessReason(access, now) ? <p className="mt-0.5 text-muted-foreground">{accessReason(access, now)}</p> : null}
+              </div>
+            </div>
+          ) : (
+            <div className="mt-6 flex flex-wrap gap-2" role="group" aria-label="What you will share">
+              <JoinChip
+                on={micOn}
+                icon={micOn ? <Mic /> : <MicOff />}
+                label="Mic"
+                name="Microphone"
+                disabled={!media.audioSupported || joinsMuted || media.busy}
+                onToggle={() => void media.toggleMic().catch(() => undefined)}
+              />
+              <JoinChip
+                on={cameraOn}
+                icon={cameraOn ? <Video /> : <VideoOff />}
+                label="Camera"
+                name="Camera"
+                disabled={!media.cameraSupported || joinsCameraOff || media.busy}
+                onToggle={() => void media.toggleCamera().catch(() => undefined)}
+              />
+              {sharing ? (
+                <JoinChip on icon={<MonitorUp />} label="Screen" name="Screen share. Press to stop sharing" onToggle={() => void media.stopScreenShare().catch(() => undefined)} />
+              ) : null}
+            </div>
+          )}
           <p className="mt-3 text-small text-muted-foreground">
-            {summary.reveal} {summary.audience}
+            {listenOnly ? null : `${summary.reveal} `}{summary.audience}
           </p>
           {settingNote ? (
             <p className="mt-1 text-small text-muted-foreground">
               {settingNote} {media.audioSupported ? settingsLink : null}
             </p>
           ) : null}
-          {quiet ? <p className="mt-1 text-small text-muted-foreground">You'll join muted. Unmute when you want to talk.</p> : null}
+          {quiet && !listenOnly ? <p className="mt-1 text-small text-muted-foreground">You'll join muted. Unmute when you want to talk.</p> : null}
 
           {otherNest && !waiting ? (
             <p role="status" className="mt-6 text-small text-muted-foreground">

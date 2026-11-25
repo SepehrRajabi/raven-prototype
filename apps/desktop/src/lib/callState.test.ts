@@ -25,9 +25,9 @@ describe("callStateSupported", () => {
 describe("participantCallState", () => {
   test("reads one person and treats a missing field or person as off", () => {
     const participants = [person("a", { away: true, deafened: false }), person("b")];
-    expect(participantCallState(participants, "a")).toEqual({ away: true, deafened: false, serverMuted: false, serverDeafened: false, hand: false, handOrder: 0 });
-    expect(participantCallState(participants, "b")).toEqual({ away: false, deafened: false, serverMuted: false, serverDeafened: false, hand: false, handOrder: 0 });
-    expect(participantCallState(participants, "nobody")).toEqual({ away: false, deafened: false, serverMuted: false, serverDeafened: false, hand: false, handOrder: 0 });
+    expect(participantCallState(participants, "a")).toEqual({ away: true, deafened: false, serverMuted: false, serverDeafened: false, listenOnly: false, hand: false, handOrder: 0 });
+    expect(participantCallState(participants, "b")).toEqual({ away: false, deafened: false, serverMuted: false, serverDeafened: false, listenOnly: false, hand: false, handOrder: 0 });
+    expect(participantCallState(participants, "nobody")).toEqual({ away: false, deafened: false, serverMuted: false, serverDeafened: false, listenOnly: false, hand: false, handOrder: 0 });
   });
 });
 
@@ -37,8 +37,8 @@ describe("callStatesByUser", () => {
       [person("me", { away: false, deafened: false }), person("them", { away: true, deafened: true })],
       { userId: "me", away: true, deafened: false, hand: false },
     );
-    expect(states.get("me")).toEqual({ away: true, deafened: false, serverMuted: false, serverDeafened: false, hand: false, handOrder: 0 });
-    expect(states.get("them")).toEqual({ away: true, deafened: true, serverMuted: false, serverDeafened: false, hand: false, handOrder: 0 });
+    expect(states.get("me")).toEqual({ away: true, deafened: false, serverMuted: false, serverDeafened: false, listenOnly: false, hand: false, handOrder: 0 });
+    expect(states.get("them")).toEqual({ away: true, deafened: true, serverMuted: false, serverDeafened: false, listenOnly: false, hand: false, handOrder: 0 });
   });
 
   test("your own server mute still comes from the server", () => {
@@ -46,7 +46,16 @@ describe("callStatesByUser", () => {
       [person("me", { away: false, deafened: false, serverMuted: true })],
       { userId: "me", away: false, deafened: true, hand: false },
     );
-    expect(states.get("me")).toEqual({ away: false, deafened: true, serverMuted: true, serverDeafened: false, hand: false, handOrder: 0 });
+    expect(states.get("me")).toEqual({ away: false, deafened: true, serverMuted: true, serverDeafened: false, listenOnly: false, hand: false, handOrder: 0 });
+  });
+});
+
+describe("listening only", () => {
+  test("is read from the server, for others and for you", () => {
+    const states = callStatesByUser([person("me", { listenOnly: true }), person("them", { listenOnly: true }), person("old")], { userId: "me", away: false, deafened: false, hand: false });
+    expect(states.get("me")?.listenOnly).toBe(true);
+    expect(states.get("them")?.listenOnly).toBe(true);
+    expect(states.get("old")?.listenOnly).toBe(false);
   });
 });
 

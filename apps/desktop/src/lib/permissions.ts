@@ -14,6 +14,7 @@ export type TreePermission =
   | "members.rename"
   | "board.manage"
   | "stickers.manage"
+  | "access.manage"
   | "settings.edit"
   | "roles.assign"
   | "ownership.transfer"

@@ -460,6 +460,7 @@ export function useRavenShellData(): RavenShellData {
     let running = false;
     let broadRefreshQueued = false;
     let presenceRefreshQueued = false;
+    let accessChanged = false;
     const nestUpdates = new Map<string, NestLiveUpdate>();
 
     const schedule = () => {
@@ -475,9 +476,14 @@ export function useRavenShellData(): RavenShellData {
       const runPresenceRefresh = presenceRefreshQueued;
       broadRefreshQueued = false;
       presenceRefreshQueued = false;
+      const afterAccessChange = accessChanged;
+      accessChanged = false;
       const updates = [...nestUpdates.values()];
       nestUpdates.clear();
       try {
+        // A refresh already on its way may have asked before the change. What may be shown
+        // has to come from one that asked after it.
+        if (afterAccessChange) await refreshPromiseRef.current?.catch(() => undefined);
         if (runBroadRefresh) await refresh();
         else {
           if (runPresenceRefresh) await refreshPresence();
@@ -506,6 +512,13 @@ export function useRavenShellData(): RavenShellData {
       if (update.type === "profile.avatar") {
         // Only the picture changed. Its new version swaps it wherever it is shown.
         if (update.actorId && update.at) noteAvatarVersion(update.actorId, update.at);
+        return;
+      }
+      if (update.type === "tree.access_changed") {
+        // Which rooms are there at all may have changed: home, the trees and their rooms.
+        accessChanged = true;
+        broadRefreshQueued = true;
+        schedule();
         return;
       }
       if (update.nestId) nestUpdates.set(update.nestId, update);

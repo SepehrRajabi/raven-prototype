@@ -54,7 +54,7 @@ func (s *Server) deleteTreeCore(treeID string) error {
 	if err != nil {
 		return err
 	}
-	textNestIDs, err := s.stringColumn(`SELECT id FROM chat_conversations WHERE tree_id = ? AND kind = 'nest' AND status = 'active'`, treeID)
+	access, err := loadAccessModel(s.db, treeID)
 	if err != nil {
 		return err
 	}
@@ -82,8 +82,15 @@ func (s *Server) deleteTreeCore(treeID string) error {
 	for _, nestID := range nestIDs {
 		s.closeCall(nestID)
 	}
-	for _, conversationID := range textNestIDs {
-		s.publishChatEvent(ChatEvent{Type: "conversation.removed", ConversationID: conversationID}, members)
+	// A room that was hidden from someone is not announced to them by its end either.
+	readers, now := map[string][]string{}, database.Now()
+	for _, userID := range members {
+		for _, conversationID := range access.textRoomsShownTo(userID, now) {
+			readers[conversationID] = append(readers[conversationID], userID)
+		}
+	}
+	for conversationID, userIDs := range readers {
+		s.publishChatEvent(ChatEvent{Type: "conversation.removed", ConversationID: conversationID}, userIDs)
 	}
 	s.publishTreeTo(treeID, "tree.deleted", members)
 	return nil
@@ -150,10 +157,14 @@ func (s *Server) setTreeMemberRoleCore(treeID, userID, role string) (TreeMember,
 		return TreeMember{}, errTreeOwnerRoleFixed
 	}
 	if current != role {
-		if _, err := s.db.Exec(
-			`UPDATE tree_members SET role = ?, updated_at = ? WHERE tree_id = ? AND user_id = ? AND state = 'joined' AND role <> 'owner'`,
-			role, database.Now(), treeID, userID,
-		); err != nil {
+		// Rules about every member apply to members and not to moderators.
+		if err := s.changeTreeAccess(treeID, func(tx chatQuerier) error {
+			_, err := tx.Exec(
+				`UPDATE tree_members SET role = ?, updated_at = ? WHERE tree_id = ? AND user_id = ? AND state = 'joined' AND role <> 'owner'`,
+				role, database.Now(), treeID, userID,
+			)
+			return err
+		}); err != nil {
 			return TreeMember{}, err
 		}
 	}
@@ -186,20 +197,28 @@ func (s *Server) removeTreeMemberCore(treeID, userID, state string) error {
 		return errTreeOwnerNotRemoved
 	}
 	now := database.Now()
-	// The role is dropped with the membership, so coming back later starts as a member.
-	if _, err := s.db.Exec(
-		`UPDATE tree_members SET state = ?, role = 'member', left_at = ?, updated_at = ? WHERE tree_id = ? AND user_id = ? AND state = 'joined' AND role <> 'owner'`,
-		state, now, now, treeID, userID,
-	); err != nil {
+	// A room that was hidden from them is not named to them now.
+	var shown []string
+	if err := s.changeTreeAccess(treeID, func(tx chatQuerier) error {
+		access, err := loadAccessModel(tx, treeID)
+		if err != nil {
+			return err
+		}
+		shown = access.textRoomsShownTo(userID, now)
+		// The role is dropped with the membership, so coming back later starts as a member.
+		if _, err := tx.Exec(
+			`UPDATE tree_members SET state = ?, role = 'member', left_at = ?, updated_at = ? WHERE tree_id = ? AND user_id = ? AND state = 'joined' AND role <> 'owner'`,
+			state, now, now, treeID, userID,
+		); err != nil {
+			return err
+		}
+		return dropGrantsTx(tx, access.at(now), userID)
+	}); err != nil {
 		return err
 	}
 	s.evictFromTree(treeID, userID)
 	s.revalidateWorkshop(userID)
-	textNestIDs, err := s.stringColumn(`SELECT id FROM chat_conversations WHERE tree_id = ? AND kind = 'nest' AND status = 'active'`, treeID)
-	if err != nil {
-		return err
-	}
-	for _, conversationID := range textNestIDs {
+	for _, conversationID := range shown {
 		s.publishChatEvent(ChatEvent{Type: "conversation.removed", ConversationID: conversationID}, []string{userID})
 	}
 	s.publishTree(treeID, "tree.member_removed")
@@ -211,39 +230,42 @@ func (s *Server) removeTreeMemberCore(treeID, userID, state string) error {
 // becomes a moderator. It returns the previous owner, or "" if the tree had none.
 func (s *Server) transferTreeOwnershipCore(treeID, newOwnerID string) (string, error) {
 	now := database.Now()
-	tx, err := s.db.Begin()
-	if err != nil {
-		return "", err
-	}
-	defer tx.Rollback()
-	var state string
-	err = tx.QueryRow(`SELECT state FROM tree_members WHERE tree_id = ? AND user_id = ?`, treeID, newOwnerID).Scan(&state)
-	if errors.Is(err, sql.ErrNoRows) || (err == nil && state != "joined") {
-		return "", errTreeMemberNotFound
-	}
-	if err != nil {
-		return "", err
-	}
 	var previousOwnerID string
-	err = tx.QueryRow(`SELECT user_id FROM tree_members WHERE tree_id = ? AND role = 'owner' AND state = 'joined'`, treeID).Scan(&previousOwnerID)
-	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+	// The owner is never limited, so this can open rooms to one person and close them to
+	// another.
+	if err := s.changeTreeAccess(treeID, func(tx chatQuerier) error {
+		var state string
+		err := tx.QueryRow(`SELECT state FROM tree_members WHERE tree_id = ? AND user_id = ?`, treeID, newOwnerID).Scan(&state)
+		if errors.Is(err, sql.ErrNoRows) || (err == nil && state != "joined") {
+			return errTreeMemberNotFound
+		}
+		if err != nil {
+			return err
+		}
+		err = tx.QueryRow(`SELECT user_id FROM tree_members WHERE tree_id = ? AND role = 'owner' AND state = 'joined'`, treeID).Scan(&previousOwnerID)
+		if err != nil && !errors.Is(err, sql.ErrNoRows) {
+			return err
+		}
+		if previousOwnerID == newOwnerID {
+			return nil
+		}
+		// The old owner steps down first: the database allows only one at any moment.
+		if previousOwnerID != "" {
+			if _, err := tx.Exec(`UPDATE tree_members SET role = 'moderator', updated_at = ? WHERE tree_id = ? AND user_id = ?`, now, treeID, previousOwnerID); err != nil {
+				return err
+			}
+		}
+		// Nobody outranks an owner, so a mute or a rule kept here could never be lifted.
+		if _, err := tx.Exec(`UPDATE tree_members SET role = 'owner', server_muted = FALSE, server_deafened = FALSE, updated_at = ? WHERE tree_id = ? AND user_id = ?`, now, treeID, newOwnerID); err != nil {
+			return err
+		}
+		_, err = tx.Exec(`DELETE FROM tree_access_rules WHERE tree_id = ? AND subject_user_id = ?`, treeID, newOwnerID)
+		return err
+	}); err != nil {
 		return "", err
 	}
 	if previousOwnerID == newOwnerID {
 		return previousOwnerID, nil
-	}
-	// The old owner steps down first: the database allows only one at any moment.
-	if previousOwnerID != "" {
-		if _, err := tx.Exec(`UPDATE tree_members SET role = 'moderator', updated_at = ? WHERE tree_id = ? AND user_id = ?`, now, treeID, previousOwnerID); err != nil {
-			return "", err
-		}
-	}
-	// Nobody outranks an owner, so a mute kept here could never be lifted.
-	if _, err := tx.Exec(`UPDATE tree_members SET role = 'owner', server_muted = FALSE, server_deafened = FALSE, updated_at = ? WHERE tree_id = ? AND user_id = ?`, now, treeID, newOwnerID); err != nil {
-		return "", err
-	}
-	if err := tx.Commit(); err != nil {
-		return "", err
 	}
 	s.publishTree(treeID, "tree.member_updated")
 	s.publishToUser(newOwnerID, "tree.role_changed", treeID)
@@ -307,6 +329,8 @@ func (s *Server) archiveNestCore(nestID, actorID string) error {
 	if err := s.appendEventTx(tx, nestID, "", actorID, "nest.ended", map[string]any{"reason": "manual_archive"}); err != nil {
 		return err
 	}
+	// The rules about it stay: it keeps a name, and whoever it was hidden from is not to
+	// learn it now.
 	if err := tx.Commit(); err != nil {
 		return err
 	}

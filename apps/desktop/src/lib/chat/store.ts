@@ -160,6 +160,9 @@ export class ChatStore {
   private listAttempts = 0;
   private listTimer: Timer | null = null;
   private listDirty = new Set<string>();
+  /** Layout answers are kept in the order they were asked for. */
+  private layoutTicket = 0;
+  private readonly layoutTaken = new Map<string, number>();
 
   private readonly changesFetching = new Set<string>();
   private readonly changesAgain = new Set<string>();
@@ -1009,17 +1012,22 @@ export class ChatStore {
 
   // ---- tree layout -----------------------------------------------------------------------
 
-  private takeLayout(layout: TreeLayout): TreeLayout {
+  async loadLayout(treeId: string) {
+    const ticket = ++this.layoutTicket;
+    return this.takeLayout(ticket, (await this.api.treeLayout(treeId)).layout);
+  }
+
+  /** Drops an answer that something asked later, for example because access changed, has overtaken. */
+  private takeLayout(ticket: number, layout: TreeLayout): TreeLayout {
+    if (ticket < (this.layoutTaken.get(layout.treeId) ?? 0)) return this.state.layouts[layout.treeId] ?? layout;
+    this.layoutTaken.set(layout.treeId, ticket);
     this.set(setLayout(this.state, layout));
     return layout;
   }
 
-  async loadLayout(treeId: string) {
-    return this.takeLayout((await this.api.treeLayout(treeId)).layout);
-  }
-
   async saveLayout(treeId: string, layout: { categories: string[]; items: Array<{ kind: "voice" | "text"; id: string; categoryId?: string }> }) {
-    return this.takeLayout((await this.api.saveTreeLayout(treeId, layout)).layout);
+    const ticket = ++this.layoutTicket;
+    return this.takeLayout(ticket, (await this.api.saveTreeLayout(treeId, layout)).layout);
   }
 
   async createCategory(treeId: string, name: string) {

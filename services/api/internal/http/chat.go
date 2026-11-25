@@ -180,8 +180,10 @@ type ChatConversation struct {
 	Role    string    `json:"role"`
 	CanSend bool      `json:"canSend"`
 	// PeerDeleted is set on a direct message whose other person deleted their account.
-	PeerDeleted    bool                `json:"peerDeleted,omitempty"`
-	CanManage      bool                `json:"canManage"`
+	PeerDeleted bool `json:"peerDeleted,omitempty"`
+	CanManage   bool `json:"canManage"`
+	// Access is the viewer's own access to a text room of a tree.
+	Access         *RoomAccess         `json:"access,omitempty"`
 	MemberCount    int64               `json:"memberCount"`
 	LastSeq        int64               `json:"lastSeq"`
 	LastActivityMs int64               `json:"lastActivityMs"`
@@ -313,6 +315,7 @@ var (
 	errChatRavenReadOnly = fiber.NewError(fiber.StatusForbidden, "Raven can’t read replies.")
 	errChatFriendsOnly   = fiber.NewError(fiber.StatusForbidden, "You can only message people you are friends with.")
 	errChatPeerDeleted   = fiber.NewError(fiber.StatusForbidden, "This account was deleted. You can still read your conversation.")
+	errChatViewOnly      = fiber.NewError(fiber.StatusForbidden, "You can read here, but not write.")
 	errChatNotAllowed    = fiber.NewError(fiber.StatusForbidden, "You are not allowed to do that here.")
 	errChatInvalidBody   = fiber.NewError(fiber.StatusBadRequest, "Raven couldn’t read that request.")
 	errChatGroupFull     = fiber.NewError(fiber.StatusBadRequest, "A group can have up to 50 people.")

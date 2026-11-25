@@ -1,6 +1,8 @@
 // What the server sends for text chat, and what the client keeps about it.
 // The wire shapes mirror services/api/internal/http/chat.go.
 
+import type { RoomAccess } from "@/lib/roomAccess";
+
 export type ChatKind = "dm" | "group" | "nest" | "saved" | "raven";
 
 export interface ChatUser {
@@ -244,6 +246,8 @@ export interface ChatConversation {
   peer?: ChatUser;
   role: string;
   canSend: boolean;
+  /** Your own access to a text room of a space. Absent from an older server. */
+  access?: RoomAccess;
   /** The other person in a direct message deleted their account. */
   peerDeleted?: boolean;
   canManage: boolean;
@@ -354,10 +358,24 @@ export interface TreeLayoutItem {
   id: string;
   categoryId?: string;
   position: number;
+  /** The room's labels you may see. Absent from an older server. */
+  labelIds?: string[];
+  /** Your own access. A room you have none in is not listed. Absent from an older server. */
+  access?: RoomAccess;
+}
+
+/** A label the owner can put on rooms. Members see it only when `visible`. */
+export interface TreeLabel {
+  id: string;
+  name: string;
+  visible: boolean;
+  position: number;
 }
 
 export interface TreeLayout {
   treeId: string;
+  /** Absent from an older server, which has no labels. */
+  labels?: TreeLabel[];
   categories: TreeCategory[];
   items: TreeLayoutItem[];
 }

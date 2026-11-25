@@ -5,6 +5,7 @@ import { Button } from "@/components/ui/button";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { api, type TreeDetails, type TreeMember, type TreeSearchResult } from "@/lib/api";
 import type { ChatStore } from "@/lib/chat/store";
+import { RoomMeta } from "@/components/RoomLabels";
 import { treeCan } from "@/lib/permissions";
 import { RoomDialog } from "./RoomDoor";
 import { cn } from "@/lib/utils";
@@ -272,7 +273,10 @@ export function TreeLobbyView({
                         className="group flex h-11 w-full items-center gap-3 px-3.5 text-left transition-colors hover:bg-secondary"
                       >
                         <NestGlyph kind="voice" className="text-subtle" />
-                        <span className="min-w-0 flex-1 truncate text-body">{nest.name}</span>
+                        <span className="flex min-w-0 flex-1 items-baseline gap-2.5">
+                          <span className="min-w-0 truncate text-body">{nest.name}</span>
+                          <RoomMeta access={nest.access} kind="voice" labels={[]} className="shrink-0" />
+                        </span>
                         {state !== "Empty" && state !== "Created" ? <span className="shrink-0 text-caption text-muted-foreground">{state}</span> : null}
                       </button>
                     );
@@ -330,7 +334,7 @@ export function TreeLobbyView({
         open={createNestOpen}
         onOpenChange={setCreateNestOpen}
         title={`New ${nestSingular}`}
-        description={`Everyone in ${tree.name} will be able to see it and join.`}
+        description={`Everyone in ${tree.name} can see it and join, unless the owner’s access rules say otherwise.`}
         placeholder="Lounge"
         submitLabel={`Create ${nestSingular}`}
         onSubmit={async (name, door) => {
@@ -345,7 +349,7 @@ export function TreeLobbyView({
             open={createTextNestOpen}
             onOpenChange={setCreateTextNestOpen}
             title={`New text ${nestSingular}`}
-            description={`A place to write. Everyone in ${tree.name} can read it and write in it.`}
+            description={`A place to write. Everyone in ${tree.name} can read it and write in it, unless the owner’s access rules say otherwise.`}
             label="Name"
             placeholder="general"
             submitLabel={`Create text ${nestSingular}`}

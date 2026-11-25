@@ -50,6 +50,8 @@ func (t *voiceLimitTracker) due(key string, limited bool, now time.Time) bool {
 	return true
 }
 
+var errCallNotFound = fiber.NewError(fiber.StatusNotFound, "That call isn’t available.")
+
 // voiceLimitsTable names where a nest keeps these flags and the key of its row.
 func voiceLimitsTable(nest Nest) (table, keyColumn, key string) {
 	if nestBelongsToTree(nest) {
@@ -58,10 +60,24 @@ func voiceLimitsTable(nest Nest) (table, keyColumn, key string) {
 	return "nest_members", "nest_id", nest.ID
 }
 
-// voiceLimitsOf reads someone's server mute and deafen for a nest.
+// voiceLimitsOf reads someone's server mute and deafen for a nest, and whether the owner's
+// rules let them only listen there. A room hidden from them counts as listening only too,
+// so someone on their way out of it cannot send anything meanwhile.
 func (s *Server) voiceLimitsOf(nest Nest, userID string) (auth.VoiceLimits, error) {
 	table, keyColumn, key := voiceLimitsTable(nest)
 	var limits auth.VoiceLimits
+	if nestBelongsToTree(nest) {
+		err := s.db.QueryRow(
+			`SELECT tm.server_muted, tm.server_deafened, `+listenOnlySQL("tm", "n.id")+`
+			 FROM tree_members tm JOIN nests n ON n.tree_id = tm.tree_id
+			 WHERE n.id = ? AND tm.user_id = ?`,
+			database.Now(), nest.ID, userID,
+		).Scan(&limits.Muted, &limits.Deafened, &limits.ListenOnly)
+		if errors.Is(err, sql.ErrNoRows) {
+			return auth.VoiceLimits{}, nil
+		}
+		return limits, err
+	}
 	err := s.db.QueryRow(
 		`SELECT server_muted, server_deafened FROM `+table+` WHERE `+keyColumn+` = ? AND user_id = ?`,
 		key, userID,
@@ -72,12 +88,30 @@ func (s *Server) voiceLimitsOf(nest Nest, userID string) (auth.VoiceLimits, erro
 	return limits, err
 }
 
+// listenOnlySQL is whether someone may not send anything in a tree's voice nest. member is
+// the alias of their tree_members row and nest an SQL expression for the nest's id. It takes
+// the current time.
+func listenOnlySQL(member, nest string) string {
+	return `(` + roomLevelSQL(layoutKindVoice, member+".tree_id", nest, member+".user_id", member+".role") + ` < 2)`
+}
+
 // authorizeVoiceModeration checks that the actor may mute or deafen the target in a nest.
 func (s *Server) authorizeVoiceModeration(actorID, targetID string, nest Nest) error {
 	if nestBelongsToTree(nest) {
+		role, level, err := s.treeRoomSeat(s.db, actorID, *nest.TreeID, nestRoom(nest))
+		if err != nil {
+			return err
+		}
+		if role != "" && level == roomLevelNone {
+			return errCallNotFound
+		}
 		// Asked first, so someone outside the tree gets its usual "not found".
 		if _, err := s.authorizeTree(s.db, actorID, *nest.TreeID, treeActionModerateVoice); err != nil {
 			return err
+		}
+		// Someone limited in the room does not run it, whatever their role.
+		if level < roomLevelFull {
+			return errTreeForbidden
 		}
 		targetRole, err := s.treeRoleOf(s.db, targetID, *nest.TreeID)
 		if err != nil {
@@ -94,7 +128,7 @@ func (s *Server) authorizeVoiceModeration(actorID, targetID string, nest Nest) e
 			return err
 		}
 		if !allowed {
-			return fiber.NewError(fiber.StatusNotFound, "That call isn’t available.")
+			return errCallNotFound
 		}
 		return fiber.NewError(fiber.StatusForbidden, "Only whoever started this call can do that.")
 	}
@@ -114,7 +148,7 @@ func (s *Server) authorizeVoiceModeration(actorID, targetID string, nest Nest) e
 func (s *Server) moderateVoice(c *fiber.Ctx) error {
 	nest, err := s.findNest(c.Params("id"))
 	if errors.Is(err, sql.ErrNoRows) {
-		return fiber.NewError(fiber.StatusNotFound, "That call isn’t available.")
+		return errCallNotFound
 	}
 	if err != nil {
 		return err
@@ -162,23 +196,36 @@ func (s *Server) moderateVoice(c *fiber.Ctx) error {
 }
 
 // applyVoiceLimits changes what someone may do in every call they could be in right now.
-// In a tree the limits follow them through its rooms.
+// limits are theirs in nest. In a tree a mute or deafen follows them through its rooms,
+// while listening only is decided in each room.
 func (s *Server) applyVoiceLimits(nest Nest, userID string, limits auth.VoiceLimits) {
-	nestIDs := []string{nest.ID}
-	if nestBelongsToTree(nest) {
-		seats, err := s.stringColumn(
-			`SELECT nm.nest_id FROM nest_members nm
-			 JOIN nests n ON n.id = nm.nest_id
-			 WHERE nm.user_id = ? AND n.tree_id = ? AND n.status = 'active' AND nm.nest_id <> ?`,
-			userID, *nest.TreeID, nest.ID,
-		)
-		if err != nil {
-			log.Printf("voice limits: nests of tree: %v", err)
-		}
-		nestIDs = append(nestIDs, seats...)
+	s.sendVoiceLimits(nest.ID, userID, limits)
+	if !nestBelongsToTree(nest) {
+		return
 	}
-	for _, nestID := range nestIDs {
-		s.sendVoiceLimits(nestID, userID, limits)
+	rows, err := s.db.Query(
+		`SELECT nm.nest_id, `+listenOnlySQL("tm", "n.id")+` FROM nest_members nm
+		 JOIN nests n ON n.id = nm.nest_id
+		 JOIN tree_members tm ON tm.tree_id = n.tree_id AND tm.user_id = nm.user_id
+		 WHERE nm.user_id = ? AND n.tree_id = ? AND n.status = 'active' AND nm.nest_id <> ?`,
+		database.Now(), userID, *nest.TreeID, nest.ID,
+	)
+	if err != nil {
+		log.Printf("voice limits: nests of tree: %v", err)
+		return
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var nestID string
+		there := limits
+		if err := rows.Scan(&nestID, &there.ListenOnly); err != nil {
+			log.Printf("voice limits: nests of tree: %v", err)
+			return
+		}
+		s.sendVoiceLimits(nestID, userID, there)
+	}
+	if err := rows.Err(); err != nil {
+		log.Printf("voice limits: nests of tree: %v", err)
 	}
 }
 

@@ -1,4 +1,4 @@
-import { HeadphoneOff, Headphones, Mic, MicOff, MoreHorizontal } from "lucide-react";
+import { Ear, HeadphoneOff, Headphones, Mic, MicOff, MoreHorizontal } from "lucide-react";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { stripSidecarIdentity } from "@/lib/mediaIdentity";
 import { returnFocusToKeyboardOnly } from "@/lib/focusHandoff";
@@ -18,6 +18,15 @@ export function ServerVoiceMark({ person, className }: { person: Pick<NativeMedi
   return (
     <span className={cn("flex items-center justify-center rounded-full bg-destructive-fill text-destructive-foreground", className)} title={label} aria-label={label} role="img">
       {person.serverDeafened ? <HeadphoneOff className="h-3 w-3" /> : <MicOff className="h-3 w-3" />}
+    </span>
+  );
+}
+
+/** Who is here to listen, where others show that they are muted. Quiet: it is how they came in, not a fault. */
+export function ListeningMark({ className }: { className?: string }) {
+  return (
+    <span className={cn("flex items-center justify-center text-muted-foreground", className)} title="Listening" aria-label="Listening" role="img">
+      <Ear className="h-3.5 w-3.5" />
     </span>
   );
 }

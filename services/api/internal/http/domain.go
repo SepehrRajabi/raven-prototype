@@ -342,12 +342,18 @@ func (s *Server) getTree(c *fiber.Ctx) error {
 	if err != nil {
 		return err
 	}
-	members, err := s.treeMembers(treeID)
+	members, err := s.treeMembers(treeID, user.ID)
 	if err != nil {
 		return err
 	}
-	nests, err := s.queryNests(`WHERE n.tree_id = ? AND n.status = 'active' ORDER BY n.last_activity_at DESC`, treeID)
+	nests, err := s.queryNests(
+		`WHERE n.tree_id = ? AND n.status = 'active' AND `+nestVisibleSQL("n")+` ORDER BY n.last_activity_at DESC`,
+		append([]any{treeID}, nestVisibleArgs(user.ID)...)...,
+	)
 	if err != nil {
+		return err
+	}
+	if err := s.showNestListAccess(user.ID, nests); err != nil {
 		return err
 	}
 	active, inactive := []Nest{}, []Nest{}
@@ -369,11 +375,11 @@ func (s *Server) getTree(c *fiber.Ctx) error {
 	if err != nil {
 		return err
 	}
-	notes, err := s.treeNotes(s.db, treeID, time.Now().UTC())
+	notes, err := s.treeNotesFor(s.db, treeID, user.ID, time.Now().UTC())
 	if err != nil {
 		return err
 	}
-	events, err := s.treeEvents(s.db, treeID, time.Now().UTC(), treeRoleAllows(role, treeActionManageBoard))
+	events, err := s.treeEvents(s.db, treeID, user.ID, time.Now().UTC(), treeRoleAllows(role, treeActionManageBoard))
 	if err != nil {
 		return err
 	}
@@ -965,6 +971,9 @@ func (s *Server) addTreeMember(c *fiber.Ctx) error {
 	if err != nil {
 		return err
 	}
+	if member, err = s.memberSeenBy(member, actor.ID); err != nil {
+		return err
+	}
 	status := fiber.StatusOK
 	if added {
 		status = fiber.StatusCreated
@@ -1063,6 +1072,9 @@ func (s *Server) transferTreeOwnership(c *fiber.Ctx) error {
 	if err != nil {
 		return err
 	}
+	if member, err = s.memberSeenBy(member, actor.ID); err != nil {
+		return err
+	}
 	return c.JSON(fiber.Map{"member": member})
 }
 
@@ -1071,6 +1083,13 @@ func (s *Server) createTreeNest(c *fiber.Ctx) error {
 	treeID := c.Params("id")
 	if _, err := s.authorizeTree(s.db, user.ID, treeID, treeActionManageRooms); err != nil {
 		return err
+	}
+	// A moderator whom a rule keeps from running voice nests could not run this one either.
+	// A nest without an id is covered by the rules that would cover a new one.
+	if level, err := s.roomLevelOf(s.db, treeID, roomKey{Kind: layoutKindVoice}, user.ID); err != nil {
+		return err
+	} else if level < roomLevelFull {
+		return errTreeForbidden
 	}
 	c.Locals("treeId", treeID)
 	return s.createNestWithType(c, "persistent")
@@ -1393,6 +1412,12 @@ func (s *Server) resolveKnock(c *fiber.Ctx, status, reply string, replyUntil tim
 		return fiber.NewError(fiber.StatusConflict, "knock is not pending")
 	}
 	if status == "accepted" && knock.NestID != nil {
+		// A room hidden from the knocker since they knocked is not opened by an answer.
+		if hidden, err := nestHiddenFrom(tx, *knock.NestID, knock.FromUserID); err != nil {
+			return err
+		} else if hidden {
+			return fiber.NewError(fiber.StatusConflict, "knock is not pending")
+		}
 		if _, err := tx.Exec(
 			`INSERT INTO nest_members (nest_id, user_id, role, state, joined_at, created_at, updated_at)
 			 VALUES (?, ?, 'participant', 'joined', ?, ?, ?)
@@ -1410,6 +1435,15 @@ func (s *Server) resolveKnock(c *fiber.Ctx, status, reply string, replyUntil tim
 		return err
 	}
 	s.publishKnockUpdate(updated, status, reply != "")
+	if withdrawing {
+		hidden, err := nestHiddenFrom(s.db, *knock.NestID, actor.ID)
+		if err != nil {
+			return err
+		}
+		if hidden {
+			updated.NestName = nil
+		}
+	}
 	return c.JSON(fiber.Map{"knock": updated})
 }
 
@@ -1547,17 +1581,20 @@ func (s *Server) findTree(treeID string) (Tree, error) {
 	return tree, err
 }
 
-func (s *Server) treeMembers(treeID string) ([]TreeMember, error) {
+// treeMembers lists a tree's members as viewerID may see them: where someone is right now
+// is left out when that is a room hidden from the viewer.
+func (s *Server) treeMembers(treeID, viewerID string) ([]TreeMember, error) {
 	rows, err := s.db.Query(
 		`SELECT tm.tree_id, u.id, u.username, `+spaceNameSQL("tm", "pref", "u")+`, tm.display_name, COALESCE(NULLIF(TRIM(pref.display_name), ''), u.username), tm.role, tm.state, tm.joined_at, tm.left_at,
-		 COALESCE(pres.state, 'offline'), COALESCE(pres.reachability, 'unavailable'), pres.active_nest_id, pres.updated_at
+		 COALESCE(pres.state, 'offline'), COALESCE(pres.reachability, 'unavailable'),
+		 CASE WHEN `+nestHiddenSQL("pres.active_nest_id", "?")+` THEN NULL ELSE pres.active_nest_id END, pres.updated_at
 		 FROM tree_members tm
 		 JOIN users u ON u.id = tm.user_id
 		 LEFT JOIN user_preferences pref ON pref.user_id = u.id
 		 LEFT JOIN user_presence pres ON pres.user_id = u.id
 		 WHERE tm.tree_id = ? AND tm.state = 'joined'
 		 ORDER BY CASE tm.role WHEN 'owner' THEN 0 WHEN 'moderator' THEN 1 ELSE 2 END, u.username`,
-		treeID,
+		viewerID, database.Now(), treeID,
 	)
 	if err != nil {
 		return nil, err
@@ -1591,6 +1628,18 @@ func (s *Server) findTreeMember(treeID, userID string) (TreeMember, error) {
 	).Scan(&member.TreeID, &member.UserID, &member.Username, &member.DisplayName, &member.Nickname, &member.UsualName, &member.Role, &member.State, &member.JoinedAt, &member.LeftAt, &member.PresenceState, &member.Reachability, &member.ActiveNestID, &presenceUpdatedAt)
 	if err == nil {
 		applyEffectiveTreeMemberPresence(&member, presenceUpdatedAt.String)
+	}
+	return member, err
+}
+
+// memberSeenBy is a member as someone else in the tree may see them.
+func (s *Server) memberSeenBy(member TreeMember, viewerID string) (TreeMember, error) {
+	if member.ActiveNestID == nil {
+		return member, nil
+	}
+	hidden, err := nestHiddenFrom(s.db, *member.ActiveNestID, viewerID)
+	if hidden {
+		member.ActiveNestID = nil
 	}
 	return member, err
 }
@@ -1665,14 +1714,15 @@ func (s *Server) treeJoinRequests(treeID string) ([]TreeJoinRequest, error) {
 func (s *Server) friendsForUser(userID string) ([]Friend, error) {
 	rows, err := s.db.Query(
 		`SELECT f.friend_user_id, u.username, COALESCE(NULLIF(TRIM(up.display_name), ''), u.username), f.created_at,
-		 COALESCE(pres.state, 'offline'), COALESCE(pres.reachability, 'unavailable'), pres.active_nest_id, pres.updated_at
+		 COALESCE(pres.state, 'offline'), COALESCE(pres.reachability, 'unavailable'),
+		 CASE WHEN `+nestHiddenSQL("pres.active_nest_id", "f.user_id")+` THEN NULL ELSE pres.active_nest_id END, pres.updated_at
 		 FROM friendships f
 		 JOIN users u ON u.id = f.friend_user_id
 		 LEFT JOIN user_preferences up ON up.user_id = u.id
 		 LEFT JOIN user_presence pres ON pres.user_id = u.id
 		 WHERE f.user_id = ?
 		 ORDER BY u.username`,
-		userID,
+		database.Now(), userID,
 	)
 	if err != nil {
 		return nil, err
@@ -1886,7 +1936,9 @@ func (s *Server) knocksForUser(userID string, pendingOnly bool) ([]Knock, error)
 		// Home is an incoming inbox; the history endpoint also includes sent knocks.
 		statusClause = " AND k.status = 'pending' AND k.from_user_id <> ?"
 	}
-	args := []any{userID, userID, userID, userID, userID}
+	args := []any{userID, userID}
+	args = append(args, nestModeratorArgs(userID)...)
+	args = append(args, userID, userID, database.Now(), database.Now())
 	if pendingOnly {
 		args = append(args, userID)
 	}
@@ -1901,7 +1953,9 @@ func (s *Server) knocksForUser(userID string, pendingOnly bool) ([]Knock, error)
 		 	OR (k.status = 'pending' AND EXISTS (
 		 		SELECT 1 FROM session_participants inside
 		 		WHERE inside.nest_id = k.nest_id AND inside.user_id = ? AND inside.left_at IS NULL
-		 	)))`+statusClause+`
+		 	)))
+		 	AND NOT `+nestHiddenSQL("k.nest_id", "?")+`
+		 	AND (k.status <> 'pending' OR NOT `+nestHiddenSQL("k.nest_id", "k.from_user_id")+`)`+statusClause+`
 		 ORDER BY k.created_at DESC`,
 		args...,
 	)
@@ -1921,8 +1975,9 @@ func (s *Server) pendingInvitesForUser(userID string) ([]Invitation, error) {
 		 JOIN nests n ON n.id = ni.nest_id
 		 LEFT JOIN nest_members nm ON nm.nest_id = ni.nest_id AND nm.user_id = ni.invited_user_id
 		 WHERE ni.invited_user_id = ? AND n.status = 'active' AND COALESCE(nm.state, 'invited') = 'invited'
+		   AND NOT `+nestHiddenSQL("ni.nest_id", "ni.invited_user_id")+`
 		 ORDER BY ni.created_at DESC`,
-		userID,
+		userID, database.Now(),
 	)
 	if err != nil {
 		return nil, err
@@ -1997,6 +2052,9 @@ func (s *Server) canResolveKnock(userID string, knock Knock) (bool, error) {
 	}
 	if !nestBelongsToTree(nest) {
 		return false, nil
+	}
+	if hidden, err := nestHiddenFrom(s.db, nest.ID, userID); err != nil || hidden {
+		return false, err
 	}
 	var inside int
 	err = s.db.QueryRow(

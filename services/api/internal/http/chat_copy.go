@@ -200,9 +200,11 @@ const chatOriginSourcesBatch = 500
 
 // chatOriginSourcesFor describes a source conversation to each viewer who may see it: they
 // can read it (as chatAccessFor decides: messages allowed for their account, and a member
-// of the conversation, or of the tree for a text nest), or it is a text nest of a public
-// tree. Viewers who may not see it are absent from the map. Saved messages and Raven's
-// own conversation are nobody's place to go, so a copy from them has no source.
+// of the conversation, or of the tree with access to the nest for a text nest), or it is a
+// text nest of a public tree that isn't hidden from them. Someone outside the tree sees
+// what an ordinary member would. Viewers who may not see it are absent from the map. Saved
+// messages and Raven's own conversation are nobody's place to go, so a copy from them has
+// no source.
 func (s *Server) chatOriginSourcesFor(q chatQuerier, conversationID string, viewerIDs []string) (map[string]*ChatOriginSource, error) {
 	out := map[string]*ChatOriginSource{}
 	if len(viewerIDs) == 0 {
@@ -210,10 +212,13 @@ func (s *Server) chatOriginSourcesFor(q chatQuerier, conversationID string, view
 	}
 	var kind, status, name string
 	var treeID, visibility sql.NullString
+	var memberLevel roomLevel
+	now := database.Now()
 	err := q.QueryRow(
-		`SELECT c.kind, c.status, c.name, c.tree_id, t.visibility FROM chat_conversations c LEFT JOIN trees t ON t.id = c.tree_id WHERE c.id = ?`,
-		conversationID,
-	).Scan(&kind, &status, &name, &treeID, &visibility)
+		`SELECT c.kind, c.status, c.name, c.tree_id, t.visibility, `+roomLevelSQL(layoutKindText, "c.tree_id", "c.id", "''", "'member'")+`
+		 FROM chat_conversations c LEFT JOIN trees t ON t.id = c.tree_id WHERE c.id = ?`,
+		now, conversationID,
+	).Scan(&kind, &status, &name, &treeID, &visibility, &memberLevel)
 	if errors.Is(err, sql.ErrNoRows) || (err == nil && status != "active") {
 		return out, nil
 	}
@@ -226,18 +231,22 @@ func (s *Server) chatOriginSourcesFor(q chatQuerier, conversationID string, view
 		return out, nil
 	}
 
-	// Who among the viewers may read here at all, in batches.
-	readers := map[string]bool{}
+	// Who among the viewers may read here at all, and from whom a text nest is hidden, in
+	// batches.
+	readers, hiddenFrom := map[string]bool{}, map[string]bool{}
+	nestLevel := roomLevelSQL(layoutKindText, "tm.tree_id", "c.id", "tm.user_id", "tm.role")
 	for start := 0; start < len(viewerIDs); start += chatOriginSourcesBatch {
 		batch := viewerIDs[start:min(start+chatOriginSourcesBatch, len(viewerIDs))]
 		member := `SELECT 1 FROM chat_members cm WHERE cm.conversation_id = ? AND cm.user_id = u.id AND cm.state = 'joined'`
-		scope := conversationID
+		args := make([]any, 0, len(batch)+4)
+		args = append(args, conversationID)
 		if kind == chatKindNest {
-			member = `SELECT 1 FROM tree_members tm WHERE tm.tree_id = ? AND tm.user_id = u.id AND tm.state = 'joined'`
-			scope = treeID.String
+			member = `SELECT 1 FROM chat_conversations c
+			   JOIN tree_members tm ON tm.tree_id = c.tree_id AND tm.user_id = u.id AND tm.state = 'joined'
+			   WHERE c.id = ? AND ` + nestLevel + ` > 0`
+			args = append(args, now)
 		}
-		args := make([]any, 0, len(batch)+3)
-		args = append(args, scope, database.CapabilityMessagesRead, database.CapabilityMessagesRead)
+		args = append(args, database.CapabilityMessagesRead, database.CapabilityMessagesRead)
 		for _, id := range batch {
 			args = append(args, id)
 		}
@@ -254,6 +263,23 @@ func (s *Server) chatOriginSourcesFor(q chatQuerier, conversationID string, view
 		for _, id := range ids {
 			readers[id] = true
 		}
+		if kind != chatKindNest {
+			continue
+		}
+		args = []any{conversationID, now}
+		for _, id := range batch {
+			args = append(args, id)
+		}
+		ids, err = stringColumnTx(q,
+			`SELECT tm.user_id FROM chat_conversations c
+			 JOIN tree_members tm ON tm.tree_id = c.tree_id AND tm.state = 'joined'
+			 WHERE c.id = ? AND `+nestLevel+` = 0 AND tm.user_id IN (`+chatPlaceholders(len(batch))+`)`, args...)
+		if err != nil {
+			return nil, err
+		}
+		for _, id := range ids {
+			hiddenFrom[id] = true
+		}
 	}
 
 	switch kind {
@@ -264,9 +290,9 @@ func (s *Server) chatOriginSourcesFor(q chatQuerier, conversationID string, view
 		}
 	case chatKindNest:
 		source := &ChatOriginSource{ConversationID: conversationID, Kind: kind, Name: name, TreeID: treeID.String}
-		public := visibility.String == "public"
+		public := visibility.String == "public" && memberLevel > roomLevelNone
 		for _, id := range viewerIDs {
-			if readers[id] || public {
+			if readers[id] || (public && !hiddenFrom[id]) {
 				out[id] = source
 			}
 		}
@@ -298,8 +324,9 @@ func (s *Server) chatOriginSourcesFor(q chatQuerier, conversationID string, view
 var chatMentionToken = regexp.MustCompile(`<@([unt]):([^\s<>]{1,64})>`)
 
 // chatMentionsToPlain rewrites mention tokens to "@name", so a copy never mentions
-// anyone and never points into a conversation by itself.
-func chatMentionsToPlain(q chatQuerier, body string) (string, error) {
+// anyone and never points into a conversation by itself. A nest the copier can't see
+// keeps its name to itself.
+func chatMentionsToPlain(q chatQuerier, copierID, body string) (string, error) {
 	var failure error
 	out := chatMentionToken.ReplaceAllStringFunc(body, func(token string) string {
 		if failure != nil {
@@ -307,16 +334,25 @@ func chatMentionsToPlain(q chatQuerier, body string) (string, error) {
 		}
 		match := chatMentionToken.FindStringSubmatch(token)
 		var query string
+		args := []any{match[2]}
+		// The nests this copier may know the name of. Not deleted ones: deleting a nest
+		// deletes the rules that may have hidden it.
+		seenNest := func(kind, rooms string) string {
+			args = append(args, copierID, database.Now())
+			return `SELECT r.name FROM ` + rooms + ` r
+			 JOIN tree_members tm ON tm.tree_id = r.tree_id AND tm.state = 'joined'
+			 WHERE r.id = ? AND r.status = 'active' AND tm.user_id = ? AND ` + roomLevelSQL(kind, "tm.tree_id", "r.id", "tm.user_id", "tm.role") + ` > 0`
+		}
 		switch match[1] {
 		case "u":
 			query = `SELECT COALESCE(NULLIF(TRIM(p.display_name), ''), u.username) FROM users u LEFT JOIN user_preferences p ON p.user_id = u.id WHERE u.id = ?`
 		case "n":
-			query = `SELECT name FROM nests WHERE id = ?`
+			query = seenNest(layoutKindVoice, "nests")
 		default:
-			query = `SELECT name FROM chat_conversations WHERE id = ? AND kind = 'nest'`
+			query = seenNest(layoutKindText, "chat_conversations")
 		}
 		var name string
-		err := q.QueryRow(query, match[2]).Scan(&name)
+		err := q.QueryRow(query, args...).Scan(&name)
 		if errors.Is(err, sql.ErrNoRows) {
 			return "@"
 		}
@@ -483,7 +519,7 @@ func (s *Server) chatCopyMessagesTx(tx *database.Tx, caller User, sourceIDs []st
 				return result, err
 			}
 		}
-		body, err := chatMentionsToPlain(tx, source.body)
+		body, err := chatMentionsToPlain(tx, caller.ID, source.body)
 		if err != nil {
 			return result, err
 		}
@@ -867,7 +903,10 @@ func (s *Server) chatInsertNoteTx(tx *database.Tx, sender User, targetID, body s
 	if err != nil {
 		return "", err
 	}
-	if body, err = chatCheckNestMentions(tx, access, body); err != nil {
+	if !access.CanSend {
+		return "", access.sendError()
+	}
+	if body, err = chatCheckNestMentions(tx, access, sender.ID, body); err != nil {
 		return "", err
 	}
 	noteID := auth.NewID()

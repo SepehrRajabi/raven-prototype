@@ -144,6 +144,7 @@ function pages({ labels, mac }: SettingsSearchContext): PageSpec[] {
         { title: "Theme", keywords: ["colour", "color", "dark", "accent"], items: [{ title: "Strength", keywords: ["saturation"] }, { title: "Depth", keywords: ["darkness", "contrast"] }] },
         { title: "Custom themes", keywords: ["css", "file", "load", "import", "export", "editor", "preset", "colours", "colors"], items: [{ title: "Built-in theme", keywords: ["reset", "default"] }] },
         { title: "Words", keywords: ["labels", "names", "terminology", "tree", "nest", "space", "room"], items: ["Tree and Nest", "Space and Room"] },
+        { title: "Labels", keywords: ["tags", "room labels", "nest labels", "hide labels"], items: [`Show labels on ${nest}s`] },
         { title: "Speaking colour", keywords: ["speaking color", "talking", "ring", "mic level"] },
         { title: "Bottom bar", keywords: ["dock", "order", "buttons", "rearrange"] },
       ],

@@ -145,15 +145,18 @@ type Nest struct {
 	Status         string  `json:"status"`
 	LifecycleState string  `json:"lifecycleState"`
 	Door           string  `json:"door"`
-	CreatedAt      string  `json:"createdAt"`
-	UpdatedAt      string  `json:"updatedAt"`
-	ArchivedAt     *string `json:"archivedAt,omitempty"`
-	EndedAt        *string `json:"endedAt,omitempty"`
-	EmptySince     *string `json:"emptySince,omitempty"`
-	ExpiresAt      *string `json:"expiresAt,omitempty"`
-	LastActivityAt string  `json:"lastActivityAt"`
-	ShareableLink  string  `json:"shareableLink"`
-	HTTPLink       string  `json:"httpLink"`
+	// Access is the viewer's own access to a tree's room. It is left out of copies of a
+	// nest that are not made for one person.
+	Access         *RoomAccess `json:"access,omitempty"`
+	CreatedAt      string      `json:"createdAt"`
+	UpdatedAt      string      `json:"updatedAt"`
+	ArchivedAt     *string     `json:"archivedAt,omitempty"`
+	EndedAt        *string     `json:"endedAt,omitempty"`
+	EmptySince     *string     `json:"emptySince,omitempty"`
+	ExpiresAt      *string     `json:"expiresAt,omitempty"`
+	LastActivityAt string      `json:"lastActivityAt"`
+	ShareableLink  string      `json:"shareableLink"`
+	HTTPLink       string      `json:"httpLink"`
 }
 
 type Invitation struct {
@@ -504,6 +507,7 @@ func (s *Server) routes() {
 	s.registerAdminRoutes(authenticated)
 	service := authenticated.Use(s.requireCompatibleClient)
 	s.registerChatRoutes(service)
+	s.registerRoomAccessRoutes(service)
 	s.registerLibraryRoutes(service)
 	s.registerWorkshopRoutes(service)
 	service.Get("/invites", s.listInvites)
@@ -1079,6 +1083,9 @@ func (s *Server) createNestWithType(c *fiber.Ctx, defaultType string) error {
 	if err != nil {
 		return err
 	}
+	if err := s.showNestAccess(user.ID, &nest); err != nil {
+		return err
+	}
 	return c.Status(fiber.StatusCreated).JSON(fiber.Map{"nest": withLinks(nest)})
 }
 
@@ -1087,15 +1094,23 @@ func (s *Server) listNests(c *fiber.Ctx) error {
 		return err
 	}
 	user := currentUser(c)
-	created, err := s.queryNests(`WHERE n.creator_user_id = ? ORDER BY n.created_at DESC`, user.ID)
+	// A room of a tree is listed only to someone who may see it, whoever created it.
+	list := func(clause string) ([]Nest, error) {
+		nests, err := s.queryNests(clause+` AND `+nestVisibleSQL("n")+` ORDER BY n.created_at DESC`, append([]any{user.ID}, nestVisibleArgs(user.ID)...)...)
+		if err != nil {
+			return nil, err
+		}
+		return nests, s.showNestListAccess(user.ID, nests)
+	}
+	created, err := list(`WHERE n.creator_user_id = ?`)
 	if err != nil {
 		return err
 	}
-	invited, err := s.queryNests(`JOIN nest_members nm ON nm.nest_id = n.id WHERE nm.user_id = ? AND nm.state = 'invited' ORDER BY n.created_at DESC`, user.ID)
+	invited, err := list(`JOIN nest_members nm ON nm.nest_id = n.id WHERE nm.user_id = ? AND nm.state = 'invited'`)
 	if err != nil {
 		return err
 	}
-	joined, err := s.queryNests(`JOIN nest_members nm ON nm.nest_id = n.id WHERE nm.user_id = ? AND nm.state = 'joined' ORDER BY n.created_at DESC`, user.ID)
+	joined, err := list(`JOIN nest_members nm ON nm.nest_id = n.id WHERE nm.user_id = ? AND nm.state = 'joined'`)
 	if err != nil {
 		return err
 	}
@@ -1118,6 +1133,9 @@ func (s *Server) getNest(c *fiber.Ctx) error {
 	}
 	if nest.Status != "active" || level < nestAccessPending {
 		return fiber.NewError(fiber.StatusForbidden, "not allowed to view this Nest")
+	}
+	if err := s.showNestAccess(user.ID, &nest); err != nil {
+		return err
 	}
 	details, err := s.nestDetails(nest)
 	if err != nil {
@@ -1292,13 +1310,17 @@ func (s *Server) inviteUser(c *fiber.Ctx) error {
 	}
 	if nestBelongsToTree(nest) {
 		// A nest in a tree is for the tree's members, who can already walk in. Inviting
-		// someone from outside would let them past the tree's own door.
-		role, err := s.treeRoleOf(s.db, invited.ID, *nest.TreeID)
+		// someone from outside would let them past the tree's own door, and inviting someone
+		// the room is hidden from would show it to them.
+		role, level, err := s.treeRoomSeat(s.db, invited.ID, *nest.TreeID, nestRoom(nest))
 		if err != nil {
 			return err
 		}
 		if role == "" {
 			return fiber.NewError(fiber.StatusBadRequest, "Add them to the Tree first. Its Nests are for its members.")
+		}
+		if level == roomLevelNone {
+			return fiber.NewError(fiber.StatusBadRequest, "They can’t use this Nest. The Tree’s owner decides who can.")
 		}
 	}
 	now := database.Now()
@@ -1505,6 +1527,17 @@ func (s *Server) resolveJoinRequest(c *fiber.Ctx, status string) error {
 }
 
 func (s *Server) joinOrRequest(nest Nest, user User) (fiber.Map, error) {
+	if nestBelongsToTree(nest) {
+		// Someone a room is hidden from gets the answer an unknown id or code gets, before
+		// anything else about the room can show.
+		role, level, err := s.treeRoomSeat(s.db, user.ID, *nest.TreeID, nestRoom(nest))
+		if err != nil {
+			return nil, err
+		}
+		if role != "" && level == roomLevelNone {
+			return nil, sql.ErrNoRows
+		}
+	}
 	if nest.Status != "active" || nest.LifecycleState == "closed" || nest.LifecycleState == "expired" {
 		return nil, fiber.NewError(fiber.StatusGone, "Nest is no longer active")
 	}
@@ -1527,6 +1560,9 @@ func (s *Server) joinOrRequest(nest Nest, user User) (fiber.Map, error) {
 		return nil, err
 	}
 	now := database.Now()
+	if err := s.showNestAccess(user.ID, &nest); err != nil {
+		return nil, err
+	}
 	if state == "joined" && direct {
 		return fiber.Map{"status": "joined", "nest": withLinks(nest)}, nil
 	}
@@ -1827,7 +1863,7 @@ func (s *Server) pendingAdmissionForCreator(userID string) ([]JoinRequest, error
 		 JOIN users u ON u.id = jr.user_id
 		 LEFT JOIN user_preferences up ON up.user_id = u.id
 		 WHERE `+nestModeratorSQL("n")+` AND jr.status = 'pending' AND n.status = 'active'
-		 ORDER BY jr.created_at DESC`, userID, userID,
+		 ORDER BY jr.created_at DESC`, nestModeratorArgs(userID)...,
 	)
 	if err != nil {
 		return nil, err
@@ -1947,6 +1983,9 @@ func (s *Server) renameNest(c *fiber.Ctx) error {
 		if nest, err = s.setNestDoor(nest, door); err != nil {
 			return err
 		}
+	}
+	if err := s.showNestAccess(user.ID, &nest); err != nil {
+		return err
 	}
 	return c.JSON(fiber.Map{"nest": withLinks(nest)})
 }

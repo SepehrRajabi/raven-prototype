@@ -361,6 +361,7 @@ func (s *Server) deleteAccountCore(user User, erase bool) error {
 		{`DELETE FROM chat_user_settings WHERE user_id = ?`, []any{user.ID}},
 		{`UPDATE tree_members SET state = 'left', role = 'member', left_at = ?, updated_at = ? WHERE user_id = ? AND state = 'joined'`, []any{now, now, user.ID}},
 		{`DELETE FROM tree_join_requests WHERE user_id = ?`, []any{user.ID}},
+		{`DELETE FROM tree_access_rules WHERE subject_user_id = ?`, []any{user.ID}},
 		{`DELETE FROM nest_members WHERE user_id = ?`, []any{user.ID}},
 		{`DELETE FROM nest_join_requests WHERE user_id = ?`, []any{user.ID}},
 		{`DELETE FROM nest_invitations WHERE invited_user_id = ? OR invited_by_user_id = ?`, []any{user.ID, user.ID}},

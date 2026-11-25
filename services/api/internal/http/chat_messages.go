@@ -446,7 +446,7 @@ func (s *Server) storeChatMessage(sender User, conversationID, clientMessageID, 
 	if !access.CanSend {
 		return chatStored{}, access.sendError()
 	}
-	if body, err = chatCheckNestMentions(tx, access, body); err != nil {
+	if body, err = chatCheckNestMentions(tx, access, sender.ID, body); err != nil {
 		return chatStored{}, err
 	}
 
@@ -634,7 +634,7 @@ func (s *Server) editChatMessage(c *fiber.Ctx) error {
 	if !access.CanSend {
 		return access.sendError()
 	}
-	if body, err = chatCheckNestMentions(tx, access, body); err != nil {
+	if body, err = chatCheckNestMentions(tx, access, user.ID, body); err != nil {
 		return err
 	}
 

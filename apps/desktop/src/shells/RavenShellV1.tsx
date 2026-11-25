@@ -23,6 +23,8 @@ import { useNestEntry } from "./ravenv1/useNestEntry";
 import { useEntryToasts } from "./ravenv1/useEntryToasts";
 import { connectedPeerIds } from "@/lib/callArrivals";
 import { useMessageNotifications } from "./ravenv1/useMessageNotifications";
+import { listenOnlyIn } from "./ravenv1/ownAccess";
+import { useLostRoom } from "./ravenv1/useLostRoom";
 import { useChat } from "./ravenv1/useChat";
 import { audioCommands } from "@/lib/audio";
 import { useRavenUpdater } from "@/lib/updater";
@@ -58,6 +60,7 @@ export function RavenShellV1() {
     presenceState: data.presence?.state,
     presenceReachability: data.presence?.reachability,
     localUserId: data.user?.id,
+    listenOnlyIn: (nestId) => listenOnlyIn(data, nestId),
   });
   const entry = useNestEntry(data.joinNest, media.joinMediaSession, media.cancelMediaJoin);
   const leaveCall = media.leaveMediaSession;
@@ -271,6 +274,16 @@ export function RavenShellV1() {
         : { entries: [{ kind: "home" }], index: 0 },
     );
   }, []);
+
+  /** The view is of something that is gone: show its tree there instead, so Back does not return to it. */
+  const fallBackToTree = useCallback((treeId: string) => {
+    setHistory((current) => {
+      const entries = [...current.entries];
+      entries[current.index] = { kind: "tree", id: treeId };
+      return { entries, index: current.index };
+    });
+  }, []);
+  useLostRoom({ data, media, chat, view, onFallBack: fallBackToTree });
 
   const navigation = useMemo(
     () => ({ canGoBack, canGoForward, goBack, goForward, navigate, leaveView }),

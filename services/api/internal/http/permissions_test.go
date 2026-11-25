@@ -130,6 +130,7 @@ func TestTreeRolesFormAStrictOrder(t *testing.T) {
 		{treeActionRenameMember, false, true, true},
 		{treeActionManageBoard, false, true, true},
 		{treeActionManageStickers, false, true, true},
+		{treeActionManageAccess, false, false, true},
 		{treeActionEditSettings, false, false, true},
 		{treeActionAssignRoles, false, false, true},
 		{treeActionTransfer, false, false, true},

@@ -1,7 +1,7 @@
 # Accounts, permissions and the admin dashboard
 
 Who may do what in Raven, where that is decided, and how the server's administrator runs
-it. There are three layers. Each answers a different question, and none of them stands in
+it. There are four layers. Each answers a different question, and none of them stands in
 for another.
 
 | Layer | Question | Set by | Stored in |
@@ -9,6 +9,7 @@ for another.
 | Server role | May this account use the admin dashboard? | An administrator, or the command line | `users.role` |
 | Account status and capabilities | May this account use this part of Raven at all? | An administrator | `users.status`, `server_capability_defaults`, `user_capability_overrides` |
 | Space role | What may this person do in this space? | The space's owner | `tree_members.role` |
+| Room access | How much of each room in the space may this person use? | The space's owner | `tree_access_rules` |
 
 The database and the desktop app say Tree and Nest; the dashboard and this page say space
 and room. They are the same things.
@@ -75,6 +76,7 @@ at a person is allowed only against someone below you.
 | Keep the space board: house rules (later pinned notes and events) | | yes | yes |
 | Keep the space's GIF and sticker set: add, rename, organise, remove (`stickers.manage`) | | yes | yes |
 | Name, description, picture, visibility, join policy, whether saved stickers may be made public | | | yes |
+| Set who may use which room, and the rooms' labels (`access.manage`) | | | yes |
 | Make someone a moderator or a member | | | yes |
 | Transfer ownership, delete the space | | | yes |
 
@@ -82,7 +84,7 @@ at a person is allowed only against someone below you.
   (`idx_tree_members_one_owner`). Ownership moves by transfer, and the previous owner
   becomes a moderator.
 - Rooms inside a space belong to the space. Its members may enter them and its owner and
-  moderators run them. Who created a room does not matter, and nobody from outside the
+  moderators run them, within the room access rules below. Who created a room does not matter, and nobody from outside the
   space can be invited in.
 - A room outside any space (a temporary one) is run by whoever started it.
 - Group chats keep their own two roles, owner and member.
@@ -99,6 +101,63 @@ with each space as `viewer: { role, permissions }`, which is what the desktop ap
 
 Someone outside a space gets `404` for it, the same as for a space that does not exist.
 Someone inside it without the role gets `403`.
+
+### Room access
+
+Without rules, everyone in a space may use every room. The owner can write rules that say
+otherwise. A rule has four parts:
+
+| Part | Choices |
+|---|---|
+| Who | One person, or every member |
+| Where | One room, every room with a label, or every voice room or every text room |
+| How much | `none`: the room is hidden. `view`: read a text room without writing, or listen in a voice room without sending sound, camera or screen. `full` |
+| Until | No end, or a time between a minute and five years away |
+
+One request can set or clear rules for up to 200 people in up to 200 places, all or none.
+
+**The closest rule wins.** A rule about the person beats one about every member. After that,
+a rule about the room beats one about a label, which beats one about every room of a kind.
+Where several labels of a room disagree, the one that allows least wins.
+
+- The owner is never limited. Rules about every member apply to members, not moderators,
+  who run the rooms; a moderator is limited only by a rule about them. In a room where they
+  have less than full access they do not run it.
+- Only the owner has `access.manage`, which covers labels as well, because labelling a room
+  can open it.
+- A rule that ends stops counting at that moment. Within 10 seconds the server removes it
+  and tells the people it was about.
+- A change takes effect at once. Someone who loses a room is put out of its call, and
+  someone who may now only listen has publishing taken away by LiveKit.
+- Someone given a room sees its whole history. What was written while it was hidden from
+  them does not count as unread.
+- Leaving a space removes the access a person was given there and keeps their limits, so
+  leaving and coming back lifts nothing and brings nothing back. Rules about someone who
+  becomes owner are removed.
+- Rules do not bind the admin dashboard, which cannot read messages or enter calls, and it
+  does not show them.
+
+**Labels.** A room can have up to 20 labels and a space up to 50. Members see a label only
+when the owner shows it, which is off to begin with, and only on rooms they can see. Anyone
+can turn labels off for themselves on their device (Settings › Appearance). A label kept
+private can still decide access, but never secretly for the person it concerns: everyone
+can see their own level in each room they can see, whether it was set for them or for every
+member, and when it ends. Nobody but the owner sees another person's rules. There is no
+history of rules and no record of who tried to enter. The account export lists what was set
+for the person.
+
+A hidden room is left out of lists, layouts, presence, events, knocks, codes, invitations,
+mentions, forwarded sources, board events and port shares. Some things remain:
+
+- A message body keeps the opaque id of a mentioned room, without its name.
+- A category whose rooms are all hidden is still listed, empty.
+- A moderator who invites someone to a room that is hidden from that person is told it
+  cannot be done.
+- Raven's own messages sent before a rule keep the room's name.
+
+The rule is written in `internal/http/room_access.go`, once as SQL (`roomLevelSQL`) and once
+in Go (`accessModel`); a test keeps the two in step. Every change goes through
+`changeTreeAccess` in `room_access_changes.go`, whose lock holds within one API process.
 
 ### Server mute and server deafen
 
@@ -248,6 +307,7 @@ the actor `cli`.
 
 ## Tests
 
+`internal/http/room_access_*_test.go` cover the access rules and where they are enforced.
 `internal/http/permissions_test.go` covers the role table, rank, leaving and transfer,
 every capability on and off, suspension, the forced password change, sign-in throttling,
 call eviction, event scoping and each admin route as an administrator and as someone who

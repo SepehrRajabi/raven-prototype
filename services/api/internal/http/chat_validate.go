@@ -5,6 +5,8 @@ import (
 	"strings"
 	"unicode/utf8"
 
+	"raven/services/api/internal/database"
+
 	"github.com/gofiber/fiber/v2"
 )
 
@@ -135,10 +137,11 @@ func validChatReaction(s string) bool {
 var chatNestMention = regexp.MustCompile(`<@([nt]):([^\s<>]{1,64})>`)
 
 // chatCheckNestMentions keeps nest mentions only inside a text nest and only when they
-// point at a nest of that same tree, so a message cannot point anyone across spaces. Any
-// other nest mention is rewritten to a plain "@". Mentions of people need no check: only
-// members receive the message, and an unknown id is drawn as "someone".
-func chatCheckNestMentions(q chatQuerier, access chatAccess, body string) (string, error) {
+// point at a nest of that same tree that the sender can see, so a message cannot point
+// anyone across spaces or be used to ask whether a hidden nest is there. Any other nest
+// mention is rewritten to a plain "@". Mentions of people need no check: only people who
+// can read here receive the message, and an unknown id is drawn as "someone".
+func chatCheckNestMentions(q chatQuerier, access chatAccess, senderID, body string) (string, error) {
 	if !strings.Contains(body, "<@n:") && !strings.Contains(body, "<@t:") {
 		return body, nil
 	}
@@ -149,20 +152,33 @@ func chatCheckNestMentions(q chatQuerier, access chatAccess, body string) (strin
 		}
 		match := chatNestMention.FindStringSubmatch(token)
 		if access.Kind == chatKindNest && access.TreeID != "" {
-			query := `SELECT COUNT(*) FROM nests WHERE id = ? AND tree_id = ? AND status = 'active' AND type = 'persistent'`
-			if match[1] == "t" {
-				query = `SELECT COUNT(*) FROM chat_conversations WHERE id = ? AND tree_id = ? AND kind = 'nest' AND status = 'active'`
-			}
-			var count int
-			if err := q.QueryRow(query, match[2], access.TreeID).Scan(&count); err != nil {
+			seen, err := mentionedRoomSeenBy(q, access.TreeID, senderID, match[1], match[2])
+			if err != nil {
 				failure = err
 				return token
 			}
-			if count > 0 {
+			if seen {
 				return token
 			}
 		}
 		return "@"
 	})
 	return out, failure
+}
+
+// mentionedRoomSeenBy reports whether a mention ("n" for a voice nest, "t" for a text
+// nest) points at a nest that is in the tree and that this member can see.
+func mentionedRoomSeenBy(q chatQuerier, treeID, userID, mention, roomID string) (bool, error) {
+	kind, rooms := layoutKindVoice, `nests r ON r.tree_id = tm.tree_id AND r.type = 'persistent'`
+	if mention == "t" {
+		kind, rooms = layoutKindText, `chat_conversations r ON r.tree_id = tm.tree_id AND r.kind = 'nest'`
+	}
+	var count int
+	err := q.QueryRow(
+		`SELECT COUNT(*) FROM tree_members tm JOIN `+rooms+` AND r.status = 'active'
+		 WHERE tm.tree_id = ? AND tm.user_id = ? AND tm.state = 'joined' AND r.id = ?
+		   AND `+roomLevelSQL(kind, "tm.tree_id", "r.id", "tm.user_id", "tm.role")+` > 0`,
+		treeID, userID, roomID, database.Now(),
+	).Scan(&count)
+	return count > 0, err
 }

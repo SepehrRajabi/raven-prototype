@@ -44,7 +44,7 @@ func spacePath(treeID, userID string) string {
 
 func memberNames(t *testing.T, server *Server, treeID, userID string) (string, string) {
 	t.Helper()
-	members, err := server.treeMembers(treeID)
+	members, err := server.treeMembers(treeID, "")
 	if err != nil {
 		t.Fatal(err)
 	}

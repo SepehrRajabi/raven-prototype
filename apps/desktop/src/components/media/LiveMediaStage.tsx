@@ -18,12 +18,12 @@ import { MediaTile, type MediaFit } from "./MediaTile";
 import { HandMark } from "./HandMark";
 import { SelfMark } from "./SelfMark";
 import { othersSpeaking, useYourTurn } from "@/lib/raisedHand";
-import { ServerVoiceMark, VoiceModerationMenu, type VoiceModeration } from "./VoiceModeration";
+import { ListeningMark, ServerVoiceMark, VoiceModerationMenu, type VoiceModeration } from "./VoiceModeration";
 import { CallVotePill } from "./CallVotePill";
 import type { LocalCallVote } from "@/lib/callVote";
 import { WatcherStack, WatchingMark } from "./WatcherStack";
 import { motionClass, useMotionArmed, useStageMotion, type MotionEntry } from "./stageMotion";
-import { bestGridColumns, newestScreenShareKey, newShareKeys, partitionStageTiles, resolveStageFocusKeys } from "./stageState";
+import { bestGridColumns, newestScreenShareKey, newShareKeys, partitionStageTiles, resolveStageFocusKeys, showsListening } from "./stageState";
 import { isConnecting } from "@/lib/callArrivals";
 import { useNativeMediaTiles, type NativeMediaTile } from "./useNativeMediaTiles";
 import { effectiveReceiving, receivingKey, useVideoReceiving } from "./useVideoReceiving";
@@ -164,7 +164,7 @@ export function LiveMediaStage({
     const present = isConnecting(nativeTile.participantId, nativeTile.isLocal, connectedPeerIds)
       ? { ...nativeTile, connecting: true }
       : nativeTile;
-    const tile = callState ? { ...present, away: callState.away, deafened: callState.deafened, serverMuted: callState.serverMuted, serverDeafened: callState.serverDeafened, handOrder: callState.handOrder } : present;
+    const tile = callState ? { ...present, away: callState.away, deafened: callState.deafened, serverMuted: callState.serverMuted, serverDeafened: callState.serverDeafened, listenOnly: callState.listenOnly, handOrder: callState.handOrder } : present;
     if (tile.isLocal) {
       // Your own share is a card unless you ask for a preview. Without an <img> nothing
       // subscribes to its frames, so no JPEGs are made for it.
@@ -649,7 +649,9 @@ function VoiceRoom({ people, sharers, onWatch, satellites, moderation, voteToRem
                 />
               ) : null}
               {phase !== "leave" ? <VoiceModerationMenu person={person} moderation={moderation} onVoteToRemove={onVoteToRemove} className="absolute -right-0.5 -top-0.5 h-6 w-6 bg-card" /> : null}
-              {(person.serverMuted || person.serverDeafened) && !person.connecting ? (
+              {showsListening(person) ? (
+                <ListeningMark className="absolute -bottom-0.5 -right-0.5 h-6 w-6 rounded-full bg-card" />
+              ) : (person.serverMuted || person.serverDeafened) && !person.connecting ? (
                 <ServerVoiceMark person={person} className="absolute -bottom-0.5 -right-0.5 h-6 w-6" />
               ) : person.deafened && !person.connecting ? (
                 <span className="absolute -bottom-0.5 -right-0.5 flex h-6 w-6 items-center justify-center rounded-full bg-card text-destructive" title="Deafened" aria-label="Deafened" role="img">
@@ -715,6 +717,8 @@ function VoiceStrip({ people, sharers, onWatch, satellites, moderation, voteToRe
             {share ? <SharingMark person={person} share={share} onWatch={onWatch} className="-mr-1.5 h-6 w-6 shrink-0 rounded-full" /> : null}
             {person.connecting ? (
               <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin text-muted-foreground" aria-label="Connecting" />
+            ) : showsListening(person) ? (
+              <ListeningMark className="h-5 w-5 shrink-0" />
             ) : person.serverMuted || person.serverDeafened ? (
               <ServerVoiceMark person={person} className="h-5 w-5 shrink-0" />
             ) : person.deafened ? (

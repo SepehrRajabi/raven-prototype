@@ -32,6 +32,7 @@ var (
 	errWorkshopShareCap   = fiber.NewError(fiber.StatusForbidden, "Your account can’t share ports.")
 	errWorkshopUseCap     = fiber.NewError(fiber.StatusForbidden, "Your account can’t connect to shared ports.")
 	errWorkshopNotInCall  = fiber.NewError(fiber.StatusForbidden, "Join the call to share or use a port in it.")
+	errWorkshopLimited    = fiber.NewError(fiber.StatusForbidden, "You can’t share ports in this room.")
 	errWorkshopPlace      = fiber.NewError(fiber.StatusNotFound, "That place isn’t available.")
 	errWorkshopDailyLimit = fiber.NewError(fiber.StatusTooManyRequests, "You have used the day’s port sharing traffic this server allows. It resets at midnight UTC.")
 )
@@ -99,13 +100,16 @@ func (s *Server) workshopConfig(c *fiber.Ctx) error {
 type workshopPlace struct {
 	kind string
 	id   string
-	// members is everyone who belongs to the place, in or out of the call.
+	// members is everyone who may see the place, in or out of the call.
 	members []string
+	// limited is whether the owner's rules let this person only listen or read there. They
+	// may use what others share and share nothing themselves.
+	limited bool
 }
 
 // workshopAccess decides whether a person may use a place for port sharing: in a voice
-// nest they must be in the call, in a text room they must be a member. It returns the
-// place's members. It is called when a share is made, when a connection opens and again
+// nest they must be in the call, in a text room they must be a member, and it must not be
+// hidden from them. It returns the place's members. It is called when a share is made, when a connection opens and again
 // whenever someone leaves, so being let in once is never enough.
 func (s *Server) workshopAccess(user User, kind, placeID string) (workshopPlace, error) {
 	place := workshopPlace{kind: kind, id: placeID}
@@ -128,7 +132,12 @@ func (s *Server) workshopAccess(user User, kind, placeID string) (workshopPlace,
 		if !inCall {
 			return place, errWorkshopNotInCall
 		}
-		_, place.members, err = s.nestAudience(nest.ID)
+		var treeID string
+		if treeID, place.members, err = s.nestAudience(nest.ID); err != nil || treeID == "" {
+			return place, err
+		}
+		level, err := s.roomLevelOf(s.db, treeID, nestRoom(nest), user.ID)
+		place.limited = level < roomLevelFull
 		return place, err
 	case workshopPlaceRoom:
 		access, err := s.chatAccessFor(s.db, placeID, user.ID)
@@ -138,7 +147,8 @@ func (s *Server) workshopAccess(user User, kind, placeID string) (workshopPlace,
 		if access.Kind != chatKindNest {
 			return place, errWorkshopPlace
 		}
-		place.members, err = s.treeMemberIDs(access.TreeID)
+		place.limited = access.ViewOnly
+		place.members, err = treeRoomMemberIDs(s.db, access.TreeID, roomKey{layoutKindText, placeID})
 		return place, err
 	}
 	return place, errWorkshopPlace
@@ -250,6 +260,9 @@ func (s *Server) createWorkshopShare(c *fiber.Ctx) error {
 	place, err := s.workshopAccess(user, body.PlaceKind, body.PlaceID)
 	if err != nil {
 		return err
+	}
+	if place.limited {
+		return errWorkshopLimited
 	}
 	spec := relay.Spec{
 		PublisherID: user.ID,
@@ -417,7 +430,10 @@ func (s *Server) workshopMay(userID, kind, placeID string, publishing bool) erro
 	if s.workshop.Usage.Exhausted(userID) {
 		return errWorkshopDailyLimit
 	}
-	_, err = s.workshopAccess(user, kind, placeID)
+	place, err := s.workshopAccess(user, kind, placeID)
+	if err == nil && publishing && place.limited {
+		err = errWorkshopLimited
+	}
 	return err
 }
 
@@ -488,17 +504,21 @@ func (s *Server) sweepWorkshopSessions() {
 }
 
 // publishWorkshopEvent tells the people who may see a share about a change to it: the
-// publisher and the members of its place who are in its audience.
+// publisher and the members of its place who are in its audience. The end of a share whose
+// place is gone goes to the publisher alone: the rules about who could see that place went
+// with it, and the place's end already reached everyone who could.
 func (s *Server) publishWorkshopEvent(kind string, info relay.ShareInfo, reason relay.EndReason) {
 	recipients := []string{info.PublisherID}
 	var members []string
 	switch info.PlaceKind {
 	case workshopPlaceNest:
-		_, members, _ = s.nestAudience(info.PlaceID)
+		if nest, err := s.findNest(info.PlaceID); err == nil && nest.Status == "active" {
+			_, members, _ = s.nestAudience(info.PlaceID)
+		}
 	case workshopPlaceRoom:
 		var treeID sql.NullString
-		if err := s.db.QueryRow(`SELECT tree_id FROM chat_conversations WHERE id = ?`, info.PlaceID).Scan(&treeID); err == nil && treeID.Valid {
-			members, _ = s.treeMemberIDs(treeID.String)
+		if err := s.db.QueryRow(`SELECT tree_id FROM chat_conversations WHERE id = ? AND status = 'active'`, info.PlaceID).Scan(&treeID); err == nil && treeID.Valid {
+			members, _ = treeRoomMemberIDs(s.db, treeID.String, roomKey{layoutKindText, info.PlaceID})
 		}
 	}
 	allowed := map[string]bool{}
