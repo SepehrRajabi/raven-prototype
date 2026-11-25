@@ -20,9 +20,10 @@ import { canShow, isLibraryMessage, pollLimits, reactionLimits, summaryOf } from
 import { addToTray } from "@/lib/chat/composerTray";
 import { dropsClaimed } from "@/lib/library/dropTarget";
 import { libraryCapabilities, type LibraryItem } from "@/lib/library/types";
-import { RoomLabels, RoomLock } from "@/components/RoomLabels";
+import { RoomMeta } from "@/components/RoomLabels";
+import { useShowRoomLabels } from "@/lib/roomLabelPreference";
 import { RoomAccessNote } from "@/components/RoomAccessNote";
-import { accessOfRoom, accessUntil, labelsOfRoom } from "@/lib/roomAccessView";
+import { accessOfRoom, accessUntil, boundaryLine, labelsOfRoom } from "@/lib/roomAccessView";
 import { useNow } from "../useNow";
 import { excerptOf, textNestsOfTree } from "@/lib/chat/reducer";
 import type { MentionCandidate, MentionResolver, MentionTarget } from "@/lib/chat/mentions";
@@ -208,7 +209,8 @@ function OpenConversation({
   }, [chat, hasLayout, treeId]);
   const now = useNow();
   const access = summary.kind === "nest" ? accessOfRoom(layout, "text", id, summary.access) : undefined;
-  const labels = summary.kind === "nest" ? labelsOfRoom(layout, "text", id) : [];
+  const showLabels = useShowRoomLabels();
+  const labels = summary.kind === "nest" && showLabels ? labelsOfRoom(layout, "text", id) : [];
   const people = useMemo(() => {
     if (summary.kind === "nest") {
       return (treeDetails?.members ?? []).filter((member) => member.state === "joined").map((member) => ({ id: member.userId, username: member.username, name: displayNameFor(member) }));
@@ -402,7 +404,7 @@ function OpenConversation({
         ? undefined
         : summary.kind === "group"
         ? `${summary.memberCount} ${summary.memberCount === 1 ? "person" : "people"}`
-        : [tree?.name, access?.level === "full" ? accessUntil(access, now) : "", summary.topic].filter(Boolean).join(" · ") || undefined;
+        : [tree?.name, boundaryLine(access), access?.level === "full" ? accessUntil(access, now) : "", summary.topic].filter(Boolean).join(" · ") || undefined;
 
   const intro = summary.kind === "dm"
     ? `Messages here are between you and ${name}.${summary.peerReadSeq !== undefined && sharesReadStatus && !summary.peerDeleted ?" You can each see when the other has read them; Settings › Messages turns that off." : ""}`
@@ -434,11 +436,8 @@ function OpenConversation({
         badge={
           summary.kind === "raven" ? (
             <SystemBadge />
-          ) : access || labels.length ? (
-            <>
-              <RoomLock access={access} kind="text" focusable />
-              <RoomLabels labels={labels} max={3} focusable className="max-w-[50%] shrink-0" />
-            </>
+          ) : access?.level === "view" || labels.length ? (
+            <RoomMeta access={access} kind="text" labels={labels} focusable className="max-w-[50%] shrink-0" />
           ) : undefined
         }
         subtitle={subtitle}

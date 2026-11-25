@@ -141,7 +141,7 @@ export function RoomLabelSettings({ details, data, chat }: { details: TreeDetail
               </Button>
             ) : null}
             <p className="max-w-xl text-caption text-muted-foreground">
-              Members see a label only when it is shown to them and on a {one} they can see. A label you keep to yourself still can’t hide its effect: people always see their own access.
+              Members see a label only when it is shown to them and on a {one} they can see, and anyone can turn labels off for themselves in Settings › Appearance. A label you keep to yourself still can’t hide its effect: people always see their own access.
             </p>
           </>
         )}

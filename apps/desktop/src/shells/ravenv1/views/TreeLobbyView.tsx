@@ -5,7 +5,7 @@ import { Button } from "@/components/ui/button";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { api, type TreeDetails, type TreeMember, type TreeSearchResult } from "@/lib/api";
 import type { ChatStore } from "@/lib/chat/store";
-import { RoomLock } from "@/components/RoomLabels";
+import { RoomMeta } from "@/components/RoomLabels";
 import { treeCan } from "@/lib/permissions";
 import { RoomDialog } from "./RoomDoor";
 import { cn } from "@/lib/utils";
@@ -273,8 +273,10 @@ export function TreeLobbyView({
                         className="group flex h-11 w-full items-center gap-3 px-3.5 text-left transition-colors hover:bg-secondary"
                       >
                         <NestGlyph kind="voice" className="text-subtle" />
-                        <span className="min-w-0 flex-1 truncate text-body">{nest.name}</span>
-                        <RoomLock access={nest.access} kind="voice" />
+                        <span className="flex min-w-0 flex-1 items-baseline gap-2.5">
+                          <span className="min-w-0 truncate text-body">{nest.name}</span>
+                          <RoomMeta access={nest.access} kind="voice" labels={[]} className="shrink-0" />
+                        </span>
                         {state !== "Empty" && state !== "Created" ? <span className="shrink-0 text-caption text-muted-foreground">{state}</span> : null}
                       </button>
                     );

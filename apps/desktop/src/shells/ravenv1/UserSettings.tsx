@@ -37,6 +37,7 @@ import {
 } from "./SettingsScaffold";
 import { InfoTooltip } from "./atoms";
 import { cn } from "@/lib/utils";
+import { useShowRoomLabels, writeShowRoomLabels } from "@/lib/roomLabelPreference";
 import { SPEAKING_COLORS, useSpeakingColor, writeSpeakingColor } from "@/lib/speakingColor";
 import { THEME_COLORS, THEME_DEPTHS, THEME_STRENGTHS, useTheme, writeTheme, type ThemeColorId } from "@/lib/theme";
 import { useCustomThemes } from "@/lib/customThemes";
@@ -357,6 +358,7 @@ function AppearanceSettings({ data }: { data: RavenShellData }) {
           />
         </SettingsRows>
       </SettingsSection>
+      <RoomLabelsSection data={data} />
       <SpeakingColorSection />
       <DockOrderSection />
     </SettingsPage>
@@ -500,6 +502,22 @@ function ThemeSection() {
 }
 
 /** The colour that shows who is talking. Kept on this device. */
+function RoomLabelsSection({ data }: { data: RavenShellData }) {
+  const nests = data.labels.nestPlural.toLowerCase();
+  return (
+    <SettingsSection title="Labels" description="This choice is kept on this device and changes nothing about who can use what.">
+      <SettingsRows>
+        <SettingsToggleRow
+          label={`Show labels on ${nests}`}
+          description={`The owner of a ${data.labels.treeSingular.toLowerCase()} can put labels on its ${nests} and show them to members.`}
+          checked={useShowRoomLabels()}
+          onChange={writeShowRoomLabels}
+        />
+      </SettingsRows>
+    </SettingsSection>
+  );
+}
+
 function SpeakingColorSection() {
   const { themes, activeId } = useCustomThemes();
   const themeSetsIt = themes.find((theme) => theme.id === activeId)?.tokens.speaking !== undefined;

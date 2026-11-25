@@ -233,7 +233,10 @@ projects Raven is built on, grouped by licence, each licence text collapsed. It 
 lazy `?raw` import. Tree settings:
 General, Who can join, Members, Room access, Labels, and Delete for owners. Room access is a
 list of rules by person and one dialog (who, where, what, until); what a limit means is told
-to the person in the room itself (`RoomAccessNote`), never only in settings. Pieces are in
+to the person in the room itself (`RoomAccessNote`), never only in settings. In the lobby
+`RoomMeta` puts their limit and the first label in plain words beside the name: no chips and
+no lock, and the end of the row is left to the door and Join. Labels can be turned off in
+Settings › Appearance. Pieces are in
 `SettingsScaffold.tsx`; hotkeys, overlay and updates have their own panels under
 `components/`.
 

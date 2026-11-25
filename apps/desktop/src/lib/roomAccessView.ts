@@ -53,17 +53,18 @@ export function viewNote(access: RoomAccess | undefined, kind: RoomKind, now: nu
   return { line: VIEW_LINE[kind], reason: accessReason(access, now) };
 }
 
+/** What you can't do in a room, in two words. Null when you have it in full. */
+export function ownLimit(access: RoomAccess | undefined, kind: RoomKind): string | null {
+  if (access?.level !== "view") return null;
+  return kind === "text" ? "Read only" : "Listen only";
+}
+
 /**
- * The lock beside a room's name. A room is limited when an ordinary member cannot use it in
- * full, which can mean hidden or only readable, so it does not say which.
+ * Said in a room that an ordinary member cannot use in full, which can mean hidden or only
+ * readable, so it does not say which. Empty for a room open to everyone in the space.
  */
-export function lockNote(access: RoomAccess | undefined, kind: RoomKind): string | null {
-  if (!access) return null;
-  const limited = access.limited ? "Not fully open to every member." : "";
-  const own = access.level === "view"
-    ? kind === "text" ? "You can read, but not write." : "You can listen, but not talk."
-    : "";
-  return [limited, own].filter(Boolean).join(" ") || null;
+export function boundaryLine(access: RoomAccess | undefined): string {
+  return access?.limited ? "Not fully open to every member" : "";
 }
 
 /** A label's tooltip. Only the owner is ever sent a label that is not visible. */

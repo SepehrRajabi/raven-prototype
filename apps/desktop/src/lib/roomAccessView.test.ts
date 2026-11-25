@@ -6,12 +6,13 @@ import {
   accessOfRoom,
   accessReason,
   accessUntil,
+  boundaryLine,
   callLimit,
   labelNote,
   labelsOfRoom,
   limitNotice,
   listensOnly,
-  lockNote,
+  ownLimit,
   lostToAccess,
   refusedForGood,
   viewNote,
@@ -70,8 +71,10 @@ describe("what a person is told", () => {
   test("nothing without a limit, or from an older server", () => {
     expect(viewNote(undefined, "text", NOW)).toBeNull();
     expect(viewNote({ level: "full" }, "voice", NOW)).toBeNull();
-    expect(lockNote(undefined, "text")).toBeNull();
-    expect(lockNote({ level: "full" }, "text")).toBeNull();
+    expect(ownLimit(undefined, "text")).toBeNull();
+    expect(ownLimit({ level: "full", limited: true }, "text")).toBeNull();
+    expect(boundaryLine(undefined)).toBe("");
+    expect(boundaryLine({ level: "full" })).toBe("");
   });
 
   test("reading and listening, with who it was set for", () => {
@@ -87,10 +90,11 @@ describe("what a person is told", () => {
     expect(accessUntil({ level: "full" }, NOW)).toBe("");
   });
 
-  test("the lock says the boundary and your side of it", () => {
-    expect(lockNote({ level: "full", limited: true }, "text")).toBe("Not fully open to every member.");
-    expect(lockNote({ level: "view", limited: true }, "text")).toBe("Not fully open to every member. You can read, but not write.");
-    expect(lockNote({ level: "view" }, "voice")).toBe("You can listen, but not talk.");
+  test("your own limit and the room's boundary are separate things", () => {
+    expect(ownLimit({ level: "view" }, "text")).toBe("Read only");
+    expect(ownLimit({ level: "view", limited: true }, "voice")).toBe("Listen only");
+    expect(boundaryLine({ level: "full", limited: true })).toBe("Not fully open to every member");
+    expect(boundaryLine({ level: "view" })).toBe("");
   });
 });
 

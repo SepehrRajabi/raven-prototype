@@ -138,12 +138,13 @@ Where several labels of a room disagree, the one that allows least wins.
   does not show them.
 
 **Labels.** A room can have up to 20 labels and a space up to 50. Members see a label only
-when the owner shows it, which is off to begin with, and only on rooms they can see. A
-label kept private can still decide access, but never secretly for the person it concerns:
-everyone can see their own level in each room they can see, whether it was set for them or
-for every member, and when it ends. Nobody but the owner sees another person's rules.
-There is no history of rules and no record of who tried to enter. The account export lists
-what was set for the person.
+when the owner shows it, which is off to begin with, and only on rooms they can see. Anyone
+can turn labels off for themselves on their device (Settings › Appearance). A label kept
+private can still decide access, but never secretly for the person it concerns: everyone
+can see their own level in each room they can see, whether it was set for them or for every
+member, and when it ends. Nobody but the owner sees another person's rules. There is no
+history of rules and no record of who tried to enter. The account export lists what was set
+for the person.
 
 A hidden room is left out of lists, layouts, presence, events, knocks, codes, invitations,
 mentions, forwarded sources, board events and port shares. Some things remain:

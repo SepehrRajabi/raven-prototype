@@ -23,9 +23,10 @@ import { formatRelativeTime, type RavenShellData, type RavenView } from "../stat
 import type { RavenMediaAdapterState } from "../useRavenMediaAdapter";
 import type { NestEntryController } from "../useNestEntry";
 import { treeCan } from "@/lib/permissions";
-import { RoomLabels, RoomLock } from "@/components/RoomLabels";
+import { RoomMeta } from "@/components/RoomLabels";
+import { useShowRoomLabels } from "@/lib/roomLabelPreference";
 import type { ChatStore } from "@/lib/chat/store";
-import { accessOfRoom, accessReason, accessUntil, labelsOfRoom, LISTEN_ONLY_TITLE } from "@/lib/roomAccessView";
+import { accessOfRoom, accessReason, accessUntil, boundaryLine, labelsOfRoom, LISTEN_ONLY_TITLE } from "@/lib/roomAccessView";
 import type { RoomAccess } from "@/lib/roomAccess";
 import type { TreeLabel } from "@/lib/chat/types";
 import { listenOnlyIn, ownVoiceAccess } from "../ownAccess";
@@ -99,7 +100,8 @@ export function NestView({
     if (chat && treeId && !layout) void chat.loadLayout(treeId).catch(() => undefined);
   }, [chat, layout, treeId]);
   const access = accessOfRoom(layout, "voice", nest.id, ownVoiceAccess(data, nest.id));
-  const labels = labelsOfRoom(layout, "voice", nest.id);
+  const showLabels = useShowRoomLabels();
+  const labels = showLabels ? labelsOfRoom(layout, "voice", nest.id) : [];
 
   const { setRemoteTrackVolume, setRemoteTrackMuted, stopScreenShare } = media;
   const satelliteActions = useMemo<SatelliteActions>(() => ({
@@ -214,7 +216,7 @@ function NestThreshold({
   const joinsCameraOff = data.preferences.joinWithCameraOff;
   const listenOnly = listenOnlyIn(data, nest.id) ?? access?.level === "view";
   const until = listenOnly ? "" : accessUntil(access, now);
-  const locked = Boolean(access && (access.limited || access.level === "view"));
+  const boundary = boundaryLine(access);
   const pushToTalk = usePushToTalk().settings;
   // "Join muted" holds the mic outside a call (`joinMutedHoldsMic`), so the chip shows the setting rather than a choice.
   const micOn = media.audioSupported && !joinsMuted && media.localMicOn;
@@ -310,11 +312,10 @@ function NestThreshold({
           )
         }
         title={nest.name}
-        meta={locked || labels.length || until ? (
+        meta={boundary || labels.length || until ? (
           <>
-            <RoomLock access={access} kind="voice" focusable />
-            <RoomLabels labels={labels} max={3} focusable />
-            {until ? <span className="shrink-0">{until}</span> : null}
+            {boundary || until ? <span className="min-w-0 truncate">{[boundary, until].filter(Boolean).join(" · ")}</span> : null}
+            <RoomMeta kind="voice" labels={labels} focusable className="max-w-[45%] shrink-0" />
           </>
         ) : undefined}
       />
