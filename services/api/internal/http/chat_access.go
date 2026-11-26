@@ -26,6 +26,8 @@ type chatAccess struct {
 	SendDisabled bool
 	// ViewOnly is set when a rule in their tree lets them read a text nest but not write.
 	ViewOnly bool
+	// MembersCanPin is the text nest's setting that lets members pin as well.
+	MembersCanPin bool
 	// PeerID is the other person in a direct message.
 	PeerID string
 	// PeerDeleted is set when the other person in a direct message deleted their account.
@@ -83,13 +85,13 @@ func (s *Server) chatAccessFor(q chatQuerier, conversationID, userID string) (ch
 	var floor, readSeq, sharedReadSeq, hideRev sql.NullInt64
 	var status string
 	err = q.QueryRow(
-		`SELECT c.kind, c.tree_id, c.status, c.name, c.topic, c.last_seq,
+		`SELECT c.kind, c.tree_id, c.status, c.name, c.topic, c.last_seq, c.members_can_pin,
 		        cm.state, cm.role, cm.visible_from_seq, cm.read_seq, cm.shared_read_seq, cm.hide_rev
 		 FROM chat_conversations c
 		 LEFT JOIN chat_members cm ON cm.conversation_id = c.id AND cm.user_id = ?
 		 WHERE c.id = ?`,
 		userID, conversationID,
-	).Scan(&access.Kind, &treeID, &status, &access.Name, &access.Topic, &access.LastSeq,
+	).Scan(&access.Kind, &treeID, &status, &access.Name, &access.Topic, &access.LastSeq, &access.MembersCanPin,
 		&memberState, &memberRole, &floor, &readSeq, &sharedReadSeq, &hideRev)
 	if errors.Is(err, sql.ErrNoRows) {
 		return chatAccess{}, errChatNotFound
@@ -199,6 +201,17 @@ func chatNestRights(role string, level roomLevel) (canSend, canManage bool) {
 	return canSend, canSend && treeRoleAllows(role, treeActionManageRooms)
 }
 
+// chatCanPin is who may pin in a text nest: the people who run it, and members who can
+// write there when the room lets members pin.
+func chatCanPin(canSend, canManage, membersCanPin bool) bool {
+	return canManage || (membersCanPin && canSend)
+}
+
+// canPin is chatCanPin for this access.
+func (a chatAccess) canPin() bool {
+	return a.Kind == chatKindNest && chatCanPin(a.CanSend, a.CanManage, a.MembersCanPin)
+}
+
 // chatWithNestAccess fills in what someone may do in the text nests of a list, and leaves
 // out the ones they have no access to. However long the list, it takes at most two queries.
 func chatWithNestAccess(q chatQuerier, userID string, conversations []ChatConversation) ([]ChatConversation, error) {
@@ -271,6 +284,7 @@ func chatWithNestAccess(q chatQuerier, userID string, conversations []ChatConver
 			access := model.accessFor(userID, room)
 			item.Access = &access
 			item.CanSend, item.CanManage = chatNestRights(item.Role, level)
+			item.CanPin = chatCanPin(item.CanSend, item.CanManage, item.MembersCanPin)
 		}
 		seen = append(seen, item)
 	}

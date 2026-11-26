@@ -114,6 +114,9 @@ func (s *Server) queryChatMessages(q chatQuerier, viewerID string, floor int64, 
 	if err := withChatReactions(q, messages); err != nil {
 		return nil, err
 	}
+	if err := withChatPins(q, messages); err != nil {
+		return nil, err
+	}
 	if err := withChatLinkPreviews(q, messages); err != nil {
 		return nil, err
 	}
@@ -142,6 +145,9 @@ func (s *Server) loadChatMessage(q chatQuerier, conversationID, messageID, viewe
 		return ChatMessage{}, err
 	}
 	if err = withChatReactions(q, messages); err != nil {
+		return ChatMessage{}, err
+	}
+	if err = withChatPins(q, messages); err != nil {
 		return ChatMessage{}, err
 	}
 	if err = withChatLinkPreviews(q, messages); err != nil {
@@ -872,11 +878,14 @@ func (s *Server) deleteChatMessageForEveryoneOnce(c *fiber.Ctx, strict bool) err
 	return c.JSON(fiber.Map{"message": message})
 }
 
-// chatEraseMessageTx erases a message's text, its reactions and its files, and leaves the
-// marker. seq is the conversation's new sequence number, already taken. It returns who
-// is to be told. Only access.ConversationID, Kind and TreeID are read.
+// chatEraseMessageTx erases a message's text, its reactions, its pin and its files, and
+// leaves the marker. seq is the conversation's new sequence number, already taken. It
+// returns who is to be told. Only access.ConversationID, Kind and TreeID are read.
 func (s *Server) chatEraseMessageTx(tx *database.Tx, access chatAccess, messageID, actorID string, seq int64, now string) ([]chatRecipient, error) {
 	if _, err := tx.Exec(`DELETE FROM chat_reactions WHERE message_id = ?`, messageID); err != nil {
+		return nil, err
+	}
+	if _, err := tx.Exec(`DELETE FROM chat_pins WHERE message_id = ?`, messageID); err != nil {
 		return nil, err
 	}
 	if err := chatDeletePollsTx(tx, `message_id = ?`, messageID); err != nil {

@@ -27,7 +27,7 @@ func chatSummarySQL(one bool) string {
 	return fmt.Sprintf(`SELECT b.id, b.kind, b.name, b.topic, b.tree_id, b.last_seq, b.last_activity_ms, b.created_at,
 		b.notify, b.member_role, b.visible_from_seq, b.read_seq, b.hide_rev, b.archived, b.listed, b.tree_role,
 		b.peer_id, b.peer_username, b.peer_name, b.peer_read_seq, b.peer_read_at, b.peer_is_friend, b.peer_deleted, b.shares_read,
-		b.member_count, b.preview_seq, b.unread_count, b.mention_count,
+		b.member_count, b.preview_seq, b.unread_count, b.mention_count, b.members_can_pin,
 		COALESCE(pm.id, ''), COALESCE(pm.sender_id, ''), COALESCE(`+spaceNameSQL("pmt", "pmp", "pmu")+`, ''),
 		COALESCE(pm.kind, ''), COALESCE(pm.body, ''), pm.system_json, COALESCE(pm.created_at, ''),
 		CASE WHEN pm.deleted_at IS NULL THEN 0 ELSE 1 END
@@ -38,6 +38,7 @@ func chatSummarySQL(one bool) string {
 			cm.role AS member_role, cm.visible_from_seq AS visible_from_seq, cm.read_seq AS read_seq, cm.hide_rev AS hide_rev,
 			CASE WHEN cm.archived_at IS NULL THEN 0 ELSE 1 END AS archived,
 			CASE WHEN cm.listed THEN 1 ELSE 0 END AS listed,
+			CASE WHEN c.members_can_pin THEN 1 ELSE 0 END AS members_can_pin,
 			COALESCE(tm.role, '') AS tree_role,
 			COALESCE(peer.user_id, '') AS peer_id,
 			COALESCE(pu.username, '') AS peer_username,
@@ -126,7 +127,7 @@ func (s *Server) chatSummaries(q chatQuerier, userID, onlyID string) ([]ChatConv
 	for rows.Next() {
 		var item ChatConversation
 		var memberRole, treeRole, peerID, peerUsername, peerName string
-		var archived, listed, peerIsFriend, peerDeleted, sharesRead int
+		var archived, listed, peerIsFriend, peerDeleted, sharesRead, membersCanPin int
 		var peerReadSeq, previewSeq int64
 		var peerReadAt sql.NullString
 		var preview ChatMessagePreview
@@ -137,7 +138,7 @@ func (s *Server) chatSummaries(q chatQuerier, userID, onlyID string) ([]ChatConv
 			&item.ID, &item.Kind, &item.Name, &item.Topic, &item.TreeID, &item.LastSeq, &item.LastActivityMs, &item.CreatedAt,
 			&item.Notify, &memberRole, &item.VisibleFromSeq, &item.ReadSeq, &item.HideRev, &archived, &listed, &treeRole,
 			&peerID, &peerUsername, &peerName, &peerReadSeq, &peerReadAt, &peerIsFriend, &peerDeleted, &sharesRead,
-			&item.MemberCount, &previewSeq, &item.UnreadCount, &item.MentionCount,
+			&item.MemberCount, &previewSeq, &item.UnreadCount, &item.MentionCount, &membersCanPin,
 			&preview.ID, &preview.SenderID, &preview.SenderName, &preview.Kind, &previewBody, &previewSystem, &preview.CreatedAt,
 			&previewDeleted,
 		); err != nil {
@@ -170,6 +171,7 @@ func (s *Server) chatSummaries(q chatQuerier, userID, onlyID string) ([]ChatConv
 		case chatKindNest:
 			// What they may do there is filled in below, with their access.
 			item.Role = treeRole
+			item.MembersCanPin = membersCanPin != 0
 		case chatKindSaved:
 			item.Role = memberRole
 			item.Name = "Saved messages"
@@ -799,8 +801,14 @@ func (s *Server) updateChatConversation(c *fiber.Ctx) error {
 	var input struct {
 		Name  *string `json:"name"`
 		Topic *string `json:"topic"`
+		// MembersCanPin is a text room's setting. It is changed on its own, not with the
+		// name or the description, so each change gets its own line in the room.
+		MembersCanPin *bool `json:"membersCanPin"`
 	}
 	if err := c.BodyParser(&input); err != nil {
+		return errChatInvalidBody
+	}
+	if input.MembersCanPin != nil && (input.Name != nil || input.Topic != nil) {
 		return errChatInvalidBody
 	}
 
@@ -823,6 +831,9 @@ func (s *Server) updateChatConversation(c *fiber.Ctx) error {
 	}
 	if access.Kind == chatKindDM || !access.CanManage {
 		return errChatNotAllowed
+	}
+	if input.MembersCanPin != nil {
+		return s.setChatMembersCanPin(c, tx, access, user, *input.MembersCanPin, seq, now)
 	}
 	name, topic := access.Name, access.Topic
 	if input.Name != nil {
@@ -862,6 +873,37 @@ func (s *Server) updateChatConversation(c *fiber.Ctx) error {
 	return s.chatConversationResponse(c, fiber.StatusOK, user.ID, access)
 }
 
+// setChatMembersCanPin turns a text room's "members can pin" setting on or off, inside
+// updateChatConversation's transaction (the lock is held and seq is taken). The change is
+// written into the room as a line everyone can read, so who changed it is not hidden.
+// Pins that members made stay when it is turned off.
+func (s *Server) setChatMembersCanPin(c *fiber.Ctx, tx *database.Tx, access chatAccess, user User, on bool, seq int64, now string) error {
+	if access.Kind != chatKindNest {
+		return errChatPinsNestOnly
+	}
+	if on == access.MembersCanPin {
+		_ = tx.Rollback()
+		return s.chatConversationResponse(c, fiber.StatusOK, user.ID, access)
+	}
+	if _, err := tx.Exec(`UPDATE chat_conversations SET members_can_pin = ? WHERE id = ?`, on, access.ConversationID); err != nil {
+		return err
+	}
+	message, err := chatInsertSystemMessage(tx, access.ConversationID, user, seq, now, fiber.Map{"event": "pinning_changed", "membersCanPin": on})
+	if err != nil {
+		return err
+	}
+	recipients, err := s.chatAudience(tx, access, "")
+	if err != nil {
+		return err
+	}
+	if err := tx.Commit(); err != nil {
+		return err
+	}
+	s.publishChatMessage("message.created", message, seq, nil, recipients, time.Now())
+	access.MembersCanPin = on
+	return s.chatConversationResponse(c, fiber.StatusOK, user.ID, access)
+}
+
 // chatDeleteConversationTx removes a conversation and everything in it. Marking it
 // deleted comes first: it takes the row lock, so a send racing with the delete waits and
 // then finds the conversation gone instead of writing into rows that are being removed.
@@ -880,6 +922,7 @@ func chatDeleteConversationTx(tx *database.Tx, conversationID string) error {
 	}
 	for _, statement := range []string{
 		`DELETE FROM chat_reactions WHERE conversation_id = ?`,
+		`DELETE FROM chat_pins WHERE conversation_id = ?`,
 		`DELETE FROM chat_message_hides WHERE conversation_id = ?`,
 		`DELETE FROM chat_messages WHERE conversation_id = ?`,
 		`DELETE FROM chat_members WHERE conversation_id = ?`,
@@ -926,6 +969,7 @@ func deleteChatForTreeTx(tx *database.Tx, treeID string) error {
 	}
 	for _, statement := range []string{
 		`DELETE FROM chat_reactions WHERE conversation_id IN ` + nests,
+		`DELETE FROM chat_pins WHERE conversation_id IN ` + nests,
 		`DELETE FROM chat_message_hides WHERE conversation_id IN ` + nests,
 		`DELETE FROM chat_messages WHERE conversation_id IN ` + nests,
 		`DELETE FROM chat_members WHERE conversation_id IN ` + nests,

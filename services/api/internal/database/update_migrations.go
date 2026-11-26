@@ -72,6 +72,7 @@ func migrateVersioned(db *sql.DB, driver string) error {
 		{version: "2026111701_server_name", statements: serverNameStatements()},
 		{version: "2026111901_chat_poll_mirrors", statements: chatPollMirrorStatements()},
 		{version: "2026112401_room_access", statements: roomAccessStatements()},
+		{version: "2026112601_chat_pins", statements: chatPinStatements()},
 	}
 	for _, migration := range migrations {
 		if err := applyUpdateMigration(db, driver, migration); err != nil {

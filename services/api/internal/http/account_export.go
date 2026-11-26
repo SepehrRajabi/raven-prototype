@@ -431,6 +431,7 @@ func exportSystemText(m ChatMessage) string {
 		Type  string     `json:"type"`
 		Text  string     `json:"text"`
 		Name  string     `json:"name"`
+		On    bool       `json:"membersCanPin"`
 		User  *ChatUser  `json:"user"`
 		Users []ChatUser `json:"users"`
 	}
@@ -461,6 +462,11 @@ func exportSystemText(m ChatMessage) string {
 		return m.SenderName + " renamed this conversation to " + payload.Name
 	case "topic_changed":
 		return m.SenderName + " changed the topic"
+	case "pinning_changed":
+		if payload.On {
+			return m.SenderName + " let members pin messages"
+		}
+		return m.SenderName + " stopped members pinning messages"
 	}
 	return m.SenderName + ": " + payload.Event
 }

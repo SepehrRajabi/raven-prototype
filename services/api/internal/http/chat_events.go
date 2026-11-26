@@ -14,7 +14,7 @@ import (
 type ChatEvent struct {
 	// Type is one of:
 	//   message.created     a new message (Seq, Message)
-	//   message.updated     an edit, reaction, or a message deleted for everyone (Seq, Message)
+	//   message.updated     an edit, reaction, pin or unpin, or a message deleted for everyone (Seq, Message)
 	//   conversation.bump   something changed that this person may not see (Seq only)
 	//   message.hidden      you removed a message for yourself on another device
 	//   conversation.read   someone's read position moved (UserID, ReadSeq, ReadAt)
