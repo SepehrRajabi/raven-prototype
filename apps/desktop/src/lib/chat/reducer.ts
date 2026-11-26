@@ -34,6 +34,7 @@ import {
   type ChatState,
   type ConversationState,
   type PendingMessage,
+  type PinnedMessages,
   type Reduced,
   type TreeLayout,
 } from "./types";
@@ -111,8 +112,8 @@ function previewOf(message: ChatMessage): ChatMessagePreview {
 export function upsertMessage(messages: ChatMessage[], message: ChatMessage): ChatMessage[] {
   const index = messages.findIndex((candidate) => candidate.id === message.id);
   if (index >= 0) {
-    // Equal revisions can still correct an optimistic reaction; identical copies do nothing.
-    if (message.changedSeq < messages[index].changedSeq || (message.changedSeq === messages[index].changedSeq && JSON.stringify(message.reactions ?? []) === JSON.stringify(messages[index].reactions ?? []))) return messages;
+    // Equal revisions can still correct an optimistic reaction or a pin; identical copies do nothing.
+    if (message.changedSeq < messages[index].changedSeq || (message.changedSeq === messages[index].changedSeq && sameReactionsAndPin(message, messages[index]))) return messages;
     const next = messages.slice();
     next[index] = message;
     return next;
@@ -121,6 +122,84 @@ export function upsertMessage(messages: ChatMessage[], message: ChatMessage): Ch
   while (at > 0 && messages[at - 1].seq > message.seq) at -= 1;
   const next = messages.slice();
   next.splice(at, 0, message);
+  return next;
+}
+
+function sameReactionsAndPin(a: ChatMessage, b: ChatMessage): boolean {
+  return JSON.stringify(a.reactions ?? []) === JSON.stringify(b.reactions ?? []) && JSON.stringify(a.pin ?? null) === JSON.stringify(b.pin ?? null);
+}
+
+// ---- pinned messages -----------------------------------------------------------------
+
+/** Newest pin first; two pins of the same moment by the later message first. */
+function byPinTime(a: ChatMessage, b: ChatMessage): number {
+  const at = (message: ChatMessage) => Date.parse(message.pin?.at ?? "") || 0;
+  return at(b) - at(a) || b.seq - a.seq;
+}
+
+/**
+ * Folds copies of messages into a pinned list. A copy that is pinned goes in (or replaces
+ * the one there); one that is not pinned, or was deleted, comes out. A copy older than the
+ * one in the list changes nothing. Returns the same array when nothing changed.
+ */
+export function syncPinned(items: ChatMessage[], incoming: Iterable<ChatMessage>): ChatMessage[] {
+  let next = items;
+  for (const message of incoming) {
+    const index = next.findIndex((item) => item.id === message.id);
+    const current = index >= 0 ? next[index] : undefined;
+    if (current && (message.changedSeq < current.changedSeq || (message.changedSeq === current.changedSeq && sameReactionsAndPin(message, current)))) continue;
+    if (message.pin && !message.deletedAt && message.kind === "text") {
+      next = current ? next.map((item, at) => (at === index ? message : item)) : [...next, message];
+      next = next.slice().sort(byPinTime);
+    } else if (current) {
+      next = next.filter((item) => item.id !== message.id);
+    }
+  }
+  return next;
+}
+
+/** Keeps a conversation's pinned list, if it has one, in step with copies of its messages. */
+function withPinsSynced(conversation: ConversationState, incoming: ChatMessage[]): ConversationState {
+  const pins = conversation.pins;
+  if (!pins || pins.status !== "loaded" || incoming.length === 0) return conversation;
+  const items = syncPinned(pins.items, incoming);
+  return items === pins.items ? conversation : { ...conversation, pins: { ...pins, items } };
+}
+
+function withPinRemoved(conversation: ConversationState, messageId: string | undefined): ConversationState {
+  const pins = conversation.pins;
+  if (!pins || !messageId || !pins.items.some((item) => item.id === messageId)) return conversation;
+  return { ...conversation, pins: { ...pins, items: pins.items.filter((item) => item.id !== messageId) } };
+}
+
+/** The list is being fetched. What is already there stays on screen meanwhile. */
+export function setPinsLoading(state: ChatState, conversationId: string): ChatState {
+  const existing = state.conversations[conversationId];
+  if (!existing || existing.pins?.status === "loaded" || existing.pins?.status === "loading") return state;
+  return put(state, { ...existing, pins: { status: "loading", items: [] } });
+}
+
+/** Takes the server's pinned list. */
+export function applyPins(state: ChatState, conversationId: string, pins: ChatMessage[]): ChatState {
+  const existing = state.conversations[conversationId];
+  if (!existing) return state;
+  const items = pins.filter((message) => message.pin && !message.deletedAt).sort(byPinTime);
+  return put(state, { ...existing, pins: { status: "loaded", items } });
+}
+
+/** The fetch failed. A list already shown is kept as it is; otherwise the reason is. */
+export function setPinsFailed(state: ChatState, conversationId: string, error: string): ChatState {
+  const existing = state.conversations[conversationId];
+  if (!existing || existing.pins?.status === "loaded") return state;
+  const pins: PinnedMessages = { status: "error", items: [], error };
+  return put(state, { ...existing, pins });
+}
+
+/** Forgets the pinned list, so the next look fetches it afresh. */
+function withoutPins(conversation: ConversationState): ConversationState {
+  if (!conversation.pins) return conversation;
+  const next = { ...conversation };
+  delete next.pins;
   return next;
 }
 
@@ -194,10 +273,11 @@ export function applyList(state: ChatState, list: ChatConversation[], settings: 
       effects.push({ type: "fetchSummary", conversationId: fresh.id });
       continue;
     }
-    const next: ConversationState = { ...existing, summary: fresh };
+    const viewChanged = fresh.hideRev !== existing.summary.hideRev || fresh.visibleFromSeq !== existing.summary.visibleFromSeq;
+    // What I may see changed (cleared, removed for me): the pinned list is asked for again.
+    const next: ConversationState = { ...(viewChanged ? withoutPins(existing) : existing), summary: fresh };
     if (existing.loaded) {
       const rewound = fresh.lastSeq < existing.syncedSeq;
-      const viewChanged = fresh.hideRev !== existing.summary.hideRev || fresh.visibleFromSeq !== existing.summary.visibleFromSeq;
       if (rewound || viewChanged) effects.push({ type: "reload", conversationId: fresh.id });
       else effects.push(...followUp(next));
     }
@@ -223,8 +303,9 @@ export function applySummary(state: ChatState, fresh: ChatConversation, members?
   const summary: ChatConversation = fresh.lastSeq < existing.summary.lastSeq
     ? { ...fresh, lastSeq: existing.summary.lastSeq, lastMessage: existing.summary.lastMessage, unreadCount: existing.summary.unreadCount, mentionCount: existing.summary.mentionCount, readSeq: Math.max(fresh.readSeq, existing.summary.readSeq), lastActivityMs: existing.summary.lastActivityMs, archived: existing.summary.archived }
     : fresh;
-  const next: ConversationState = { ...existing, summary, members: members ?? existing.members };
-  const viewChanged = existing.loaded && (fresh.hideRev !== existing.summary.hideRev || fresh.visibleFromSeq !== existing.summary.visibleFromSeq);
+  const seesOtherwise = fresh.hideRev !== existing.summary.hideRev || fresh.visibleFromSeq !== existing.summary.visibleFromSeq;
+  const next: ConversationState = { ...(seesOtherwise ? withoutPins(existing) : existing), summary, members: members ?? existing.members };
+  const viewChanged = existing.loaded && seesOtherwise;
   return {
     state: put(state, next),
     effects: viewChanged ? [{ type: "reload", conversationId: fresh.id }] : followUp(next),
@@ -333,6 +414,7 @@ export function applyEvent(state: ChatState, event: ChatEvent, now: number, atBo
           }
         }
       }
+      conversation = withPinsSynced(conversation, [message]);
       if (created && seq > (conversation.seen?.seq ?? 0)) {
         conversation = { ...conversation, seen: { seq, readers: [], readSeq: conversation.seen?.readSeq } };
       }
@@ -368,7 +450,7 @@ export function applyEvent(state: ChatState, event: ChatEvent, now: number, atBo
         : existing.messages;
       const previewGone = existing.summary.lastMessage?.id === event.messageId;
       return {
-        state: put(state, { ...existing, summary, messages }),
+        state: put(state, withPinRemoved({ ...existing, summary, messages }, event.messageId)),
         effects: previewGone ? [{ type: "fetchSummary", conversationId: id }] : [],
       };
     }
@@ -496,12 +578,13 @@ export function applyPage(state: ChatState, conversationId: string, page: ChatPa
       hasMoreBefore: page.hasMoreBefore,
       hasMoreAfter: page.hasMoreAfter,
     };
+    conversation = withPinsSynced(conversation, page.messages);
     return { state: put(state, conversation), effects: followUp(conversation) };
   }
 
   let messages = conversation.messages;
   for (const message of page.messages) messages = upsertMessage(messages, message);
-  conversation = { ...conversation, messages, syncedSeq: Math.min(conversation.syncedSeq, page.asOfSeq) };
+  conversation = withPinsSynced({ ...conversation, messages, syncedSeq: Math.min(conversation.syncedSeq, page.asOfSeq) }, page.messages);
   conversation = mode === "older"
     ? trimWindow({ ...conversation, hasMoreBefore: page.hasMoreBefore }, "oldest")
     : trimWindow({ ...conversation, hasMoreAfter: page.hasMoreAfter }, "newest");
@@ -525,7 +608,7 @@ export function applyChanges(state: ChatState, conversationId: string, changes: 
     syncedSeq: Math.max(conversation.syncedSeq, changes.asOfSeq),
     pending: withoutPending(conversation.pending, acknowledged(changes.messages, state.me)),
   };
-  conversation = trimWindow(conversation, "newest");
+  conversation = trimWindow(withPinsSynced(conversation, changes.messages), "newest");
   return { state: put(state, conversation), effects: followUp(conversation) };
 }
 

@@ -928,3 +928,96 @@ describe("the saved outbox before the first list load", () => {
     store.dispose();
   });
 });
+
+describe("pinned messages", () => {
+  const pin = { byId: ME.id, byName: ME.displayName, at: "2026-11-02T10:00:00Z" };
+  async function fixture() {
+    const server = fakeServer();
+    const first = server.receive("Agenda for Friday");
+    const listConversations = server.api.listConversations;
+    server.api.listConversations = async () => {
+      const result = await listConversations();
+      return { ...result, conversations: result.conversations.map((item) => ({ ...item, kind: "nest" as const, treeId: "t1", peer: undefined, canManage: true })) };
+    };
+    const pinCalls: unknown[][] = [];
+    let pinned: ChatMessage[] = [];
+    let listAnswer: (() => Promise<{ pins: ChatMessage[] }>) | null = null;
+    server.api.pinMessage = async (...args) => {
+      pinCalls.push(args);
+      const [, messageId, on] = args;
+      if (on && pinned.length >= 1) throw httpError(422, "This room already has 1 pinned message, the most it can have. Unpin one first.");
+      const message: ChatMessage = { ...first, id: messageId, changedSeq: first.changedSeq + pinCalls.length, ...(on ? { pin } : {}) };
+      pinned = on ? [message] : [];
+      return { message };
+    };
+    server.api.listPins = () => (listAnswer ? listAnswer() : Promise.resolve({ pins: pinned }));
+    const { store } = await openStore(server);
+    return {
+      store, server, first, pinCalls,
+      holdList: (answer: () => Promise<{ pins: ChatMessage[] }>) => { listAnswer = answer; },
+      pins: () => store.getState().conversations[C].pins,
+    };
+  }
+
+  test("pinning applies the server's copy to the message and to a list that is open", async () => {
+    const f = await fixture();
+    try {
+      await f.store.loadPins(C);
+      expect(f.pins()).toEqual({ status: "loaded", items: [] });
+      await f.store.setPinned(C, f.first.id, true);
+      expect(f.pinCalls).toEqual([[C, f.first.id, true]]);
+      expect(conversation(f.store).messages[0].pin).toEqual(pin);
+      expect(f.pins()?.items.map((item) => item.id)).toEqual([f.first.id]);
+      await f.store.setPinned(C, f.first.id, false);
+      expect(conversation(f.store).messages[0].pin).toBeUndefined();
+      expect(f.pins()?.items).toEqual([]);
+    } finally { f.store.dispose(); }
+  });
+
+  test("a refusal is thrown with the server's words and changes nothing", async () => {
+    const f = await fixture();
+    try {
+      await f.store.setPinned(C, f.first.id, true);
+      const before = conversation(f.store).messages;
+      await expect(f.store.setPinned(C, "m-other", true)).rejects.toThrow("the most it can have");
+      expect(conversation(f.store).messages).toBe(before);
+    } finally { f.store.dispose(); }
+  });
+
+  test("a failed fetch keeps the reason for the list to show", async () => {
+    const f = await fixture();
+    try {
+      f.holdList(() => Promise.reject(httpError(503, "The server is busy. Try again in a minute.")));
+      await f.store.loadPins(C);
+      expect(f.pins()).toEqual({ status: "error", items: [], error: "The server is busy. Try again in a minute." });
+      f.holdList(() => Promise.reject(new Error("offline")));
+      await f.store.loadPins(C);
+      expect(f.pins()?.error).toBe("Couldn’t load the pinned messages. Check your connection, then try again.");
+    } finally { f.store.dispose(); }
+  });
+
+  test("a list fetched before my own pin answered does not undo it", async () => {
+    const f = await fixture();
+    try {
+      await f.store.loadPins(C);
+      let release!: () => void;
+      f.holdList(() => new Promise((resolve) => { release = () => resolve({ pins: [] }); }));
+      const loading = f.store.loadPins(C);
+      await f.store.setPinned(C, f.first.id, true);
+      release();
+      await loading;
+      expect(f.pins()?.items.map((item) => item.id)).toEqual([f.first.id]);
+    } finally { f.store.dispose(); }
+  });
+
+  test("only text rooms have pinned lists", async () => {
+    const { store, server } = await openStore();
+    let asked = false;
+    server.api.listPins = async () => { asked = true; return { pins: [] }; };
+    try {
+      await store.loadPins(C);
+      expect(asked).toBe(false);
+      expect(store.getState().conversations[C].pins).toBeUndefined();
+    } finally { store.dispose(); }
+  });
+});

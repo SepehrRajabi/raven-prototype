@@ -20,6 +20,7 @@ interface RowHandlers {
   onVote: (options: number[]) => Promise<void>;
   onClosePoll?: () => Promise<void>;
   onPollPrivacy?: (privacy: ChatPollPrivacy) => Promise<void>;
+  onPin?: (pinned: boolean) => Promise<void>;
 }
 
 /** Virtuoso counts rows from here, leaving room to add older ones in front. */
@@ -132,6 +133,8 @@ export interface MessageListProps {
   /** A click on a message while choosing. `order` is what can be chosen, in order. */
   onToggleSelected?: (message: ChatMessage, shift: boolean, order: string[]) => void;
   mentions?: MentionContext;
+  /** Messages here can be pinned: a text room, on a server that has pins. */
+  pins?: boolean;
 }
 
 /**
@@ -140,7 +143,7 @@ export interface MessageListProps {
  * length scrolls the same.
  */
 export const MessageList = forwardRef<MessageListHandle, MessageListProps>(function MessageList(
-  { store, conversation, me, windowActive, intro, reactionLimits, onReply, onEdit, onRemoveForMe, onDeleteForEveryone, onOpenImage, onOpenPerson, onOpenSpace, onSave, onOpenSource, onForward, onStartSelecting, selection, onToggleSelected, mentions },
+  { store, conversation, me, windowActive, intro, reactionLimits, onReply, onEdit, onRemoveForMe, onDeleteForEveryone, onOpenImage, onOpenPerson, onOpenSpace, onSave, onOpenSource, onForward, onStartSelecting, selection, onToggleSelected, mentions, pins = false },
   ref,
 ) {
   const { summary, messages, pending } = conversation;
@@ -320,12 +323,14 @@ export const MessageList = forwardRef<MessageListHandle, MessageListProps>(funct
           onVote: (options) => store.votePoll(id, messageId, options),
           onClosePoll: mine && canSend ? () => store.closePoll(id, messageId) : undefined,
           onPollPrivacy: mine && canSend ? (privacy) => store.setPollPrivacy(id, messageId, privacy) : undefined,
+          // Who may pin or unpin which message is decided per message, by pinActions.
+          onPin: pins ? (pinned) => store.setPinned(id, messageId, pinned) : undefined,
         };
         cache.set(key, handlers);
       }
       return handlers;
     };
-  }, [store, id, canSend]);
+  }, [store, id, canSend, pins]);
   const toggleSelected = useCallback(
     (toggled: ChatMessage, shift: boolean) => onToggleSelected?.(toggled, shift, selectable),
     [onToggleSelected, selectable],
@@ -434,6 +439,9 @@ export const MessageList = forwardRef<MessageListHandle, MessageListProps>(funct
                 onVote={handlers.onVote}
                 onClosePoll={handlers.onClosePoll}
                 onPollPrivacy={handlers.onPollPrivacy}
+                onPin={handlers.onPin}
+                canPin={pins && Boolean(summary.canPin)}
+                canManagePins={pins && summary.canManage}
                 canReply={summary.canSend}
                 canEdit={editable}
                 canDeleteForEveryone={mine || summary.canManage}

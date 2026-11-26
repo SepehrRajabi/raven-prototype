@@ -9,6 +9,7 @@ import {
   applyOwnMessage,
   applyPage,
   applySummary,
+  applyPins,
   addPending,
   emptyChatState,
   excerptOf,
@@ -17,6 +18,9 @@ import {
   listedConversations,
   markReadLocally,
   nextTypingExpiry,
+  setPinsFailed,
+  setPinsLoading,
+  syncPinned,
   treeHasUnread,
   TYPING_TTL_MS,
   unreadLabel,
@@ -629,5 +633,105 @@ describe("a conversation that appears while the list is fetched", () => {
   test("is dropped as before when nothing happened to it during the fetch", () => {
     const { state } = applyList(chat(), [], { ...DEFAULT_SETTINGS });
     expect(state.conversations[C]).toBeUndefined();
+  });
+});
+
+describe("pinned messages", () => {
+  const pin = (at: string, byName = "Sara") => ({ byId: byName.toLowerCase(), byName, at });
+  const room = (loaded?: ChatMessage[]) => chat({ kind: "nest", treeId: "t1", peer: undefined, lastSeq: 5 }, loaded);
+  const pinned = (state: ChatState) => state.conversations[C].pins?.items.map((item) => item.id);
+  const updated = (seq: number, at: number, patch: Partial<ChatMessage> = {}) => ({ type: "message.updated", conversationId: C, seq: at, message: message(seq, { changedSeq: at, ...patch }) });
+
+  test("the list is newest pin first and holds only pinned messages that are still there", () => {
+    const state = applyPins(room(), C, [
+      message(1, { pin: pin("2026-11-01T10:00:00Z") }),
+      message(2, { pin: pin("2026-11-03T10:00:00Z") }),
+      message(3),
+      message(4, { pin: pin("2026-11-04T10:00:00Z"), deletedAt: "2026-11-04T11:00:00Z" }),
+    ]);
+    expect(state.conversations[C].pins?.status).toBe("loaded");
+    expect(pinned(state)).toEqual(["m2", "m1"]);
+  });
+
+  test("a message pinned by an event goes in at the top, even when its window is not loaded", () => {
+    const start = applyPins(room(), C, [message(1, { pin: pin("2026-11-01T10:00:00Z") })]);
+    const { state } = applyEvent(start, updated(3, 6, { pin: pin("2026-11-02T10:00:00Z") }), NOW);
+    expect(pinned(state)).toEqual(["m3", "m1"]);
+  });
+
+  test("an unpin, a delete and a removal for me take it out", () => {
+    const start = applyPins(room([message(1), message(2), message(3)]), C, [
+      message(1, { pin: pin("2026-11-01T10:00:00Z") }),
+      message(2, { pin: pin("2026-11-02T10:00:00Z") }),
+      message(3, { pin: pin("2026-11-03T10:00:00Z") }),
+    ]);
+    const unpinned = applyEvent(start, updated(3, 6), NOW).state;
+    expect(pinned(unpinned)).toEqual(["m2", "m1"]);
+    const deleted = applyEvent(unpinned, updated(2, 7, { deletedAt: "2026-11-05T10:00:00Z", body: "" }), NOW).state;
+    expect(pinned(deleted)).toEqual(["m1"]);
+    const hidden = applyEvent(deleted, { type: "message.hidden", conversationId: C, messageId: "m1", hideRev: 1, unreadCount: 0 }, NOW).state;
+    expect(pinned(hidden)).toEqual([]);
+  });
+
+  test("an older copy does not undo a newer pin, and the same copy twice changes nothing", () => {
+    const start = applyPins(room(), C, [message(1, { changedSeq: 8, pin: pin("2026-11-01T10:00:00Z") })]);
+    const late = applyEvent(start, updated(1, 6), NOW).state;
+    expect(pinned(late)).toEqual(["m1"]);
+    const items = late.conversations[C].pins!.items;
+    expect(syncPinned(items, [items[0]])).toBe(items);
+  });
+
+  test("an edit of a pinned message replaces its copy in the list", () => {
+    const start = applyPins(room(), C, [message(1, { pin: pin("2026-11-01T10:00:00Z") })]);
+    const { state } = applyEvent(start, updated(1, 6, { body: "edited", pin: pin("2026-11-01T10:00:00Z") }), NOW);
+    expect(state.conversations[C].pins?.items[0].body).toBe("edited");
+  });
+
+  test("history pages and caught-up changes keep it in step", () => {
+    const start = applyPins(room([message(1)]), C, [message(1, { pin: pin("2026-11-01T10:00:00Z") })]);
+    const paged = applyPage(start, C, page([message(2, { changedSeq: 6, pin: pin("2026-11-02T10:00:00Z") })], { asOfSeq: 6 }), "newer").state;
+    expect(pinned(paged)).toEqual(["m2", "m1"]);
+    const changed = applyChanges(paged, C, { messages: [message(1, { changedSeq: 7 })], reset: false, asOfSeq: 7, me: { readSeq: 0, hideRev: 0, visibleFromSeq: 0 } }).state;
+    expect(pinned(changed)).toEqual(["m2"]);
+  });
+
+  test("my own pin, answered by the server, goes in", () => {
+    const start = applyPins(room([message(1)]), C, []);
+    const { state } = applyOwnMessage(start, message(1, { changedSeq: 6, pin: pin("2026-11-02T10:00:00Z", "Me") }));
+    expect(pinned(state)).toEqual(["m1"]);
+    expect(state.conversations[C].messages[0].pin?.byName).toBe("Me");
+  });
+
+  test("a pin with the same revision still corrects the window's copy", () => {
+    const start = room([message(1)]);
+    const { state } = applyEvent(start, { type: "message.updated", conversationId: C, seq: 6, message: message(1, { pin: pin("2026-11-02T10:00:00Z") }) }, NOW);
+    expect(state.conversations[C].messages[0].pin).toBeDefined();
+  });
+
+  test("nothing is kept before the list is opened, and nothing changes while it loads", () => {
+    const start = room([message(1)]);
+    const event = updated(1, 6, { pin: pin("2026-11-02T10:00:00Z") });
+    expect(applyEvent(start, event, NOW).state.conversations[C].pins).toBeUndefined();
+    const loading = setPinsLoading(start, C);
+    expect(loading.conversations[C].pins).toEqual({ status: "loading", items: [] });
+    expect(applyEvent(loading, event, NOW).state.conversations[C].pins).toEqual({ status: "loading", items: [] });
+  });
+
+  test("a failed fetch shows its reason, but never hides a list already shown", () => {
+    const failed = setPinsFailed(setPinsLoading(room(), C), C, "Couldn’t load.");
+    expect(failed.conversations[C].pins).toEqual({ status: "error", items: [], error: "Couldn’t load." });
+    const shown = applyPins(room(), C, [message(1, { pin: pin("2026-11-02T10:00:00Z") })]);
+    expect(setPinsFailed(shown, C, "Couldn’t load.")).toBe(shown);
+    expect(setPinsLoading(shown, C)).toBe(shown);
+  });
+
+  test("clearing the room for me forgets the list, so it is fetched again", () => {
+    const shown = applyPins(room(), C, [message(1, { pin: pin("2026-11-02T10:00:00Z") })]);
+    const cleared = applySummary(shown, summary({ kind: "nest", treeId: "t1", peer: undefined, lastSeq: 5, visibleFromSeq: 5 })).state;
+    expect(cleared.conversations[C].pins).toBeUndefined();
+    const relisted = applyList(shown, [summary({ kind: "nest", treeId: "t1", peer: undefined, lastSeq: 5, hideRev: 2 })], DEFAULT_SETTINGS).state;
+    expect(relisted.conversations[C].pins).toBeUndefined();
+    const unchanged = applySummary(shown, summary({ kind: "nest", treeId: "t1", peer: undefined, lastSeq: 5, name: "Renamed" })).state;
+    expect(pinned(unchanged)).toEqual(["m1"]);
   });
 });

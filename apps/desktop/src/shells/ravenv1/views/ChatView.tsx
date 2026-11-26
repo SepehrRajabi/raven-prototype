@@ -9,12 +9,14 @@ import { ImageViewer } from "@/components/chat/ImageViewer";
 import { Composer } from "@/components/chat/Composer";
 import { ConversationAvatar, SystemBadge } from "@/components/chat/ConversationRow";
 import { MessageList, type MessageListHandle } from "@/components/chat/MessageList";
+import { PinnedMessagesButton } from "@/components/chat/PinnedMessages";
 import { Button } from "@/components/ui/button";
 import { ConfirmDialog } from "@/components/ui/dialog";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { toast } from "@/components/ui/toast";
 import { failureText } from "@/lib/chat/errors";
 import { notifies } from "@/lib/chat/notify";
+import { pinLimits } from "@/lib/chat/pins";
 import { canSelect, clickSelection, selectionAfterKey, startSelection, type MessageSelection } from "@/lib/chat/selection";
 import { canShow, isLibraryMessage, pollLimits, reactionLimits, summaryOf } from "@/lib/chat/attachments";
 import { addToTray } from "@/lib/chat/composerTray";
@@ -296,6 +298,12 @@ function OpenConversation({
   const openPerson = useCallback((userId: string) => onNavigate({ kind: "user", id: userId }), [onNavigate]);
   const openSpace = useCallback((treeId: string) => onNavigate({ kind: "tree", id: treeId }), [onNavigate]);
   const limitsForReactions = useMemo(() => reactionLimits(data.serverProperties.properties), [data.serverProperties.properties]);
+  // Pins live only in a space's text rooms, and only on a server that has them.
+  const pinsHere = summary.kind === "nest" && pinLimits(data.serverProperties.properties) !== null;
+  const loadPins = useCallback(() => void chat.loadPins(id), [chat, id]);
+  const goToPinned = useCallback((message: ChatMessage) => list.current?.goTo(message.seq), []);
+  const unpin = useCallback((message: ChatMessage) => chat.setPinned(id, message.id, false), [chat, id]);
+  const membersCanPin = useCallback((on: boolean) => chat.setMembersCanPin(id, on), [chat, id]);
   const startSelecting = useCallback((message: ChatMessage) => {
     setReplyingTo(null);
     setEditing(null);
@@ -454,6 +462,22 @@ function OpenConversation({
                   .map((member) => ({ id: member.userId, name: displayNameFor(member) }))}
               />
             ) : null}
+            {pinsHere ? (
+              <PinnedMessagesButton
+                pins={conversation.pins}
+                me={me}
+                canPin={Boolean(summary.canPin)}
+                canManage={summary.canManage}
+                canWrite={summary.canSend}
+                membersCanPin={Boolean(summary.membersCanPin)}
+                onMembersCanPin={summary.canManage ? membersCanPin : undefined}
+                nest={data.labels.nestSingular.toLowerCase()}
+                resolve={mentionResolver}
+                onLoad={loadPins}
+                onGo={goToPinned}
+                onUnpin={unpin}
+              />
+            ) : null}
             {peer ? <PersonActions person={peer} data={data} media={media} entry={entry} onNavigate={onNavigate} /> : null}
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
@@ -532,6 +556,7 @@ function OpenConversation({
           selection={selection}
           onToggleSelected={toggleSelected}
           mentions={mentions}
+          pins={pinsHere}
         />
 
         {selection ? (

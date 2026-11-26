@@ -12,7 +12,7 @@ import type { ReactionLimits } from "./attachments";
 import { toggledReactions } from "./reactions";
 import { modeFor } from "./notify";
 import type { ChatApi, ForwardInput } from "./chatApi";
-import { httpStatusOf } from "./errors";
+import { failureText, httpStatusOf } from "./errors";
 import {
   classifySendFailure,
   clearOutbox,
@@ -39,12 +39,15 @@ import {
   expireTyping,
   markReadLocally,
   applySeen,
+  applyPins,
   nextTypingExpiry,
   removeConversation,
   removeMessageLocally,
   removePending,
   setLayout,
   setLoading,
+  setPinsFailed,
+  setPinsLoading,
   setSettings,
   setReactionsLocally,
   unloadConversation,
@@ -168,6 +171,9 @@ export class ChatStore {
   private readonly changesAgain = new Set<string>();
   private readonly changesTimers = new Map<string, Timer>();
   private readonly summaryFetching = new Set<string>();
+  private readonly pinsFetching = new Set<string>();
+  /** Pins and unpins made here, per conversation, so a list fetched before one is not taken over it. */
+  private readonly pinChanges = new Map<string, number>();
   private readonly summaryAgain = new Set<string>();
 
   private readonly sending = new Set<string>();
@@ -843,6 +849,40 @@ export class ChatStore {
     this.apply(applyOwnMessage(this.state, message, this.atBottom.get(conversationId) ?? true));
   }
 
+  /**
+   * Pins or unpins a message in a text room. Nothing changes on screen until the server
+   * agrees; a refusal (the room is full, no right to) is thrown for the caller to show.
+   */
+  async setPinned(conversationId: string, messageId: string, pinned: boolean) {
+    const { message } = await this.api.pinMessage(conversationId, messageId, pinned);
+    this.pinChanges.set(conversationId, (this.pinChanges.get(conversationId) ?? 0) + 1);
+    this.apply(applyOwnMessage(this.state, message, this.atBottom.get(conversationId) ?? true));
+  }
+
+  /**
+   * Fetches a text room's pinned messages, for the list that shows them. While the list is
+   * held, every copy of a message that arrives keeps it in step; each look fetches it
+   * again in case something was missed while the stream was down.
+   */
+  async loadPins(conversationId: string) {
+    const conversation = this.state.conversations[conversationId];
+    if (this.disposed || !conversation || conversation.summary.kind !== "nest" || this.pinsFetching.has(conversationId)) return;
+    this.pinsFetching.add(conversationId);
+    this.set(setPinsLoading(this.state, conversationId));
+    const changes = this.pinChanges.get(conversationId) ?? 0;
+    try {
+      const { pins } = await this.api.listPins(conversationId);
+      // A pin or unpin of mine answered meanwhile: the list held is newer than this one.
+      const overtaken = changes !== (this.pinChanges.get(conversationId) ?? 0) && this.state.conversations[conversationId]?.pins?.status === "loaded";
+      if (!overtaken) this.set(applyPins(this.state, conversationId, pins ?? []));
+    } catch (error) {
+      if (this.handleSignedOut(error)) return;
+      this.set(setPinsFailed(this.state, conversationId, failureText(error, "Couldn’t load the pinned messages. Check your connection, then try again.")));
+    } finally {
+      this.pinsFetching.delete(conversationId);
+    }
+  }
+
   async edit(conversationId: string, messageId: string, body: string) {
     const { message } = await this.api.edit(conversationId, messageId, body.trim());
     this.apply(applyOwnMessage(this.state, message, this.atBottom.get(conversationId) ?? true));
@@ -957,6 +997,11 @@ export class ChatStore {
 
   async rename(conversationId: string, patch: { name?: string; topic?: string }) {
     return this.take(await this.api.updateConversation(conversationId, patch));
+  }
+
+  /** Lets members of a text room pin messages too, or stops them. The server writes the change into the room. */
+  async setMembersCanPin(conversationId: string, on: boolean) {
+    return this.take(await this.api.updateConversation(conversationId, { membersCanPin: on }));
   }
 
   async addMembers(conversationId: string, userIds: string[]) {

@@ -1,5 +1,5 @@
 import { memo, useRef, useState, type ReactNode } from "react";
-import { AlertCircle, Bookmark, CalendarClock, Check, CheckCheck, CheckCircle2, CircleStop, Clock, Shield, ChevronDown, Copy, CornerUpLeft, Download, EyeOff, Forward, MoreHorizontal, Pencil, SmilePlus, Trash2, Users } from "lucide-react";
+import { AlertCircle, Bookmark, CalendarClock, Check, CheckCheck, CheckCircle2, CircleStop, Clock, Shield, ChevronDown, Copy, CornerUpLeft, Download, EyeOff, Forward, MoreHorizontal, Pencil, Pin, PinOff, SmilePlus, Trash2, Users } from "lucide-react";
 import { Avatar } from "@/components/ui/avatar";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
@@ -10,6 +10,7 @@ import { canShow, messageExcerpt, onlyPictures, summaryOf } from "@/lib/chat/att
 import type { ReactionLimits } from "@/lib/chat/attachments";
 import { QUICK_REACTIONS } from "@/lib/chat/reactions";
 import { failureText } from "@/lib/chat/errors";
+import { pinActions, pinTooltip } from "@/lib/chat/pins";
 import { libraryApi } from "@/lib/library/libraryApi";
 import { saveAttachment } from "@/lib/chat/imageActions";
 import { excerptOf } from "@/lib/chat/reducer";
@@ -19,7 +20,7 @@ import { repeatText } from "@/lib/events";
 import { boardTime } from "@/lib/notes";
 import { Button } from "@/components/ui/button";
 import { clockTime, fullTime, listTime } from "@/lib/chat/time";
-import type { ChatAttachment, ChatMessage, ChatOrigin, ChatPollPrivacy, ChatReplyRef, ChatSystemPayload, PendingMessage } from "@/lib/chat/types";
+import type { ChatAttachment, ChatMessage, ChatOrigin, ChatPin, ChatPollPrivacy, ChatReplyRef, ChatSystemPayload, PendingMessage } from "@/lib/chat/types";
 import { NestGlyph } from "@/shells/ravenv1/atoms";
 import { returnFocusToKeyboardOnly } from "@/lib/focusHandoff";
 import { cn } from "@/lib/utils";
@@ -153,6 +154,15 @@ export interface MessageRowProps {
   onClosePoll?: () => Promise<void>;
   /** Changes what leaves the chat from this message's poll. Set on your own polls. */
   onPollPrivacy?: (privacy: ChatPollPrivacy) => Promise<void>;
+  /**
+   * Pins or unpins this message. Set only in a text room of a server that has pins;
+   * `pinActions` decides which, if either, the menu offers.
+   */
+  onPin?: (pinned: boolean) => Promise<void>;
+  /** The viewer may pin here: they manage the room, or the room lets members pin. */
+  canPin?: boolean;
+  /** The viewer manages the room: they may unpin any message. */
+  canManagePins?: boolean;
   onRemoveForMe: (message: ChatMessage) => void;
   onDeleteForEveryone: (message: ChatMessage) => void;
   onOpenReply: (seq: number) => void;
@@ -190,8 +200,20 @@ function PersonLink({ message, onOpenPerson, className, children }: { message: C
   );
 }
 
+/** A pinned message's quiet mark, beside its time. The tooltip says who pinned it and when. */
+function PinMark({ pin, me }: { pin: ChatPin; me: string }) {
+  const label = pinTooltip(pin, me);
+  return (
+    <Tooltip label={label}>
+      <span role="img" aria-label={label} className="flex items-center">
+        <Pin className="h-3.5 w-3.5" aria-hidden />
+      </span>
+    </Tooltip>
+  );
+}
+
 /** The time, and for my own messages whether it has been read. */
-function MessageMeta({ message, mine, deleted, status, overImage, alignStart, className }: { message: ChatMessage; mine: boolean; deleted: boolean; status?: DeliveryStatus; overImage?: boolean; alignStart?: boolean; className?: string }) {
+function MessageMeta({ message, mine, me, deleted, status, overImage, alignStart, className }: { message: ChatMessage; mine: boolean; me: string; deleted: boolean; status?: DeliveryStatus; overImage?: boolean; alignStart?: boolean; className?: string }) {
   return (
     <div
       className={cn(
@@ -202,6 +224,7 @@ function MessageMeta({ message, mine, deleted, status, overImage, alignStart, cl
         className,
       )}
     >
+      {message.pin && !deleted ? <PinMark pin={message.pin} me={me} /> : null}
       {message.editedAt && !deleted ? <span title={`Edited ${fullTime(message.editedAt)}`}>edited</span> : null}
       <time dateTime={message.createdAt} title={fullTime(message.createdAt)} className="tabular-nums">{clockTime(message.createdAt)}</time>
       {mine && !deleted ? (
@@ -343,6 +366,13 @@ export const MessageRow = memo(function MessageRow(props: MessageRowProps) {
     void props.onClosePoll?.().catch((failure: unknown) => toast({ title: failureText(failure, "Couldn’t end the poll."), tone: "error" }));
   };
 
+  const pinning = props.onPin
+    ? pinActions(message, { canPin: Boolean(props.canPin), canManage: Boolean(props.canManagePins), canWrite: Boolean(props.canReply), me: props.me })
+    : { pin: false, unpin: false };
+  const setPinned = (pinned: boolean) => {
+    void props.onPin?.(pinned).catch((failure: unknown) => toast({ title: failureText(failure, pinned ? "Couldn’t pin that message." : "Couldn’t unpin that message."), tone: "error" }));
+  };
+
   const removeLinkPreview = () => {
     void props.onRemoveLinkPreview?.().catch((failure: unknown) => toast({ title: failureText(failure, "Couldn’t remove the preview."), tone: "error" }));
   };
@@ -455,6 +485,17 @@ export const MessageRow = memo(function MessageRow(props: MessageRowProps) {
               Add to Saved messages
             </DropdownMenuItem>
           ) : null}
+          {pinning.pin ? (
+            <DropdownMenuItem onSelect={() => setPinned(true)}>
+              <Pin className="text-muted-foreground" />
+              Pin
+            </DropdownMenuItem>
+          ) : pinning.unpin ? (
+            <DropdownMenuItem onSelect={() => setPinned(false)}>
+              <PinOff className="text-muted-foreground" />
+              Unpin
+            </DropdownMenuItem>
+          ) : null}
           {!deleted && savable ? (
             <DropdownMenuItem onSelect={save}>
               <Download className="text-muted-foreground" />
@@ -562,13 +603,13 @@ export const MessageRow = memo(function MessageRow(props: MessageRowProps) {
             {bareEmoji ? <>
               <MessageText body={message.body} mentions={props.mentions} />
               {hasChips ? <div className="mt-1">{chips(mine ? "end" : "start")}</div> : null}
-              <MessageMeta message={message} mine={mine && !props.inSaved} deleted={deleted} status={status} alignStart={!mine} />
+              <MessageMeta message={message} mine={mine && !props.inSaved} me={props.me} deleted={deleted} status={status} alignStart={!mine} />
             </> : <MessageAttachments
               conversationId={message.conversationId}
               attachments={attachments}
               senderName={mine ? "you" : message.senderName}
               onOpen={(attachment) => props.onOpenImage(message, attachment)}
-              footer={<MessageMeta message={message} mine={mine && !props.inSaved} deleted={deleted} status={status} overImage />}
+              footer={<MessageMeta message={message} mine={mine && !props.inSaved} me={props.me} deleted={deleted} status={status} overImage />}
             />}
             {!bareEmoji && hasChips ? <div className="mt-1">{chips(mine ? "end" : "start")}</div> : null}
           </div>
@@ -617,10 +658,10 @@ export const MessageRow = memo(function MessageRow(props: MessageRowProps) {
               // Reactions share the last line with the time, as in a printed note's footer.
               <div className="mt-1 flex flex-wrap items-end gap-x-3 gap-y-1">
                 {chips("start")}
-                <MessageMeta message={message} mine={mine && !props.inSaved} deleted={deleted} status={status} className="ml-auto mt-0 h-7" />
+                <MessageMeta message={message} mine={mine && !props.inSaved} me={props.me} deleted={deleted} status={status} className="ml-auto mt-0 h-7" />
               </div>
             ) : (
-              <MessageMeta message={message} mine={mine && !props.inSaved} deleted={deleted} status={status} />
+              <MessageMeta message={message} mine={mine && !props.inSaved} me={props.me} deleted={deleted} status={status} />
             )}
           </div>
         )}
