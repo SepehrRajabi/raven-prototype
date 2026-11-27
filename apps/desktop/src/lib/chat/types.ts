@@ -68,8 +68,10 @@ export interface ChatSystemPayload {
   type?: "admin" | "event" | string;
   /** The words of an `admin` message. Plain text: never parse it. */
   text?: string;
-  event?: "group_created" | "members_added" | "member_left" | "member_removed" | "renamed" | "topic_changed" | string;
+  event?: "group_created" | "members_added" | "member_left" | "member_removed" | "renamed" | "topic_changed" | "pinning_changed" | string;
   name?: string;
+  /** A `pinning_changed` line: whether members may now pin in this room. */
+  membersCanPin?: boolean;
   user?: ChatUser;
   users?: ChatUser[];
   /** An `event` message: an invitation from a space, with the names as they were when sent. */
@@ -196,6 +198,13 @@ export interface ChatPollPrivacy {
   copyVoters: boolean;
 }
 
+/** Who pinned a message in a text room, and when (UTC). Absent when it is not pinned. */
+export interface ChatPin {
+  byId: string;
+  byName: string;
+  at: string;
+}
+
 export interface ChatMessage {
   id: string;
   conversationId: string;
@@ -218,6 +227,8 @@ export interface ChatMessage {
   system?: ChatSystemPayload;
   /** Set on a copy: a message saved or forwarded from elsewhere. */
   origin?: ChatOrigin;
+  /** Set while the message is pinned in its text room. Never on a deleted message. */
+  pin?: ChatPin;
   createdAt: string;
   editedAt?: string;
   deletedAt?: string;
@@ -251,6 +262,10 @@ export interface ChatConversation {
   /** The other person in a direct message deleted their account. */
   peerDeleted?: boolean;
   canManage: boolean;
+  /** A text room's setting: members who can write there may pin too. */
+  membersCanPin?: boolean;
+  /** Whether the viewer may pin messages here. Only text rooms have it. */
+  canPin?: boolean;
   memberCount: number;
   lastSeq: number;
   lastActivityMs: number;
@@ -487,6 +502,20 @@ export interface ConversationState {
   typing: Record<string, TypingPerson>;
   /** Who has seen the last message. Absent until fetched. */
   seen?: ChatSeen;
+  /** The room's pinned messages. Absent until someone opens the list (text rooms only). */
+  pins?: PinnedMessages;
+}
+
+/**
+ * The pinned messages of a text room, newest pin first. Fetched when the list is opened,
+ * then kept in step by every copy of a message that arrives (events, pages, changes).
+ */
+export interface PinnedMessages {
+  /** `loading` only before the first answer; a refresh keeps showing what is there. */
+  status: "loading" | "loaded" | "error";
+  items: ChatMessage[];
+  /** Why the last fetch failed, in words the person can act on. */
+  error?: string;
 }
 
 export type ChatConnection = "connecting" | "live" | "offline";

@@ -72,6 +72,8 @@ at a person is allowed only against someone below you.
 | Create, rename, arrange and end rooms, text rooms and categories | | yes | yes |
 | Add members, answer join requests, invite into rooms | | yes | yes |
 | Remove someone, delete their messages | | members only | anyone else |
+| Pin and unpin messages in a text room | when the room lets members pin | yes | yes |
+| Let members of a text room pin, or stop them | | yes | yes |
 | Server mute and server deafen someone | | members only | anyone else |
 | Keep the space board: house rules (later pinned notes and events) | | yes | yes |
 | Keep the space's GIF and sticker set: add, rename, organise, remove (`stickers.manage`) | | yes | yes |
@@ -87,6 +89,15 @@ at a person is allowed only against someone below you.
   moderators run them, within the room access rules below. Who created a room does not matter, and nobody from outside the
   space can be invited in.
 - A room outside any space (a temporary one) is run by whoever started it.
+- Pinning follows the right to run a text room: an owner or a moderator with full access
+  to it. A moderator who may only read a room cannot pin or unpin there. The people who
+  run a room can also let its members pin, room by room ("Members can pin", off until
+  turned on); each change is written into the room as a line that names who made it.
+  Members may then pin while they can write in the room, and take off the pins they made;
+  they cannot unpin anyone else's pin. Turning it off keeps the pins members made, and
+  each of them can still take off their own. Anyone may unpin their own message while
+  they can read the room. Pins exist only in a space's text rooms, not in direct messages
+  or groups.
 - Group chats keep their own two roles, owner and member.
 - A space's GIFs and stickers can be used only in that space's conversations. Any member
   may save one to their own library. Whether that saved copy may then be made public on

@@ -466,6 +466,12 @@ conversation is described as the caller sees it:
   be the caller's friends.
 - `POST …/settings` with `name` and/or `topic` renames a group (its owner) or a text Nest
   (Tree owner or moderator).
+- `POST …/settings` with `{ "membersCanPin": true }` (or `false`) lets the members of a
+  text Nest pin messages, or stops them. It takes the same right as renaming (`canManage`),
+  must be sent on its own (`400` with `name` or `topic`), and answers `400` for any other
+  kind of conversation. A change writes a `pinning_changed` system message
+  (`{event, membersCanPin}`); sending the current value changes nothing. A text Nest's
+  summary carries `membersCanPin` and `canPin`.
 - `POST …/members` with `{ "userIds": ["…"] }` adds the caller's friends to a group.
 - `DELETE …/members/:userId` removes someone (owner) or, with the caller's own id, leaves.
 - `DELETE /v1/chat/conversations/:id` deletes a group (owner) or a text Nest (Tree owner or
@@ -494,6 +500,8 @@ GET    /v1/chat/conversations/:id/messages?around=<seq>
 GET    /v1/chat/conversations/:id/changes?after=<seq>
 POST   /v1/chat/conversations/:id/messages
 POST   /v1/chat/conversations/:id/messages/:messageId/reactions
+POST   /v1/chat/conversations/:id/messages/:messageId/pin
+GET    /v1/chat/conversations/:id/pins
 POST   /v1/chat/conversations/:id/messages/:messageId/edit
 DELETE /v1/chat/conversations/:id/messages/:messageId?for=me|everyone
 DELETE /v1/chat/conversations/:id/messages/:messageId/link-preview
@@ -557,7 +565,7 @@ Without a cursor the newest page is returned. `limit` defaults to 50 and is at m
 `after=0` reads from the beginning. `asOfSeq` is how current the answer is guaranteed to
 be: it is read before the messages, so it can only understate.
 
-`changes?after=<seq>` returns every message that was created, edited, reacted to or deleted after that
+`changes?after=<seq>` returns every message that was created, edited, reacted to, pinned, unpinned or deleted after that
 sequence number, oldest change first, in the same envelope with `reset` in place of the
 paging flags. `reset: true` means more than 200 messages changed: reload the newest page
 instead.
@@ -572,6 +580,29 @@ instead.
   `changedSeq`, without unread, activity or notification changes. Deleted messages,
   previews and reply quotes omit reactions. `properties.chat.reactions` advertises
   `{maxPerPerson: 3, maxKinds: 20}`.
+- `POST …/pin` with `{ "pinned": true }` pins a message in a space's text room;
+  `"pinned": false` unpins it. Answers `{ "message": ChatMessage }`. A pinned message
+  carries `pin: {byId, byName, at}`: who pinned it, the name they go by in the space
+  (worked out as for a message's sender), and when, as a fixed-width UTC timestamp
+  (`2026-11-26T10:53:40.123456789Z`). Pinning needs the
+  right to run the room (`canManage`: full access to it and the moderator or owner role),
+  or, when the room lets members pin (`membersCanPin`), being able to write there
+  (`canPin` in the summary). Unpinning is allowed for those who run the room, for the
+  message's author while they can read the room, and for whoever made the pin while they
+  can write there. Only visible, undeleted text messages can be pinned (`409` otherwise); someone
+  else's message gives `403`; a missing, hidden or out-of-range message `404`; any
+  conversation that is not a space's text room `400` ("Messages can be pinned only in a
+  space’s rooms."). A room holds up to 50 pins; another gives `422`. Pinning a pinned
+  message or unpinning one that is not pinned changes nothing and answers with the
+  message. A change advances `changedSeq` and emits `message.updated`, without unread,
+  activity or notification changes and without a system message. History, changes,
+  single-message responses and message events carry `pin`; deleted messages, previews
+  and reply quotes do not. `properties.chat.pins` advertises `{max: 50}`.
+- `GET …/pins` answers `{ "pins": [ChatMessage, …] }`: the room's pinned messages that the
+  caller may read, newest pin first, each as complete as in a history page. Messages
+  before the caller's history floor or removed for themselves are left out. Someone
+  without access to the room gets the same `404` as for its history; any other kind of
+  conversation answers `{ "pins": [] }`.
 - `POST …/edit` with `{ "body": "…" }`: the sender, within 48 hours.
 - Link previews, when the server announces `properties.chat.linkPreviews` (`{version: 1}`;
   only with `RAVEN_LINK_PREVIEWS=on`). After a text message without attachments is sent,
@@ -590,7 +621,7 @@ instead.
 - `POST …/typing` has no body and stores nothing.
 
 Rate limits are per account and answer `429` with `Retry-After`: send and typing 20 per 10
-seconds, edit 30 per minute, react 60 per minute, delete 60 per minute.
+seconds, edit 30 per minute, react 60 per minute, pin 30 per minute, delete 60 per minute.
 
 ### Chat events
 

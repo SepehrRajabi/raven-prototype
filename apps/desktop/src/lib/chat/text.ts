@@ -51,6 +51,8 @@ export function systemLine(system: ChatSystemPayload | undefined, actorId: strin
       return `${actor} changed the name to “${system.name ?? ""}”`;
     case "topic_changed":
       return `${actor} changed the description`;
+    case "pinning_changed":
+      return system.membersCanPin ? `${actor} let members pin messages` : `${actor} stopped members pinning messages`;
     default:
       return "";
   }

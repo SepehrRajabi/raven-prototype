@@ -49,6 +49,15 @@ Defaults chosen during the build. Each is one constant or one check to change:
   Adding a fourth replaces your oldest. Anyone who can send can react to a visible text
   message, including their own. Reactions never notify, count as unread or move a
   conversation up the list.
+- Pins (since 2026-11-26) exist only in a space's text rooms. The people who run a room
+  (its owner and moderators with full access to it) pin and unpin messages; an author may
+  also unpin their own message while they can read the room. They can also let the
+  room's members pin ("Members can pin", off by default, set per room); members who can
+  write there may then pin and take off the pins they made. Turning it on or off adds a
+  line to the room naming who did it. A room holds up to 50 pins.
+  Everyone who can read the room sees the same list, newest pin first, with who pinned
+  each message and when. Pins never notify, add a note to the room, count as unread or
+  move a conversation up the list.
 - A new incoming message brings an archived conversation back.
 - Messages are up to 4096 characters. Formatting is `**bold**`, `*italic*`, `~~struck~~`,
   `` `code` `` and fenced code blocks. A fence that names a language (` ```go `) is
@@ -59,7 +68,7 @@ Defaults chosen during the build. Each is one constant or one check to change:
   is how people are tricked.
 
 Not in the desktop client yet: attachments (the server supports stored images).
-Not in this version: mentions, search, forwarding, pinning, end-to-end
+Not in this version: mentions, search, forwarding, end-to-end
 encryption, auto-delete timers, per-nest permissions, and "last seen".
 
 ### Link previews
@@ -165,8 +174,9 @@ Every handler in the chat files follows six rules. Each has a test.
 A message carries two numbers: `seq`, where it was created (the order and the paging key;
 timestamps are never used for order), and `changedSeq`, where it last changed.
 
-A reaction is a message change like an edit: it advances `changedSeq` and emits
-`message.updated`; an unchanged add or remove rolls back its sequence increment.
+A reaction, a pin and an unpin are message changes like an edit: each advances
+`changedSeq` and emits `message.updated`; an unchanged add or remove, a second pin or an
+unpin of a message that is not pinned rolls back its sequence increment.
 
 ### What the client does with them
 
@@ -260,6 +270,7 @@ The SQL runs on PostgreSQL (production) and SQLite (local use and the default te
 | `chat_object_purges` | Durable object keys queued inside the deletion transaction, with retry attempts. |
 | `chat_link_previews` | One card per message: address, title, description, site name, picture key, type and size. Migration `2026111001_chat_link_previews`. `removed_at` marks a card its sender removed; such a row keeps only the address. |
 | `chat_reactions` | Emoji, message, conversation, person and creation time; unique on `(message_id, user_id, emoji)`. Migration `2026103102_chat_reactions` runs on SQLite and PostgreSQL. Delete for everyone and group/tree deletion remove the rows; hiding and clearing retain them. |
+| `chat_pins` | One row per pinned message: message, conversation, who pinned it (`pinned_by`) and when (`pinned_at`, fixed-width UTC). Indexed on `(conversation_id, pinned_at)`. Migration `2026112601_chat_pins` runs on SQLite and PostgreSQL and also adds `chat_conversations.members_can_pin`. Delete for everyone (also when an account is deleted with its messages erased) and group/tree deletion remove the rows; hiding, clearing and deleting a text nest retain them. Pins a person made stay when they leave the space or delete their account. |
 | `chat_message_hides` | "Remove for me": person, message. |
 | `chat_user_settings` | `read_dm`, `read_group`, `read_private_space`, `read_public_space` (the four read-status switches; `share_read_status` is kept in step with `read_dm` for older clients). `chat_members.shared_read_at` is when `shared_read_seq` last moved. |
 | `tree_categories`, `tree_layout_items` | Categories of a tree and the category and position of each voice and text nest. An overlay: the `nests` table is unchanged. |
@@ -275,6 +286,22 @@ Every viewer receives the same user ids. History, changes, send/edit responses a
 message events carry reactions; deleted messages, previews and reply quotes do not.
 `properties.chat.reactions` advertises `{maxPerPerson: 3, maxKinds: 20}`; clients show
 reactions only when this capability is present.
+
+`ChatMessage.pin` is `{byId, byName, at}` while a message is pinned. `byName` is the name
+the pinner goes by in the space, worked out like a sender's name. Every reader receives the
+same pin. History, changes, single-message responses and message events carry it, loaded
+in one query per page; deleted messages, previews and reply quotes do not.
+`GET …/pins` lists a room's pinned messages that the reader may see, under the same floor
+and "remove for me" rules as history, so someone who removed a pinned message for
+themselves or cleared the room no longer finds it in their list while others still do.
+`properties.chat.pins` advertises `{max: 50}`; clients show pins only when this capability
+is present.
+
+`chat_conversations.members_can_pin` (added by the same migration, off by default) is a
+text room's "Members can pin" setting. A text room's summary carries `membersCanPin` and
+`canPin`, whether the reader may pin there: `canManage`, or `membersCanPin` with `canSend`.
+Changing it writes a `pinning_changed` system line (`{event, membersCanPin}`), which is
+also how other members' apps learn to fetch the room's summary again.
 
 ### Attachment routes and wire shape
 
@@ -345,7 +372,7 @@ Chat events arrive on `GET /v1/nest-events` as SSE event `chat` with a JSON body
 | `type` | Meaning | Sent to |
 |---|---|---|
 | `message.created` | A new message. | Everyone who may see it. |
-| `message.updated` | An edit, reaction or delete for everyone. | Everyone who may see it. |
+| `message.updated` | An edit, reaction, pin, unpin or delete for everyone. | Everyone who may see it. |
 | `conversation.bump` | The conversation changed at `seq`, without the content. | People who may not see that message. |
 | `message.hidden` | You removed a message for yourself. | Your own devices. |
 | `conversation.read` | A read position moved. | Your own devices (with the new unread count). Others get it only for the shared position, with `readAt`: the direct-message peer, or the other group or tree members, whose own switch for that kind of conversation is on. |

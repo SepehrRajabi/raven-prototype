@@ -58,7 +58,7 @@ export interface ChatApi {
   /** Copies messages from one conversation into another, oldest first, then the note. */
   forward(input: ForwardInput): Promise<{ conversationId: string; messages: ChatMessage[] }>;
   createGroup(name: string, memberIds: string[]): Promise<{ conversation: ChatConversation; members: ChatMember[] }>;
-  updateConversation(id: string, patch: { name?: string; topic?: string }): Promise<{ conversation: ChatConversation; members: ChatMember[] }>;
+  updateConversation(id: string, patch: { name?: string; topic?: string } | { membersCanPin: boolean }): Promise<{ conversation: ChatConversation; members: ChatMember[] }>;
   deleteConversation(id: string): Promise<void>;
   addMembers(id: string, userIds: string[]): Promise<{ conversation: ChatConversation; members: ChatMember[] }>;
   removeMember(id: string, userId: string): Promise<void>;
@@ -77,6 +77,10 @@ export interface ChatApi {
   /** Takes the link preview off one of your own messages, for everyone. */
   removeLinkPreview(id: string, messageId: string): Promise<{ message: ChatMessage }>;
   react(id: string, messageId: string, emoji: string, add: boolean): Promise<{ message: ChatMessage }>;
+  /** Pins or unpins a message in a text room. A real change also arrives as `message.updated`. */
+  pinMessage(id: string, messageId: string, pinned: boolean): Promise<{ message: ChatMessage }>;
+  /** The room's pinned messages that I may read, newest pin first. */
+  listPins(id: string): Promise<{ pins: ChatMessage[] }>;
   /** Sets my choices in a poll. None takes my vote back (not in a quiz). */
   votePoll(id: string, messageId: string, options: number[]): Promise<{ message: ChatMessage }>;
   /** Ends a poll I asked. */
@@ -136,6 +140,8 @@ export const chatApi: ChatApi = {
   fetchLinkPreviewImage: (id, messageId) => api.callBlob(`${conversationPath(id)}/messages/${encodeURIComponent(messageId)}/link-preview/image`),
   removeLinkPreview: (id, messageId) => api.call(`${conversationPath(id)}/messages/${encodeURIComponent(messageId)}/link-preview`, { method: "DELETE" }),
   react: (id, messageId, emoji, add) => api.call(`${conversationPath(id)}/messages/${encodeURIComponent(messageId)}/reactions`, json({ emoji, add })),
+  pinMessage: (id, messageId, pinned) => api.call(`${conversationPath(id)}/messages/${encodeURIComponent(messageId)}/pin`, json({ pinned })),
+  listPins: (id) => api.call(`${conversationPath(id)}/pins`),
   votePoll: (id, messageId, options) => api.call(`${conversationPath(id)}/messages/${encodeURIComponent(messageId)}/poll/vote`, json({ options })),
   closePoll: (id, messageId) => api.call(`${conversationPath(id)}/messages/${encodeURIComponent(messageId)}/poll/close`, { method: "POST" }),
   setPollPrivacy: (id, messageId, privacy) => api.call(`${conversationPath(id)}/messages/${encodeURIComponent(messageId)}/poll/settings`, json(privacy)),

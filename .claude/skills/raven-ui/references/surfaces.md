@@ -212,6 +212,22 @@ reading column, the composer at the bottom.
   `scripts/scrollprobe.ts` (see verifying.md).
 - While the server is unreachable the header says so and what is written waits; it is
   not an error and gets no toast.
+- Pinned messages (`PinnedMessages.tsx`, rules in `lib/chat/pins.ts`) exist only in a
+  space's text rooms, and only when the server sends `chat.pins` (`pinLimits`); a direct
+  message, group, Saved messages or Raven shows no pin anywhere. People who manage the
+  room get Pin and Unpin in a message's `…` menu; when the room lets members pin
+  (`summary.canPin`), members who can write get Pin too and Unpin on the pins they made;
+  an author gets Unpin on their own pinned message (`pinActions`). The people who run the
+  room see a "Members can pin" switch at the foot of the popover; the server writes each
+  change into the room as a line ("Mina let members pin messages"). A pinned message shows a small pin
+  beside its time, tooltip "Pinned by Sara · 11 October 2026, 10:42". The header's pin
+  button (tooltip "Pinned messages") opens a popover listing them newest pin first:
+  author, a two-line excerpt (attachments read as "Photo", "Poll"…), and "Pinned by Ava ·
+  Mon". Choosing one closes the popover and goes to the message (`MessageList`'s `goTo`,
+  which loads that part and marks the row). Up, Down, Home and End move between entries.
+  It is fetched on each opening and then kept in step by incoming messages
+  (`syncPinned` in `reducer.ts`). No count on the button, no notification, no system
+  line for a pin: pinning is a quiet bookmark for the room, not news.
 
 State comes from `useChat(data)` in `useChat.ts`, a store outside React
 (`lib/chat/store.ts`). Read it with the selectors there (`useConversation`,

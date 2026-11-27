@@ -55,6 +55,8 @@ const (
 	chatEditWindow            = 48 * time.Hour
 	chatMaxReactionsPerPerson = 3
 	chatMaxReactionKinds      = 20
+	// chatMaxPins is how many messages a text room can keep pinned.
+	chatMaxPins = 50
 
 	chatHistoryPageDefault = 50
 	chatHistoryPageMax     = 100
@@ -126,6 +128,14 @@ type ChatReaction struct {
 	UserIDs []string `json:"userIds"`
 }
 
+// ChatPin says who pinned a message in a text room and when. ByName is the name they go
+// by in the space.
+type ChatPin struct {
+	ByID   string `json:"byId"`
+	ByName string `json:"byName"`
+	At     string `json:"at"`
+}
+
 type ChatMessage struct {
 	Reactions       []ChatReaction   `json:"reactions,omitempty"`
 	ID              string           `json:"id"`
@@ -148,6 +158,8 @@ type ChatMessage struct {
 	// Origin is set on a copy (saved or forwarded): where it came from, as this viewer
 	// may see it.
 	Origin *ChatOrigin `json:"origin,omitempty"`
+	// Pin is set while the message is pinned in its text room.
+	Pin *ChatPin `json:"pin,omitempty"`
 
 	// origin is the stored copy record; Origin is built from it for each viewer.
 	origin *chatOriginRow
@@ -182,6 +194,10 @@ type ChatConversation struct {
 	// PeerDeleted is set on a direct message whose other person deleted their account.
 	PeerDeleted bool `json:"peerDeleted,omitempty"`
 	CanManage   bool `json:"canManage"`
+	// MembersCanPin is a text room's setting: members who can write there may pin too.
+	MembersCanPin bool `json:"membersCanPin,omitempty"`
+	// CanPin is whether the viewer may pin messages here (text rooms only).
+	CanPin bool `json:"canPin,omitempty"`
 	// Access is the viewer's own access to a text room of a tree.
 	Access         *RoomAccess         `json:"access,omitempty"`
 	MemberCount    int64               `json:"memberCount"`
@@ -250,8 +266,10 @@ func (s *Server) registerChatRoutes(service fiber.Router) {
 	conversation.Post("/clear", s.chatRoute("clear", s.clearChatConversation))
 	conversation.Get("/messages", s.chatRoute("history", s.listChatMessages))
 	conversation.Get("/changes", s.chatRoute("changes", s.listChatChanges))
+	conversation.Get("/pins", s.chatRoute("pins", s.listChatPins))
 	conversation.Post("/messages", s.chatLimiter("send", 20, 10*time.Second), s.chatRoute("send", s.sendChatMessage))
 	conversation.Post("/messages/:messageId/reactions", s.chatLimiter("react", 60, time.Minute), s.chatRoute("react", s.reactToChatMessage))
+	conversation.Post("/messages/:messageId/pin", s.chatLimiter("pin", 30, time.Minute), s.chatRoute("pin", s.pinChatMessage))
 	conversation.Post("/messages/:messageId/poll/vote", s.chatLimiter("react", 60, time.Minute), s.chatRoute("vote", s.voteInChatPoll))
 	conversation.Post("/messages/:messageId/poll/close", s.chatLimiter("edit", 30, time.Minute), s.chatRoute("close poll", s.closeChatPoll))
 	conversation.Post("/messages/:messageId/poll/settings", s.chatLimiter("edit", 30, time.Minute), s.chatRoute("poll settings", s.setChatPollSettings))
